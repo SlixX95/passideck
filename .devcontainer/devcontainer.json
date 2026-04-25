@@ -1,0 +1,17 @@
+{
+  "name": "TermDeck",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:20",
+  "postCreateCommand": "npm install",
+  "postStartCommand": "echo 'Run: npm run dev -- --no-open  (Codespaces handles port forwarding automatically)'",
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": { "label": "TermDeck", "onAutoForward": "silent" }
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+# deps
+node_modules/
+
+# build output
+dist/
+.astro/
+
+# env
+.env
+.env.*
+!.env.example
+
+# generated content (produced by `pnpm run sync-content`)
+src/content/docs/termdeck/
+src/content/docs/mnestra/
+src/content/docs/rumen/
+
+# OS
+.DS_Store
+.vercel
+.env*.local

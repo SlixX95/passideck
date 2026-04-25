@@ -1,0 +1,50 @@
+---
+title: "Mnestra — fresh sessions, not cold sessions"
+description: "Persistent developer memory over MCP: pgvector, hybrid search, and nine tools that let you pick /resume vs. fresh on purpose."
+---
+
+Every LLM-assisted coding session starts from nothing. You spent an hour last Tuesday working out why your Supabase migration kept failing on IPv6, and today that context is gone. The model doesn't know. You hit `/resume` out of fear — not because you want conversational continuity, but because you're afraid of losing what you learned.
+
+Mnestra exists to remove that fear.
+
+## What it is
+
+Mnestra is a persistent memory MCP server. It runs as a small Node process, talks to a Postgres database with pgvector installed, and exposes its store to any MCP-capable agent: Claude Code, Cursor, Windsurf, Cline, Continue. You write memories during one session, and the next session — any session — can retrieve them.
+
+The store at my desk today holds **~3,855 memories** spanning seven active projects. Some are decisions ("we chose better-sqlite3 over sql.js because the WAL-mode story is cleaner"). Some are bug fixes ("Supabase Connect modal needs the IPv4 toggle for Rumen deploys"). Some are user preferences. They all survive across sessions, editors, and machines.
+
+## Hybrid search, with recency
+
+Retrieval is the hard part. Pure keyword search misses paraphrases; pure vector search returns stale memories that happen to embed close to the query. Mnestra's `memory_recall` tool blends three signals:
+
+- **Keyword** (Postgres full-text search, `ts_rank`)
+- **Semantic** (pgvector cosine similarity against `text-embedding-3-large`)
+- **Recency** (exponential decay so last week beats last year)
+
+You can tune the weights per call. The default leans semantic-heavy but never fully discards recency — and that's what makes it feel right in practice.
+
+## Nine MCP tools
+
+Mnestra exposes a compact surface: `memory_remember`, `memory_recall`, `memory_search`, `memory_forget`, `memory_status`, `memory_summarize_session`, plus the three-layer progressive-disclosure trio `memory_index` / `memory_timeline` / `memory_get`. The three-layer pattern matters: instead of dumping every matching row into the model's context, the agent gets a compact index first, then expands to a timeline, then pulls a full row only when it's sure. Context stays small. Retrieval stays deep.
+
+## Fresh sessions, not cold sessions
+
+Here's the shift Mnestra actually enables. Before Mnestra, `/resume` was a hedge. You resumed because starting fresh meant losing everything the model had figured out in the last hour.
+
+With Mnestra, `/resume` becomes a choice. Want conversational continuity — the exact thread, the pending tool call, the half-written function? Resume. Want a clean context window and sharper reasoning? Start fresh. Either way, the facts survive. The model recalls them on demand.
+
+That's the tagline worth repeating: **fresh sessions, not cold sessions**. You pick based on what the work needs, not based on fear of loss.
+
+## Try it
+
+```bash
+npm install -g @jhizzard/mnestra
+mnestra init
+```
+
+The init wizard walks you through pgvector setup, migrations, and MCP client config for Claude Code, Cursor, and Windsurf.
+
+- GitHub: [github.com/jhizzard/mnestra](https://github.com/jhizzard/mnestra)
+- npm: [@jhizzard/mnestra](https://www.npmjs.com/package/@jhizzard/mnestra)
+
+Mnestra is the memory layer behind TermDeck's Flashback. If you want a terminal that watches your sessions and fires relevant memories at you proactively, that's the next post.

@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  syntax:
+    name: Syntax check (Node ${{ matrix.node-version }} on ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node-version: [20.x, 22.x]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Syntax check server files
+        run: |
+          node --check packages/server/src/index.js
+          node --check packages/server/src/session.js
+          node --check packages/server/src/database.js
+          node --check packages/server/src/rag.js
+          node --check packages/server/src/themes.js
+          node --check packages/cli/src/index.js
+      - name: HTML validation (basic)
+        run: |
+          if [ -f packages/client/public/index.html ]; then
+            head -1 packages/client/public/index.html | grep -q "<!DOCTYPE" || (echo "missing DOCTYPE"; exit 1)
+            grep -c "</body>" packages/client/public/index.html | grep -q "1" || (echo "missing or duplicate </body>"; exit 1)
+          fi
+
+  lint-conventions:
+    name: Lint logging conventions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check for silent catch blocks
+        run: |
+          # Allowed silent catches: feature detection at module load
+          # Find all bare `catch {` blocks across source files
+          BARE_CATCHES=$(grep -rn "catch\s*{" packages/server/src packages/cli/src packages/client/public/index.html 2>/dev/null | grep -v "catch (err)" | grep -v "catch {.*=.*null;.*}" || true)
+          if [ -n "$BARE_CATCHES" ]; then
+            # Filter out the 2 intentional module-load fallbacks
+            UNEXPECTED=$(echo "$BARE_CATCHES" | grep -v "pty = null" | grep -v "Database = null" || true)
+            if [ -n "$UNEXPECTED" ]; then
+              echo "Unexpected silent catch blocks found:"
+              echo "$UNEXPECTED"
+              echo ""
+              echo "All catch blocks must use console.error('[tag] context:', err)"
+              echo "See docs/LESSONS_FROM_PODIUM.md for the rationale."
+              exit 1
+            fi
+          fi
+          echo "All catch blocks follow the [tag] logging convention."
+
+      - name: Check console.error tag prefix usage
+        run: |
+          # Every console.error in source files must carry a [tag] somewhere in
+          # its first argument. The tag may be preceded by whitespace or ANSI
+          # escape codes (e.g. `  \x1b[31m[health] ...`), so we look for
+          # [lowercase-tag] anywhere inside the call — not only immediately
+          # after the opening quote.
+          #
+          # Exceptions: `console.error('Usage: ...')` and continuation lines
+          # starting with '  termdeck' are intentional stderr help output from
+          # the CLI and are allowed to be untagged.
+          BT='`'
+          UNTAGGED=$(grep -rn "console\.error" packages/server/src packages/cli/src packages/client/public/index.html 2>/dev/null \
+            | grep -Ev "console\.error\([^)]*\[[a-z][a-z0-9:_-]*\]" \
+            | grep -Ev "console\.error\((['\"]${BT}?|${BT})(Usage:|  termdeck)" \
+            || true)
+          if [ -n "$UNTAGGED" ]; then
+            echo "Untagged console.error calls found:"
+            echo "$UNTAGGED"
+            echo ""
+            echo "All console.error must include a [tag]: [pty], [ws], [db], [rag], [config], [cli], [client], [flashback], [mnestra-bridge], etc."
+            exit 1
+          fi
+          echo "All console.error calls use the [tag] prefix convention."
+
+  docs-lint:
+    name: Docs hygiene guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Run docs linter
+        run: bash scripts/lint-docs.sh
+
+  install:
+    name: Install dependencies
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+      - name: npm install
+        run: npm install --no-audit --no-fund
+        env:
+          # node-pty needs python for build scripts on some platforms
+          PYTHON: python3
+      - name: Verify CLI launcher parses
+        run: node packages/cli/src/index.js --help

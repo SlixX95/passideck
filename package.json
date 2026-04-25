@@ -1,0 +1,68 @@
+{
+  "name": "@jhizzard/termdeck",
+  "version": "0.6.2",
+  "description": "Browser-based terminal multiplexer with metadata overlays, panel flashback memory recall, and AI-aware session management",
+  "bin": {
+    "termdeck": "./packages/cli/src/index.js"
+  },
+  "main": "packages/cli/src/index.js",
+  "files": [
+    "packages/cli/src/**",
+    "packages/server/src/**",
+    "packages/client/public/**",
+    "config/config.example.yaml",
+    "config/secrets.env.example",
+    "LICENSE",
+    "README.md"
+  ],
+  "workspaces": [
+    "packages/server",
+    "packages/client",
+    "packages/cli",
+    "packages/stack-installer"
+  ],
+  "scripts": {
+    "dev": "node packages/server/src/index.js",
+    "server": "node packages/server/src/index.js",
+    "start": "NODE_ENV=production node packages/cli/src/index.js",
+    "test": "node --test packages/server/tests/**/*.test.js",
+    "install:app": "bash install.sh"
+  },
+  "dependencies": {
+    "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
+    "better-sqlite3": "^12.9.0",
+    "chalk": "^5.3.0",
+    "express": "^4.18.2",
+    "open": "^10.0.0",
+    "pg": "^8.20.0",
+    "uuid": "^13.0.0",
+    "ws": "^8.16.0",
+    "yaml": "^2.3.4"
+  },
+  "keywords": [
+    "terminal",
+    "multiplexer",
+    "xterm",
+    "pty",
+    "web-terminal",
+    "tmux-alternative",
+    "claude-code",
+    "memory",
+    "flashback",
+    "rag",
+    "devtools"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jhizzard/termdeck.git"
+  },
+  "homepage": "https://github.com/jhizzard/termdeck#readme",
+  "bugs": {
+    "url": "https://github.com/jhizzard/termdeck/issues"
+  },
+  "author": "Joshua Izzard",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

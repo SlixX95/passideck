@@ -1,0 +1,51 @@
+---
+title: "Rumen — async learning for persistent memory"
+description: "A four-phase cognitive loop that reads your memory store while you sleep and writes synthesized insights back."
+---
+
+A memory store that only remembers is half a system. It answers the question "what did I say last Tuesday?" but not "what pattern is across every Tuesday I've worked on this?" Rumen fills that gap.
+
+## What it is
+
+Rumen is an async learning loop that runs over a Mnestra memory store. It's deployed as a Supabase Edge Function and triggered every 15 minutes by `pg_cron`. Each run reads recent memories, relates them to older ones, synthesizes insights, and writes those insights back into Mnestra as first-class memories. By the time you sit down tomorrow morning, the store knows things it didn't know last night.
+
+## The four-phase loop
+
+Each tick runs four phases in order:
+
+1. **Extract** — pull signals from memories written since the last run. Filter noise (file paths, terminal chatter, duplicates) and bucket the rest by project and category.
+2. **Relate** — for each signal, run a hybrid search against the full store. Weights are 0.6 semantic, 0.4 keyword, tuned empirically against `text-embedding-3-large`. The relate step finds the 5–10 prior memories most likely to be talking about the same thing.
+3. **Synthesize** — Claude Haiku takes the signal plus its related memories and writes a one-paragraph insight with inline citations back to the source memory IDs. Haiku-first is a cost decision; we'll talk about that below.
+4. **Surface** — write the insight into Mnestra with a `rumen_insight` source type, a confidence score, and the citation list. From that moment on, any `memory_recall` call can return it.
+
+## The first kickstart
+
+Running Rumen for the first time against an existing ~3,527-memory store produced **111 insights** on the first pass. A few were obvious ("you keep choosing better-sqlite3 across projects"). Several were surprising — connections between a Rumen debugging session and a three-week-old PVB thread, or a preference pattern visible only when you look at six months of decisions side-by-side. That's the payoff: insights you wouldn't have asked for, because you didn't know they were there.
+
+## Cost guardrails
+
+Async, scheduled, LLM-backed, running forever — that's a recipe for surprise bills. Rumen ships with three guardrails:
+
+- **Haiku-first.** Synthesis uses Claude Haiku, not Sonnet or Opus. The insight quality is plenty good; the cost is an order of magnitude lower.
+- **Soft cap of 100 insights/day.** When you cross it, synthesis swaps to a placeholder and the run finishes cleanly.
+- **Hard cap of 500 insights/day.** At the hard cap the current run aborts entirely and logs the abort reason.
+
+Every synthesize call logs its token counts. You can see exactly what Rumen is costing on any given day.
+
+## Deployment model
+
+Edge Function + `pg_cron` beats a long-lived worker process for this workload. No container to babysit, no idle CPU to pay for, and the schedule is versioned alongside the migration. If a run fails, the next one picks up the same extract window — the loop is idempotent on the signal level.
+
+## Try it
+
+```bash
+npm install -g @jhizzard/rumen
+termdeck init --rumen
+```
+
+The wizard deploys the Edge Function, applies the migration, sets your secrets, and installs the `pg_cron` schedule.
+
+- GitHub: [github.com/jhizzard/rumen](https://github.com/jhizzard/rumen)
+- npm: [@jhizzard/rumen](https://www.npmjs.com/package/@jhizzard/rumen)
+
+TermDeck captures. Mnestra remembers. Rumen learns. That's the stack.

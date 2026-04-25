@@ -1,0 +1,6 @@
+{
+  "name": "@termdeck/client",
+  "version": "0.1.0",
+  "description": "TermDeck web client",
+  "private": true
+}

@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="60" fill="#0f1117"/>
+
+  <!-- Top-left: Tokyo Night -->
+  <rect x="52" y="52" width="195" height="195" rx="20" fill="#1a1b26"/>
+  <circle cx="82" cy="82" r="10" fill="#7aa2f7"/>
+  <rect x="76" y="112" width="140" height="7" rx="3.5" fill="#7aa2f7" opacity="0.35"/>
+  <rect x="76" y="140" width="100" height="7" rx="3.5" fill="#7aa2f7" opacity="0.27"/>
+  <rect x="76" y="168" width="120" height="7" rx="3.5" fill="#7aa2f7" opacity="0.19"/>
+  <rect x="76" y="200" width="5" height="28" rx="2" fill="#7aa2f7"/>
+
+  <!-- Top-right: Catppuccin -->
+  <rect x="265" y="52" width="195" height="195" rx="20" fill="#1e1e2e"/>
+  <circle cx="295" cy="82" r="10" fill="#9ece6a"/>
+  <rect x="289" y="112" width="140" height="7" rx="3.5" fill="#9ece6a" opacity="0.35"/>
+  <rect x="289" y="140" width="105" height="7" rx="3.5" fill="#9ece6a" opacity="0.27"/>
+  <rect x="289" y="168" width="125" height="7" rx="3.5" fill="#9ece6a" opacity="0.19"/>
+
+  <!-- Bottom-left: Dracula -->
+  <rect x="52" y="265" width="195" height="195" rx="20" fill="#282a36"/>
+  <circle cx="82" cy="295" r="10" fill="#bb9af7"/>
+  <rect x="76" y="325" width="130" height="7" rx="3.5" fill="#bb9af7" opacity="0.35"/>
+  <rect x="76" y="353" width="95" height="7" rx="3.5" fill="#bb9af7" opacity="0.27"/>
+  <rect x="76" y="381" width="145" height="7" rx="3.5" fill="#bb9af7" opacity="0.19"/>
+
+  <!-- Bottom-right: Nord -->
+  <rect x="265" y="265" width="195" height="195" rx="20" fill="#2e3440"/>
+  <circle cx="295" cy="295" r="10" fill="#e0af68"/>
+  <rect x="289" y="325" width="110" height="7" rx="3.5" fill="#e0af68" opacity="0.35"/>
+  <rect x="289" y="353" width="140" height="7" rx="3.5" fill="#e0af68" opacity="0.27"/>
+  <rect x="289" y="381" width="85" height="7" rx="3.5" fill="#e0af68" opacity="0.19"/>
+</svg>
