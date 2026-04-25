@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TermDeck</title>
+  <title>PassiDeck</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -20,7 +20,7 @@
             <rect x="1" y="10" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
             <rect x="10" y="10" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
           </svg>
-          TermDeck
+          PassiDeck
         </div>
         <div class="topbar-stats" id="globalStats">
           <span class="topbar-stat"><span class="dot" style="background:var(--tg-green)"></span> <span id="stat-active">0</span> active</span>
@@ -60,8 +60,8 @@
       <div class="topbar-row-2-spacer"></div>
       <button id="btn-status">status</button>
       <button id="btn-config">config</button>
-      <button id="btn-how" title="Walkthrough of every TermDeck feature">how this works</button>
-      <button id="btn-help" title="Open the TermDeck documentation" onclick="window.open('https://termdeck-docs.vercel.app','_blank','noopener')">help</button>
+      <button id="btn-how" title="Walkthrough of every PassiDeck feature">how this works</button>
+      <button id="btn-help" title="Open the PassiDeck documentation" onclick="window.open('https://passideck-docs.vercel.app','_blank','noopener')">help</button>
     </div>
   </div>
 
@@ -141,7 +141,7 @@
     <div class="add-project-backdrop"></div>
     <div class="add-project-card">
       <h3>Add a project</h3>
-      <p class="apm-help">Projects are saved to <code>~/.termdeck/config.yaml</code> and persist across restarts.</p>
+      <p class="apm-help">Projects are saved to <code>~/.passideck/config.yaml</code> and persist across restarts.</p>
       <label>
         <span>Name</span>
         <input type="text" id="apmName" placeholder="my-project" autocomplete="off" spellcheck="false">

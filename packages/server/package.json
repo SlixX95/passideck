@@ -1,7 +1,7 @@
 {
-  "name": "@termdeck/server",
+  "name": "@passideck/server",
   "version": "0.1.0",
-  "description": "TermDeck server - PTY management, WebSocket hub, REST API",
+  "description": "PassiDeck server - PTY management, WebSocket hub, REST API",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

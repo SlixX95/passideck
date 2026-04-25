@@ -1,9 +1,9 @@
 {
-  "name": "@jhizzard/termdeck",
+  "name": "@passi/passideck",
   "version": "0.6.2",
   "description": "Browser-based terminal multiplexer with metadata overlays, panel flashback memory recall, and AI-aware session management",
   "bin": {
-    "termdeck": "./packages/cli/src/index.js"
+    "passideck": "./packages/cli/src/index.js"
   },
   "main": "packages/cli/src/index.js",
   "files": [
@@ -54,11 +54,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jhizzard/termdeck.git"
+    "url": "git+https://github.com/jhizzard/passideck.git"
   },
-  "homepage": "https://github.com/jhizzard/termdeck#readme",
+  "homepage": "https://github.com/jhizzard/passideck#readme",
   "bugs": {
-    "url": "https://github.com/jhizzard/termdeck/issues"
+    "url": "https://github.com/jhizzard/passideck/issues"
   },
   "author": "Joshua Izzard",
   "license": "MIT",

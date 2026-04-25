@@ -4,7 +4,7 @@ const path = require('path');
 const os = require('os');
 
 function initDatabase(Database) {
-  const dbPath = path.join(os.homedir(), '.termdeck', 'termdeck.db');
+  const dbPath = path.join(os.homedir(), '.passideck', 'passideck.db');
 
   // Ensure directory exists
   const fs = require('fs');

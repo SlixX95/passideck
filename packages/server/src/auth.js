@@ -1,12 +1,12 @@
-// Optional token authentication for TermDeck (Sprint 9 T3).
+// Optional token authentication for PassiDeck (Sprint 9 T3).
 //
 // When no token is configured, auth is a no-op — `createAuthMiddleware()` returns
 // null and callers skip wiring. When a token is configured (config.auth.token
-// OR the TERMDECK_AUTH_TOKEN env var), every request except /api/health must
+// OR the PASSIDECK_AUTH_TOKEN env var), every request except /api/health must
 // present the token via one of:
 //   - Authorization: Bearer <token>
 //   - ?token=<token> query parameter
-//   - termdeck_token=<token> cookie
+//   - passideck_token=<token> cookie
 //
 // Browser requests without a valid token receive a minimal HTML login page that
 // stores the token in a cookie client-side and retries. API requests get a
@@ -15,7 +15,7 @@
 function getConfiguredToken(config) {
   const fromConfig = config && config.auth && config.auth.token;
   if (typeof fromConfig === 'string' && fromConfig.trim()) return fromConfig.trim();
-  const fromEnv = process.env.TERMDECK_AUTH_TOKEN;
+  const fromEnv = process.env.PASSIDECK_AUTH_TOKEN;
   if (typeof fromEnv === 'string' && fromEnv.trim()) return fromEnv.trim();
   return null;
 }
@@ -27,7 +27,7 @@ function readCookieToken(cookieHeader) {
     const eq = part.indexOf('=');
     if (eq === -1) continue;
     const name = part.slice(0, eq).trim();
-    if (name !== 'termdeck_token') continue;
+    if (name !== 'passideck_token') continue;
     try {
       return decodeURIComponent(part.slice(eq + 1).trim());
     } catch (err) {
@@ -69,7 +69,7 @@ function loginPage() {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TermDeck — Sign in</title>
+<title>PassiDeck — Sign in</title>
 <style>
   html, body { height: 100%; }
   body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -90,7 +90,7 @@ function loginPage() {
 </head>
 <body>
 <form onsubmit="return submitToken(event)">
-  <h1>TermDeck</h1>
+  <h1>PassiDeck</h1>
   <p>Enter the access token to continue.</p>
   <label for="t">Access token</label>
   <input id="t" type="password" autocomplete="current-password" autofocus required>
@@ -104,12 +104,12 @@ function submitToken(e) {
   err.textContent = '';
   var t = document.getElementById('t').value.trim();
   if (!t) return false;
-  document.cookie = 'termdeck_token=' + encodeURIComponent(t) +
+  document.cookie = 'passideck_token=' + encodeURIComponent(t) +
     '; path=/; SameSite=Strict; Max-Age=2592000';
   var next = new URLSearchParams(location.search).get('next') || '/';
   fetch('/api/config', { credentials: 'same-origin' }).then(function(r) {
     if (r.ok) { location.href = next; return; }
-    document.cookie = 'termdeck_token=; path=/; Max-Age=0';
+    document.cookie = 'passideck_token=; path=/; Max-Age=0';
     err.textContent = 'Invalid token.';
   }).catch(function() {
     err.textContent = 'Network error.';
@@ -157,7 +157,7 @@ function verifyWebSocketUpgrade(config, req) {
 }
 
 // Whether a usable auth token is configured (via config.auth.token or the
-// TERMDECK_AUTH_TOKEN env var). Used by the bind guardrail in index.js to
+// PASSIDECK_AUTH_TOKEN env var). Used by the bind guardrail in index.js to
 // decide whether binding to a non-localhost interface is permitted.
 function hasAuth(config) {
   return !!getConfiguredToken(config);

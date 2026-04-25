@@ -1,9 +1,9 @@
 {
-  "name": "@jhizzard/termdeck-stack",
+  "name": "@passi/passideck-stack",
   "version": "0.2.1",
-  "description": "One-command installer for the TermDeck developer memory stack: TermDeck + Mnestra + Rumen + Supabase MCP",
+  "description": "One-command installer for the PassiDeck developer memory stack: PassiDeck + Mnestra + Rumen + Supabase MCP",
   "bin": {
-    "termdeck-stack": "./src/index.js"
+    "passideck-stack": "./src/index.js"
   },
   "main": "./src/index.js",
   "files": [
@@ -13,7 +13,7 @@
     "LICENSE"
   ],
   "keywords": [
-    "termdeck",
+    "passideck",
     "mnestra",
     "rumen",
     "memory",
@@ -25,12 +25,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jhizzard/termdeck.git",
+    "url": "git+https://github.com/jhizzard/passideck.git",
     "directory": "packages/stack-installer"
   },
-  "homepage": "https://github.com/jhizzard/termdeck/tree/main/packages/stack-installer#readme",
+  "homepage": "https://github.com/jhizzard/passideck/tree/main/packages/stack-installer#readme",
   "bugs": {
-    "url": "https://github.com/jhizzard/termdeck/issues"
+    "url": "https://github.com/jhizzard/passideck/issues"
   },
   "author": "Joshua Izzard",
   "license": "MIT",

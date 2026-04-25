@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-// TermDeck CLI launcher
+// PassiDeck CLI launcher
 // Usage:
-//   termdeck [--port 3000] [--no-open]
-//   termdeck init --mnestra [flags]   # Tier 2 memory setup (wired to init-mnestra.js)
-//   termdeck init --rumen  [flags]   # Tier 3 async learning deploy
+//   passideck [--port 3000] [--no-open]
+//   passideck init --mnestra [flags]   # Tier 2 memory setup (wired to init-mnestra.js)
+//   passideck init --rumen  [flags]   # Tier 3 async learning deploy
 //
 // Note (Sprint 3): the `--mnestra` flag name matches the current init-mnestra.js
 // filename. When the main orchestrator completes the Mnestra → Mnestra rename
@@ -19,9 +19,9 @@ const { execSync } = require('child_process');
 // Parse CLI args
 const args = process.argv.slice(2);
 
-// Subcommand dispatch — handle `termdeck init --mnestra|--rumen` before
+// Subcommand dispatch — handle `passideck init --mnestra|--rumen` before
 // falling through to the default launcher's flag parsing. The `require` of
-// init-*.js is lazy so users running the normal `termdeck` command never pay
+// init-*.js is lazy so users running the normal `passideck` command never pay
 // the cost of loading pg / supabase helpers at startup.
 if (args[0] === 'init') {
   const mode = args[1];
@@ -44,13 +44,13 @@ if (args[0] === 'init') {
     });
     return;
   }
-  console.error('Usage: termdeck init --mnestra | --rumen');
-  console.error('  termdeck init --mnestra   Configure Tier 2 memory (Supabase + Mnestra)');
-  console.error('  termdeck init --rumen    Deploy Tier 3 async learning (Rumen)');
+  console.error('Usage: passideck init --mnestra | --rumen');
+  console.error('  passideck init --mnestra   Configure Tier 2 memory (Supabase + Mnestra)');
+  console.error('  passideck init --rumen    Deploy Tier 3 async learning (Rumen)');
   process.exit(1);
 }
 
-// `termdeck forge` — Sprint 20 SkillForge preview. Autonomously generates
+// `passideck forge` — Sprint 20 SkillForge preview. Autonomously generates
 // Claude Code skills from Mnestra memories. Lazy-loaded so the launcher
 // startup path stays unaffected.
 if (args[0] === 'forge') {
@@ -62,10 +62,10 @@ if (args[0] === 'forge') {
   return;
 }
 
-// `termdeck stack` — full-stack launcher (Node port of scripts/start.sh).
+// `passideck stack` — full-stack launcher (Node port of scripts/start.sh).
 // Boots Mnestra (if installed + autoStart: true), checks Rumen, then
-// starts TermDeck. Lives in the npm package so users who installed via
-// `npm install -g @jhizzard/termdeck` don't need to clone the repo to
+// starts PassiDeck. Lives in the npm package so users who installed via
+// `npm install -g @passi/passideck` don't need to clone the repo to
 // get the start.sh experience.
 if (args[0] === 'stack') {
   const stack = require(path.join(__dirname, 'stack.js'));
@@ -76,7 +76,7 @@ if (args[0] === 'stack') {
   return;
 }
 
-// `termdeck doctor` — Sprint 28: version-check the whole stack.
+// `passideck doctor` — Sprint 28: version-check the whole stack.
 if (args[0] === 'doctor') {
   const doctor = require(path.join(__dirname, 'doctor.js'));
   doctor(args.slice(1)).then((code) => process.exit(code || 0)).catch((err) => {
@@ -86,7 +86,7 @@ if (args[0] === 'doctor') {
   return;
 }
 
-// Sprint 24: when `termdeck` is invoked with no subcommand AND a configured
+// Sprint 24: when `passideck` is invoked with no subcommand AND a configured
 // stack is detected, route through stack.js so users don't have to remember
 // the `stack` subcommand. `--no-stack` is the explicit opt-out.
 const { shouldAutoOrchestrate } = require(path.join(__dirname, 'auto-orchestrate.js'));
@@ -118,19 +118,19 @@ for (let i = 0; i < args.length; i++) {
     flags.sessionLogs = true;
   } else if (args[i] === '--help' || args[i] === '-h') {
     console.log(`
-  TermDeck - Web-based terminal multiplexer
+  PassiDeck - Web-based terminal multiplexer
 
   Usage:
-    termdeck                    Auto-orchestrate stack if configured, else Tier-1-only
-    termdeck stack              Force boot Mnestra + check Rumen + start TermDeck
-    termdeck --no-stack         Skip orchestrator (force Tier-1-only boot)
-    termdeck --port 8080        Start on custom port
-    termdeck --no-open          Don't auto-open browser
-    termdeck --session-logs     Write per-session markdown logs to ~/.termdeck/sessions/
-    termdeck init --mnestra     Configure Tier 2 memory (Supabase + Mnestra)
-    termdeck init --rumen       Deploy Tier 3 async learning (Rumen)
-    termdeck forge              Generate Claude skills from memories (experimental)
-    termdeck doctor             Check whether the stack packages are up to date
+    passideck                    Auto-orchestrate stack if configured, else Tier-1-only
+    passideck stack              Force boot Mnestra + check Rumen + start PassiDeck
+    passideck --no-stack         Skip orchestrator (force Tier-1-only boot)
+    passideck --port 8080        Start on custom port
+    passideck --no-open          Don't auto-open browser
+    passideck --session-logs     Write per-session markdown logs to ~/.passideck/sessions/
+    passideck init --mnestra     Configure Tier 2 memory (Supabase + Mnestra)
+    passideck init --rumen       Deploy Tier 3 async learning (Rumen)
+    passideck forge              Generate Claude skills from memories (experimental)
+    passideck doctor             Check whether the stack packages are up to date
 
   Keyboard shortcuts (in browser):
     Ctrl+Shift+N                Focus prompt bar
@@ -139,9 +139,9 @@ for (let i = 0; i < args.length; i++) {
     Escape                      Exit focus/half mode
 
   Config:
-    ~/.termdeck/config.yaml     Server + project + RAG configuration
-    ~/.termdeck/secrets.env     API keys (OpenAI, Anthropic, Supabase)
-    ~/.termdeck/termdeck.db     Session history (SQLite)
+    ~/.passideck/config.yaml     Server + project + RAG configuration
+    ~/.passideck/secrets.env     API keys (OpenAI, Anthropic, Supabase)
+    ~/.passideck/passideck.db     Session history (SQLite)
 `);
     process.exit(0);
   }
@@ -154,19 +154,19 @@ const { runPreflight, printHealthBanner } = require(path.join(__dirname, '..', '
 // Flag-driven env vars must be set BEFORE loadConfig() so any module that
 // reads process.env at require-time sees them.
 if (flags.sessionLogs) {
-  process.env.TERMDECK_SESSION_LOGS = '1';
+  process.env.PASSIDECK_SESSION_LOGS = '1';
 }
 
 // First-run detection (Sprint 19 T3): surface a one-line hint pointing at
 // the setup wizard when no config.yaml exists yet. Check happens before
 // loadConfig() so the message reflects on-disk state, not defaults.
-const firstRun = !fs.existsSync(path.join(os.homedir(), '.termdeck', 'config.yaml'));
+const firstRun = !fs.existsSync(path.join(os.homedir(), '.passideck', 'config.yaml'));
 
 const config = loadConfig();
 if (flags.port) config.port = flags.port;
 if (flags.sessionLogs) {
   config.sessionLogs = { ...(config.sessionLogs || {}), enabled: true };
-  console.log('[cli] session logs enabled — writing to ~/.termdeck/sessions/ on panel exit');
+  console.log('[cli] session logs enabled — writing to ~/.passideck/sessions/ on panel exit');
 }
 
 const { server } = createServer(config);
@@ -177,10 +177,10 @@ const url = `http://${host}:${port}`;
 // Bind guardrail: refuse non-loopback without auth token
 const LOOPBACK = new Set(['127.0.0.1', 'localhost', '::1']);
 if (!LOOPBACK.has(host)) {
-  const authToken = config.auth?.token || process.env.TERMDECK_AUTH_TOKEN;
+  const authToken = config.auth?.token || process.env.PASSIDECK_AUTH_TOKEN;
   if (!authToken) {
     console.error('[security] Refusing to bind to ' + host + ' without auth.token set.');
-    console.error('[security] Set auth.token in ~/.termdeck/config.yaml or TERMDECK_AUTH_TOKEN env var.');
+    console.error('[security] Set auth.token in ~/.passideck/config.yaml or PASSIDECK_AUTH_TOKEN env var.');
     console.error('[security] To bind locally only, set host: 127.0.0.1 in config.yaml');
     process.exit(1);
   }
@@ -204,7 +204,7 @@ async function checkSupabaseMcpHint(cfg) {
     const { detectMcp } = require(path.join(__dirname, '..', '..', 'server', 'src', 'setup', 'supabase-mcp.js'));
     const result = await detectMcp();
     if (result && result.available) return null;
-    return 'Supabase MCP not installed — wizard auto-fill unavailable. Install with: npx @jhizzard/termdeck-stack --tier 4';
+    return 'Supabase MCP not installed — wizard auto-fill unavailable. Install with: npx @passi/passideck-stack --tier 4';
   } catch (_e) {
     return null;
   }
@@ -215,7 +215,7 @@ server.listen(port, host, async () => {
   // dynamically so the right border stays aligned regardless of version length.
   const innerWidth = 38;
   const version = require(path.join(__dirname, '..', '..', '..', 'package.json')).version;
-  const title = `TermDeck v${version}`;
+  const title = `PassiDeck v${version}`;
   const leftPad = Math.max(0, Math.floor((innerWidth - title.length) / 2));
   const titleLine = ' '.repeat(leftPad) + title + ' '.repeat(Math.max(0, innerWidth - leftPad - title.length));
 
@@ -279,7 +279,7 @@ server.listen(port, host, async () => {
 
 // Graceful shutdown
 process.on('SIGINT', () => {
-  console.log('\n  Shutting down TermDeck...');
+  console.log('\n  Shutting down PassiDeck...');
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 3000);
 });

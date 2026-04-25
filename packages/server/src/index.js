@@ -1,4 +1,4 @@
-// TermDeck Server - main entry point
+// PassiDeck Server - main entry point
 // Express REST API + WebSocket hub + PTY management
 
 const express = require('express');
@@ -70,10 +70,10 @@ function createServer(config) {
 
   app.use(express.json());
 
-  // First-run detection (Sprint 19 T3): true when ~/.termdeck/config.yaml
+  // First-run detection (Sprint 19 T3): true when ~/.passideck/config.yaml
   // does not exist. Surfaced on /api/config so the client can offer the
   // setup wizard on first visit. T1's /api/setup endpoint may reuse this.
-  const firstRun = !fs.existsSync(path.join(os.homedir(), '.termdeck', 'config.yaml'));
+  const firstRun = !fs.existsSync(path.join(os.homedir(), '.passideck', 'config.yaml'));
 
   // Optional token auth (Sprint 9 T3). Zero-op when no token is configured,
   // so local users see no behavior change. Mounted before static + routes so
@@ -140,7 +140,7 @@ function createServer(config) {
 
   // GET /api/health - preflight health checks (Sprint 6 T1, wired by T3)
   // SECURITY NOTE: Returns operational detail (memory counts, DB latency, project paths,
-  // RAG breaker state). Intentional for local-first use — TermDeck binds to 127.0.0.1 by
+  // RAG breaker state). Intentional for local-first use — PassiDeck binds to 127.0.0.1 by
   // default and the CLI guardrail blocks beyond-localhost binds without explicit opt-in.
   // For any non-loopback deployment (Sprint 18+ remote story), gate this route behind auth
   // or scope the response to a minimal {status, version} payload.
@@ -148,14 +148,14 @@ function createServer(config) {
 
   // GET /api/setup - setup wizard tier status (Sprint 19 T1)
   // Reuses preflight checks (mnestra_reachable, rumen_recent) and pairs them
-  // with filesystem + config signals to classify which of the 4 TermDeck tiers
+  // with filesystem + config signals to classify which of the 4 PassiDeck tiers
   // the user has reached:
-  //   1. TermDeck running (always active when this handler responds)
+  //   1. PassiDeck running (always active when this handler responds)
   //   2. Mnestra reachable + DATABASE_URL available (partial if only reachable)
   //   3. Rumen job seen recently (partial if DATABASE_URL set but no recent job)
   //   4. At least one project configured in config.yaml
   // Cached for 60s so the setup UI can poll without re-running shell/PTY probes.
-  const SETUP_CONFIG_DIR = path.join(os.homedir(), '.termdeck');
+  const SETUP_CONFIG_DIR = path.join(os.homedir(), '.passideck');
   const SETUP_SECRETS_PATH = path.join(SETUP_CONFIG_DIR, 'secrets.env');
   const SETUP_CACHE_TTL_MS = 60_000;
   let _setupCache = null;
@@ -180,7 +180,7 @@ function createServer(config) {
 
       const tier1 = {
         status: 'active',
-        detail: `TermDeck running on :${config.port || 3000}`
+        detail: `PassiDeck running on :${config.port || 3000}`
       };
 
       let tier2;
@@ -255,8 +255,8 @@ function createServer(config) {
 
   // POST /api/setup/configure - Sprint 23 T2
   // Accepts pasted credentials from the browser wizard, validates each,
-  // then writes ~/.termdeck/secrets.env (chmod 600) and updates
-  // ~/.termdeck/config.yaml with rag.enabled: true plus ${VAR} references.
+  // then writes ~/.passideck/secrets.env (chmod 600) and updates
+  // ~/.passideck/config.yaml with rag.enabled: true plus ${VAR} references.
   // Security: the bind guardrail refuses non-loopback binds without auth,
   // so this endpoint only ever responds on 127.0.0.1 in the default config.
   app.post('/api/setup/configure', async (req, res) => {
@@ -352,7 +352,7 @@ function createServer(config) {
 
   // POST /api/setup/migrate - auto-run all 7 bootstrap migrations (Sprint 23 T3)
   // Invoked by the browser setup wizard after credentials are saved. Reloads
-  // ~/.termdeck/secrets.env so DATABASE_URL picks up T2's just-written value
+  // ~/.passideck/secrets.env so DATABASE_URL picks up T2's just-written value
   // without a server restart, then streams per-migration status to the server
   // log and returns an aggregate result to the client. Idempotent — all seven
   // migration files (6 Mnestra + 1 transcript) are authored with IF NOT EXISTS
@@ -684,8 +684,8 @@ function createServer(config) {
           cwd: resolvedCwd,
           env: {
             ...process.env,
-            TERMDECK_SESSION: session.id,
-            TERMDECK_PROJECT: project || '',
+            PASSIDECK_SESSION: session.id,
+            PASSIDECK_PROJECT: project || '',
             TERM: 'xterm-256color',
             COLORTERM: 'truecolor',
             // Kill macOS Terminal.app's zsh session save on teardown.
@@ -1409,7 +1409,7 @@ function validateOpenAI(key) {
   return new Promise((resolve) => {
     const payload = JSON.stringify({
       model: 'text-embedding-3-small',
-      input: 'termdeck setup test'
+      input: 'passideck setup test'
     });
     const req = https.request({
       hostname: 'api.openai.com',
@@ -1471,7 +1471,7 @@ async function validateDatabase(connStr) {
 }
 
 function buildSecretsEnv(vars) {
-  const secretsPath = path.join(os.homedir(), '.termdeck', 'secrets.env');
+  const secretsPath = path.join(os.homedir(), '.passideck', 'secrets.env');
   const existing = {};
   if (fs.existsSync(secretsPath)) {
     try {
@@ -1498,7 +1498,7 @@ function buildSecretsEnv(vars) {
     if (v != null && v !== '') merged[k] = v;
   }
   const lines = [
-    '# TermDeck secrets — written by setup wizard',
+    '# PassiDeck secrets — written by setup wizard',
     '# Do not commit this file.',
     ''
   ];
@@ -1511,7 +1511,7 @@ function buildSecretsEnv(vars) {
 
 function updateConfigYamlForRag(runningConfig) {
   const yaml = require('yaml');
-  const configPath = path.join(os.homedir(), '.termdeck', 'config.yaml');
+  const configPath = path.join(os.homedir(), '.passideck', 'config.yaml');
   let parsed = {};
   if (fs.existsSync(configPath)) {
     try {
@@ -1551,11 +1551,11 @@ if (require.main === module) {
   // Minimal flag parsing for direct-invocation users (the CLI wrapper has its own).
   const argv = process.argv.slice(2);
   if (argv.includes('--session-logs')) {
-    process.env.TERMDECK_SESSION_LOGS = '1';
+    process.env.PASSIDECK_SESSION_LOGS = '1';
   }
 
   const config = loadConfig();
-  if (process.env.TERMDECK_SESSION_LOGS === '1') {
+  if (process.env.PASSIDECK_SESSION_LOGS === '1') {
     config.sessionLogs = { ...(config.sessionLogs || {}), enabled: true };
   }
 
@@ -1568,7 +1568,7 @@ if (require.main === module) {
   if (host !== '127.0.0.1' && host !== 'localhost' && host !== '::1') {
     if (!hasAuth(config)) {
       console.error('[security] Refusing to bind to ' + host + ' without auth.token set.');
-      console.error('[security] Set auth.token in ~/.termdeck/config.yaml or TERMDECK_AUTH_TOKEN env var.');
+      console.error('[security] Set auth.token in ~/.passideck/config.yaml or PASSIDECK_AUTH_TOKEN env var.');
       console.error('[security] To bind locally only, remove the host setting or set host: 127.0.0.1');
       process.exit(1);
     }
@@ -1596,14 +1596,14 @@ if (require.main === module) {
   process.on('SIGTERM', () => handleShutdown('SIGTERM'));
 
   server.listen(port, host, () => {
-    console.log(`\n  TermDeck running at http://${host}:${port}\n`);
+    console.log(`\n  PassiDeck running at http://${host}:${port}\n`);
     console.log(`  Terminals:  0 active`);
     console.log(`  Database:   ${Database ? 'SQLite OK' : 'unavailable'}`);
     console.log(`  PTY:        ${pty ? 'node-pty OK' : 'unavailable (install node-pty)'}`);
     console.log(`  RAG:        ${config.rag?.supabaseUrl ? 'configured' : 'not configured'}`);
-    console.log(`  Session logs: ${config.sessionLogs?.enabled ? '~/.termdeck/sessions/ (on exit)' : 'off'}`);
+    console.log(`  Session logs: ${config.sessionLogs?.enabled ? '~/.passideck/sessions/ (on exit)' : 'off'}`);
     console.log(`  Transcripts:  ${transcriptWriter ? 'streaming to Supabase' : 'off (no DATABASE_URL)'}`);
-    console.log(`\n  WARNING: TermDeck binds to ${host} only.`);
+    console.log(`\n  WARNING: PassiDeck binds to ${host} only.`);
     console.log(`  Do NOT expose this to the network without authentication.`);
     console.log(`  Terminal sessions have full shell access.\n`);
   });

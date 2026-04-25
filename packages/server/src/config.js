@@ -1,11 +1,11 @@
-// TermDeck config loader with secrets.env support (F2.2).
+// PassiDeck config loader with secrets.env support (F2.2).
 //
-// Secrets live in ~/.termdeck/secrets.env (dotenv format) so that
-// ~/.termdeck/config.yaml can be committed / shared / reviewed without
+// Secrets live in ~/.passideck/secrets.env (dotenv format) so that
+// ~/.passideck/config.yaml can be committed / shared / reviewed without
 // carrying plaintext API keys. Precedence (highest wins):
 //
 //   1. process.env (as it was at launch)
-//   2. ~/.termdeck/secrets.env (loaded here, merged INTO process.env)
+//   2. ~/.passideck/secrets.env (loaded here, merged INTO process.env)
 //   3. ${VAR} substitutions inside config.yaml
 //   4. Inline values in config.yaml (legacy, triggers a deprecation warning)
 //   5. Built-in defaults
@@ -17,7 +17,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const CONFIG_DIR = path.join(os.homedir(), '.termdeck');
+const CONFIG_DIR = path.join(os.homedir(), '.passideck');
 const CONFIG_PATH = path.join(CONFIG_DIR, 'config.yaml');
 const SECRETS_PATH = path.join(CONFIG_DIR, 'secrets.env');
 
@@ -120,7 +120,7 @@ function warnIfLegacyInlineSecrets(parsed, secretsLoaded) {
   }
   if (hits.length > 0) {
     console.warn(
-      `[config] WARNING: secrets in config.yaml are deprecated — move them to ~/.termdeck/secrets.env ` +
+      `[config] WARNING: secrets in config.yaml are deprecated — move them to ~/.passideck/secrets.env ` +
       `(see config/secrets.env.example). Fields still inline: ${hits.join(', ')}`
     );
   }
@@ -171,8 +171,8 @@ function loadConfig() {
 
   // Auto-create default config.yaml on first run (unchanged behavior).
   if (!fs.existsSync(CONFIG_PATH)) {
-    const defaultYaml = `# TermDeck Configuration
-# Secrets belong in ~/.termdeck/secrets.env, not here.
+    const defaultYaml = `# PassiDeck Configuration
+# Secrets belong in ~/.passideck/secrets.env, not here.
 
 port: 3000
 host: 127.0.0.1
@@ -188,7 +188,7 @@ defaultTheme: tokyo-night
 
 rag:
   enabled: false
-  # supabaseUrl and secrets come from ~/.termdeck/secrets.env
+  # supabaseUrl and secrets come from ~/.passideck/secrets.env
   supabaseUrl: \${SUPABASE_URL}
   supabaseKey: \${SUPABASE_SERVICE_ROLE_KEY}
   openaiApiKey: \${OPENAI_API_KEY}
@@ -230,7 +230,7 @@ sessionLogs:
   };
 }
 
-// Add a project to ~/.termdeck/config.yaml and return the updated projects map.
+// Add a project to ~/.passideck/config.yaml and return the updated projects map.
 // Writes a timestamped .bak of the existing file before overwriting so the
 // user can always recover manually. Comments in the original yaml WILL be lost
 // on rewrite — yaml.stringify does not round-trip comments. That's acceptable

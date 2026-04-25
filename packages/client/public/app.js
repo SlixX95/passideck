@@ -1,5 +1,5 @@
 /* Extracted from index.html 2026-04-15 — see git blame on index.html prior to commit UNCOMMITTED for history */
-    // ===== TermDeck Client =====
+    // ===== PassiDeck Client =====
     const API = window.location.origin;
     const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const WS_BASE = `${WS_PROTOCOL}//${window.location.host}/ws`;
@@ -57,7 +57,7 @@
       // Disable AI input bars if Supabase/OpenAI not configured
       if (!state.config.aiQueryAvailable) {
         document.querySelectorAll('.ctrl-input').forEach(el => {
-          el.placeholder = 'Configure Supabase in ~/.termdeck/config.yaml to enable';
+          el.placeholder = 'Configure Supabase in ~/.passideck/config.yaml to enable';
           el.disabled = true;
         });
       }
@@ -76,7 +76,7 @@
       // First-run onboarding tour. Fires on the first visit only; never again
       // unless the user explicitly clicks "how this works" in the top toolbar.
       try {
-        if (!localStorage.getItem('termdeck:tour:seen')) {
+        if (!localStorage.getItem('passideck:tour:seen')) {
           setTimeout(() => { if (!tourState.active) startTour(); }, 1200);
         }
       } catch {}
@@ -676,8 +676,8 @@
       if (!select) return;
       const prev = select.value;
 
-      // F1.3: number duplicate labels with `#N` so e.g. two "Claude Code · termdeck"
-      // panels become "Claude Code · termdeck #1" / "... #2". Numbering is across
+      // F1.3: number duplicate labels with `#N` so e.g. two "Claude Code · passideck"
+      // panels become "Claude Code · passideck #1" / "... #2". Numbering is across
       // ALL live panels with that base label (including the current one) in
       // state.sessions insertion order, so suffixes stay stable as the user opens
       // the reply form from different panels.
@@ -1322,7 +1322,7 @@
       if (!state.config.aiQueryAvailable) {
         entry.terminal.write(
           '\r\n\x1b[33m[mnestra] AI queries are not available.\x1b[0m\r\n' +
-          '\x1b[33mTo enable, add the following to ~/.termdeck/config.yaml:\x1b[0m\r\n' +
+          '\x1b[33mTo enable, add the following to ~/.passideck/config.yaml:\x1b[0m\r\n' +
           '\x1b[90m  rag:\r\n' +
           '    supabaseUrl: https://your-project.supabase.co\r\n' +
           '    supabaseKey: your-anon-key\r\n' +
@@ -2043,15 +2043,15 @@
     }, 100);
 
     // ===== ONBOARDING TOUR =====
-    // Spotlight + tooltip walkthrough of every TermDeck surface. Runs once on
+    // Spotlight + tooltip walkthrough of every PassiDeck surface. Runs once on
     // first visit (localStorage gate) and replays on demand via the "how this
     // works" button. Zero dependencies — vanilla DOM, same philosophy as the
     // rest of this client.
     const TOUR_STEPS = [
       {
         target: null,
-        title: 'Welcome to TermDeck',
-        body: `TermDeck is a browser-based terminal multiplexer with a persistent memory layer. It lets you run many real terminals side by side, each with rich metadata and automatic recall of similar past errors. This walkthrough takes about 90 seconds and covers every button on the screen. Press <kbd>Esc</kbd> any time to exit.`,
+        title: 'Welcome to PassiDeck',
+        body: `PassiDeck is a browser-based terminal multiplexer with a persistent memory layer. It lets you run many real terminals side by side, each with rich metadata and automatic recall of similar past errors. This walkthrough takes about 90 seconds and covers every button on the screen. Press <kbd>Esc</kbd> any time to exit.`,
       },
       {
         target: '#topbarQuickLaunch',
@@ -2077,7 +2077,7 @@
       {
         targets: ['#btn-how', '#btn-help'],
         title: 'How this works and help',
-        body: `Click <strong>how this works</strong> any time to replay this tour. <strong>help</strong> opens the full TermDeck documentation in a new tab.`,
+        body: `Click <strong>how this works</strong> any time to replay this tour. <strong>help</strong> opens the full PassiDeck documentation in a new tab.`,
       },
       {
         target: '.panel-header',
@@ -2102,14 +2102,14 @@
       {
         target: '.ctrl-input',
         title: 'Ask about this terminal',
-        body: `Type a question here and TermDeck queries your <strong>Mnestra memory store</strong> for relevant context — scoped to the current panel's project. Prefix with <kbd>all:</kbd> to search every project. Results render inline in the terminal with similarity scores.`,
+        body: `Type a question here and PassiDeck queries your <strong>Mnestra memory store</strong> for relevant context — scoped to the current panel's project. Prefix with <kbd>all:</kbd> to search every project. Results render inline in the terminal with similarity scores.`,
         onEnter: async () => { await openFirstPanelDrawer('overview'); },
         fallback: '#topbarQuickLaunch',
       },
       {
         target: null,
         title: 'Flashback — proactive recall',
-        body: `When a panel errors out, TermDeck <strong>automatically</strong> queries Mnestra for similar past errors and surfaces the top match as a toast. You don't have to ask. Rate-limited to one per 30 seconds per panel. Click the toast to open the Memory tab with the full hit expanded.`,
+        body: `When a panel errors out, PassiDeck <strong>automatically</strong> queries Mnestra for similar past errors and surfaces the top match as a toast. You don't have to ask. Rate-limited to one per 30 seconds per panel. Click the toast to open the Memory tab with the full hit expanded.`,
       },
       {
         target: '.prompt-bar',
@@ -2119,7 +2119,7 @@
       {
         target: null,
         title: 'You are ready.',
-        body: `That's every major surface. Click <strong>how this works</strong> in the top toolbar to replay this walkthrough. <strong>help</strong> opens the full docs. Questions, bugs, feedback: <a href="https://github.com/jhizzard/termdeck/issues" target="_blank" style="color:var(--tg-accent)">github.com/jhizzard/termdeck/issues</a>. Now launch something.`,
+        body: `That's every major surface. Click <strong>how this works</strong> in the top toolbar to replay this walkthrough. <strong>help</strong> opens the full docs. Questions, bugs, feedback: <a href="https://github.com/jhizzard/passideck/issues" target="_blank" style="color:var(--tg-accent)">github.com/jhizzard/passideck/issues</a>. Now launch something.`,
       },
     ];
 
@@ -2314,7 +2314,7 @@
       tooltip.classList.remove('centered');
       tooltip.style.top = '';
       tooltip.style.left = '';
-      try { localStorage.setItem('termdeck:tour:seen', '1'); } catch {}
+      try { localStorage.setItem('passideck:tour:seen', '1'); } catch {}
     }
 
     // ===== Status / Config dropdowns (Sprint 9 T2) =====
@@ -2442,17 +2442,17 @@
         }
       }
 
-      html += `<div class="hd-detail" style="grid-column:1/-1;margin-top:8px;color:var(--tg-text-dim);font-size:10px">edit <code>~/.termdeck/config.yaml</code> and restart to apply</div>`;
+      html += `<div class="hd-detail" style="grid-column:1/-1;margin-top:8px;color:var(--tg-text-dim);font-size:10px">edit <code>~/.passideck/config.yaml</code> and restart to apply</div>`;
       return html;
     }
 
     // ===== Setup Wizard (Sprint 19 T2) =====
-    // Progressive-disclosure modal that shows TermDeck's 4 configuration tiers
+    // Progressive-disclosure modal that shows PassiDeck's 4 configuration tiers
     // and their live status. Detection only — does not write config files.
     const SETUP_TIERS = [
       {
         id: '1',
-        name: 'Tier 1 — TermDeck core',
+        name: 'Tier 1 — PassiDeck core',
         desc: 'Local terminal multiplexer running in your browser.',
         commands: []
       },
@@ -2460,19 +2460,19 @@
         id: '2',
         name: 'Tier 2 — Mnestra RAG',
         desc: 'Persistent cross-session memory backed by Postgres + pgvector.',
-        commands: ['termdeck init --mnestra']
+        commands: ['passideck init --mnestra']
       },
       {
         id: '3',
         name: 'Tier 3 — Rumen learning loop',
         desc: 'Async insight extraction and morning briefings (Supabase Edge Function).',
-        commands: ['termdeck init --rumen']
+        commands: ['passideck init --rumen']
       },
       {
         id: '4',
         name: 'Tier 4 — Projects',
         desc: 'Named project roots so you can launch with "cc <name>" shorthand.',
-        commands: ['Click the + button in the prompt bar, or edit ~/.termdeck/config.yaml']
+        commands: ['Click the + button in the prompt bar, or edit ~/.passideck/config.yaml']
       }
     ];
 
@@ -2513,7 +2513,7 @@
           </div>
           <footer class="setup-footer">
             <div class="setup-hint">
-              Edit <code>~/.termdeck/config.yaml</code> and <code>~/.termdeck/secrets.env</code>, then re-check.
+              Edit <code>~/.passideck/config.yaml</code> and <code>~/.passideck/secrets.env</code>, then re-check.
             </div>
             <div class="setup-actions">
               <button type="button" class="setup-recheck" id="setupRecheck">re-check</button>
@@ -2603,7 +2603,7 @@
           : (status === 'active' || tier.commands.length === 0)
             ? ''
             : `<div class="setup-cmds">${tier.commands.map((c) => {
-                const copyable = /^termdeck\s/.test(c);
+                const copyable = /^passideck\s/.test(c);
                 return `<div class="setup-cmd">
                   <code>${escapeHtml(c)}</code>
                   ${copyable ? `<button type="button" class="setup-copy" data-copy="${escapeHtml(c)}">copy</button>` : ''}
@@ -2790,7 +2790,7 @@
         const code = data && data.code;
         let msg;
         if (code === 'mcp_not_installed') {
-          msg = "The Supabase MCP isn't installed on this machine. Run `npx @jhizzard/termdeck-stack --tier 4` to install it, or paste credentials manually below.";
+          msg = "The Supabase MCP isn't installed on this machine. Run `npx @passi/passideck-stack --tier 4` to install it, or paste credentials manually below.";
         } else if (code === 'pat_invalid') {
           const detail = (data && data.detail) || 'token rejected';
           msg = `Token rejected: ${detail}. Mint a fresh PAT and try again.`;
@@ -2866,7 +2866,7 @@
       return `
         <form class="setup-credentials" id="setupCredForm" autocomplete="off" style="margin-top:10px;padding:12px;background:rgba(0,0,0,0.2);border-radius:6px;border:1px solid var(--border, #2a2c3a);">
           <div style="font-size:11px;color:var(--text-dim, #8a8d9a);margin-bottom:4px;">
-            Paste your Supabase + OpenAI credentials. They are written to <code>~/.termdeck/secrets.env</code> (chmod 600) and never leave this machine.
+            Paste your Supabase + OpenAI credentials. They are written to <code>~/.passideck/secrets.env</code> (chmod 600) and never leave this machine.
           </div>
           <label style="${labelStyle}">
             Supabase URL
@@ -2977,7 +2977,7 @@
 
     // Sprint 23 audit fix: chain /api/setup/migrate after credentials save so
     // the wizard fulfills the sprint mission ("write config AND run migrations")
-    // in a single click instead of leaving the user to run `termdeck init`.
+    // in a single click instead of leaving the user to run `passideck init`.
     async function runSetupMigrations(statusEl) {
       try {
         const res = await fetch(`${API}/api/setup/migrate`, {
@@ -3038,12 +3038,12 @@
 
       const tier = Number(data.tier) || 1;
       const tierNames = {
-        1: 'TermDeck core',
-        2: 'TermDeck + Mnestra',
-        3: 'TermDeck + Mnestra + Rumen',
+        1: 'PassiDeck core',
+        2: 'PassiDeck + Mnestra',
+        3: 'PassiDeck + Mnestra + Rumen',
         4: 'Full stack + projects'
       };
-      const stackLabel = tierNames[tier] || 'TermDeck';
+      const stackLabel = tierNames[tier] || 'PassiDeck';
 
       const tiers = data.tiers || {};
       const mnestraDetail = (tiers[2] && tiers[2].detail) || '';

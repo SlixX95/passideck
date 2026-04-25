@@ -1,8 +1,8 @@
 {
-  "name": "@termdeck/cli-internal",
+  "name": "@passideck/cli-internal",
   "version": "0.2.0",
   "private": true,
-  "description": "Internal workspace package — CLI launcher for TermDeck. Published as part of the root @jhizzard/termdeck package, not as a standalone npm package.",
+  "description": "Internal workspace package — CLI launcher for PassiDeck. Published as part of the root @passi/passideck package, not as a standalone npm package.",
   "main": "src/index.js",
   "author": "Joshua Izzard",
   "license": "MIT"
