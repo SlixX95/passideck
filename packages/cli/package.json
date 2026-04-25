@@ -1,9 +1,1 @@
-{
-  "name": "@passideck/cli-internal",
-  "version": "0.2.0",
-  "private": true,
-  "description": "Internal workspace package — CLI launcher for PassiDeck. Published as part of the root @passi/passideck package, not as a standalone npm package.",
-  "main": "src/index.js",
-  "author": "Joshua Izzard",
-  "license": "MIT"
-}
+{"name":"@passideck/cli-internal","version":"0.7.0","private":true,"main":"src/index.js"}

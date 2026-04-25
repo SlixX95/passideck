@@ -1,6 +1,1 @@
-{
-  "name": "@passideck/client",
-  "version": "0.1.0",
-  "description": "PassiDeck web client",
-  "private": true
-}
+{"name":"@passideck/client","version":"0.7.0","private":true}

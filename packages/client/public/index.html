@@ -1,203 +1,41 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="de">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PassiDeck</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <header class="topbar">
+    <div class="brand">PassiDeck</div>
+    <nav class="layouts" aria-label="Layout">
+      <button data-layout="1x1">1x1</button>
+      <button data-layout="2x1">2x1</button>
+      <button data-layout="2x2">2x2</button>
+      <button data-layout="3x2">3x2</button>
+      <button data-layout="2x4">2x4</button>
+      <button data-layout="4x2">4x2</button>
+    </nav>
+    <nav class="quick" aria-label="Quick launch">
+      <button data-command="/bin/bash">shell</button>
+      <button data-command="hermes">hermes</button>
+      <button data-command="codex">codex</button>
+    </nav>
+  </header>
 
-  <!-- TOP BAR (Sprint 9 T1: two-row layout) -->
-  <div class="topbar">
-    <div class="topbar-row topbar-row-1">
-      <div class="topbar-left">
-        <div class="topbar-logo">
-          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
-            <rect x="1" y="1" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
-            <rect x="10" y="1" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
-            <rect x="1" y="10" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
-            <rect x="10" y="10" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
-          </svg>
-          PassiDeck
-        </div>
-        <div class="topbar-stats" id="globalStats">
-          <span class="topbar-stat"><span class="dot" style="background:var(--tg-green)"></span> <span id="stat-active">0</span> active</span>
-          <span class="topbar-stat"><span class="dot" style="background:var(--tg-purple)"></span> <span id="stat-thinking">0</span> thinking</span>
-          <span class="topbar-stat"><span class="dot" style="background:var(--tg-amber)"></span> <span id="stat-idle">0</span> idle</span>
-          <span class="topbar-stat" id="stat-rag" style="display:none">RAG</span>
-          <button type="button" class="rumen-badge" id="rumenBadge" title="Rumen insights" aria-haspopup="dialog" aria-controls="rumenModal" aria-label="Open Rumen insights briefing">
-            <span class="rb-icon" aria-hidden="true">💡</span>
-            <span id="rumenBadgeLabel">0 insights</span>
-          </button>
-        </div>
-      </div>
+  <main id="termGrid" class="grid layout-2x1">
+    <section id="emptyState" class="empty">
+      <h1>Keine Terminals.</h1>
+      <p>shell, hermes oder codex öffnen.</p>
+    </section>
+  </main>
 
-      <div class="topbar-center">
-        <button class="layout-btn" data-layout="1x1">1x1</button>
-        <button class="layout-btn active" data-layout="2x1">2x1</button>
-        <button class="layout-btn" data-layout="2x2">2x2</button>
-        <button class="layout-btn" data-layout="3x2">3x2</button>
-        <button class="layout-btn" data-layout="2x4">2x4</button>
-        <button class="layout-btn" data-layout="4x2">4x2</button>
-        <button class="layout-btn" data-layout="orch" title="Orchestrator: 4 workers across top, 1 full-width orchestrator across bottom">orch</button>
-        <button class="layout-btn control-btn" data-layout="control" title="Aggregate activity feed">control</button>
-      </div>
-    </div>
-
-    <div class="topbar-row topbar-row-2 topbar-right">
-      <!-- TERMINAL SWITCHER (T1.2 / F1.2): lives in chrome, not over PTY content -->
-      <div class="term-switcher" id="termSwitcher" aria-label="Terminal switcher">
-        <div class="term-switcher-label">Alt+1…9</div>
-        <div class="switcher-grid" id="switcherGrid"></div>
-      </div>
-      <div class="topbar-ql" id="topbarQuickLaunch" aria-label="Quick launch">
-        <button class="topbar-ql-btn" onclick="quickLaunch('/bin/bash')" title="Open a bash shell">shell</button>
-        <button class="topbar-ql-btn" onclick="quickLaunch('hermes')" title="Open Hermes CLI">hermes</button>
-        <button class="topbar-ql-btn" onclick="quickLaunch('codex')" title="Open Codex CLI">codex</button>
-      </div>
-      <div class="topbar-row-2-spacer"></div>
-      <button id="btn-status">status</button>
-      <button id="btn-config">config</button>
-      <button id="btn-how" title="Walkthrough of every PassiDeck feature">how this works</button>
-      <button id="btn-help" title="Open the PassiDeck documentation" onclick="window.open('https://passideck-docs.vercel.app','_blank','noopener')">help</button>
-    </div>
-  </div>
-
-  <!-- TERMINAL GRID -->
-  <div class="grid-container layout-2x1" id="termGrid">
-    <div class="control-feed" id="controlFeed">
-      <div class="control-feed-header">
-        <h3>Control · live activity</h3>
-        <span class="feed-count" id="feedCount">0 events</span>
-      </div>
-      <div class="feed-rows" id="feedRows"></div>
-    </div>
-    <div class="empty-state" id="emptyState">
-      <svg width="64" height="64" viewBox="0 0 48 48" fill="none">
-        <rect x="4" y="4" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/>
-        <rect x="26" y="4" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/>
-        <rect x="4" y="26" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/>
-        <rect x="26" y="26" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/>
-      </svg>
-      <h2>No terminals yet.</h2>
-      <p>Launch one to get started.</p>
-      <div class="quick-launch-group">
-        <button class="quick-launch-btn" onclick="quickLaunch('/bin/bash')">
-          <span class="ql-cmd">bash</span>
-          <span class="ql-desc">Open a shell</span>
-        </button>
-        <button class="quick-launch-btn" onclick="quickLaunch('hermes')">
-          <span class="ql-cmd">hermes</span>
-          <span class="ql-desc">Open Hermes CLI</span>
-        </button>
-        <button class="quick-launch-btn" onclick="quickLaunch('codex')">
-          <span class="ql-cmd">codex</span>
-          <span class="ql-desc">Open Codex CLI</span>
-        </button>
-      </div>
-      <div class="notes">
-        <span>Press <kbd>/</kbd> to focus the prompt bar, or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> to open a shell.</span>
-      </div>
-    </div>
-  </div>
-
-  <!-- ONBOARDING TOUR elements (hidden by default, shown by startTour()) -->
-  <div class="tour-backdrop" id="tourBackdrop"></div>
-  <div class="tour-spotlight" id="tourSpotlight"></div>
-  <div class="tour-tooltip" id="tourTooltip" style="display:none">
-    <h3 id="tourTitle"></h3>
-    <p id="tourBody"></p>
-    <div class="tour-controls">
-      <span class="tour-counter" id="tourCounter"></span>
-      <div class="tour-btns">
-        <button class="tour-skip" id="tourSkipBtn">skip</button>
-        <button class="tour-prev" id="tourPrevBtn">back</button>
-        <button class="tour-next" id="tourNextBtn">next</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- PROMPT BAR -->
-  <div class="prompt-bar">
-    <span class="prompt-icon">></span>
-    <input
-      type="text"
-      class="prompt-input"
-      id="promptInput"
-      placeholder="Launch a terminal... e.g. 'claude code ~/scheduling-saas' or 'python3 manage.py runserver'"
-      autocomplete="off"
-    >
-    <select class="prompt-project" id="promptProject">
-      <option value="">no project</option>
-    </select>
-    <button class="prompt-add-project" id="btnAddProject" title="Add a new project">+</button>
-    <button class="prompt-launch" id="promptLaunch">launch</button>
-  </div>
-
-  <!-- Add-project modal (hidden by default) -->
-  <div class="add-project-modal" id="addProjectModal">
-    <div class="add-project-backdrop"></div>
-    <div class="add-project-card">
-      <h3>Add a project</h3>
-      <p class="apm-help">Projects are saved to <code>~/.passideck/config.yaml</code> and persist across restarts.</p>
-      <label>
-        <span>Name</span>
-        <input type="text" id="apmName" placeholder="my-project" autocomplete="off" spellcheck="false">
-      </label>
-      <label>
-        <span>Path</span>
-        <input type="text" id="apmPath" placeholder="~/code/my-project" autocomplete="off" spellcheck="false">
-      </label>
-      <label>
-        <span>Default command <em>(optional)</em></span>
-        <input type="text" id="apmCommand" placeholder="claude" autocomplete="off" spellcheck="false">
-      </label>
-      <label>
-        <span>Default theme <em>(optional)</em></span>
-        <select id="apmTheme"><option value="">— pick a theme —</option></select>
-      </label>
-      <div class="apm-status" id="apmStatus"></div>
-      <div class="apm-actions">
-        <button class="apm-cancel" id="apmCancel">cancel</button>
-        <button class="apm-save" id="apmSave">add project</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Rumen morning-briefing modal (hidden by default) -->
-  <div class="rumen-modal" id="rumenModal" role="dialog" aria-modal="true" aria-labelledby="rumenTitle" aria-describedby="rumenSummary">
-    <div class="rumen-backdrop" id="rumenBackdrop"></div>
-    <div class="rumen-card">
-      <header>
-        <h3 id="rumenTitle">Rumen Insights</h3>
-        <p class="rm-summary" id="rumenSummary">Loading…</p>
-      </header>
-      <div class="rumen-filters">
-        <label>
-          project
-          <select id="rumenFilterProject"><option value="">all</option></select>
-        </label>
-        <label>
-          sort
-          <select id="rumenFilterSort">
-            <option value="newest">newest</option>
-            <option value="confidence">highest confidence</option>
-          </select>
-        </label>
-        <label>
-          <input type="checkbox" id="rumenFilterUnseen"> unseen only
-        </label>
-      </div>
-      <div class="rumen-list" id="rumenList" role="list">
-        <div class="rumen-empty">Loading insights…</div>
-      </div>
-      <footer>
-        <button type="button" class="rm-close" id="rumenClose">close (Esc)</button>
-      </footer>
-    </div>
-  </div>
+  <footer class="promptbar">
+    <input id="promptInput" placeholder="command…" autocomplete="off" spellcheck="false">
+    <button id="promptLaunch">launch</button>
+  </footer>
 
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
