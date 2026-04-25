@@ -8,6 +8,8 @@
     const state = {
       sessions: new Map(),   // id → { session, terminal, ws, fitAddon, el }
       layout: '2x1',
+      activeLayout: '2x1',
+      uiState: null,
       themes: {},
       config: {},
       focusedId: null
@@ -19,6 +21,42 @@
       if (body) opts.body = JSON.stringify(body);
       const res = await fetch(`${API}${path}`, opts);
       return res.json();
+    }
+
+    function getUiStatePayload() {
+      return {
+        layout: state.activeLayout || state.layout || '2x1',
+        baseLayout: state.layout || '2x1',
+        focusedId: state.focusedId || null,
+        primaryId: state.primaryId || null
+      };
+    }
+
+    let uiStateSaveTimer = null;
+    function saveUiStateSoon() {
+      clearTimeout(uiStateSaveTimer);
+      uiStateSaveTimer = setTimeout(() => {
+        api('PUT', '/api/ui-state', getUiStatePayload()).catch(err => {
+          console.error('[client] failed to persist UI state:', err);
+        });
+      }, 150);
+    }
+
+    function applyServerUiState() {
+      const saved = state.uiState || {};
+      const layout = saved.layout || saved.baseLayout || '2x1';
+      const baseLayout = saved.baseLayout || (['focus', 'half'].includes(layout) ? '2x1' : layout);
+      state.layout = baseLayout;
+      state.focusedId = saved.focusedId || null;
+      state.primaryId = saved.primaryId || null;
+
+      if (layout === 'focus' && state.focusedId && state.sessions.has(state.focusedId)) {
+        applyFocusLayout(state.focusedId, { persist: false });
+      } else if (layout === 'half' && state.primaryId && state.sessions.has(state.primaryId)) {
+        applyHalfLayout(state.primaryId, { persist: false });
+      } else {
+        setLayout(baseLayout, { persist: false });
+      }
     }
 
     // ===== Initialize =====
@@ -34,6 +72,9 @@
         opt.textContent = name;
         sel.appendChild(opt);
       }
+
+      // Load server-side UI layout state (shared across devices)
+      state.uiState = await api('GET', '/api/ui-state').catch(() => null);
 
       // Load themes
       const themeList = await api('GET', '/api/themes');
@@ -62,6 +103,7 @@
         });
       }
 
+      applyServerUiState();
       updateEmptyState();
 
       // Rumen insights badge + briefing (no-op when server reports enabled:false)
@@ -897,9 +939,12 @@
       if (grid.classList.contains('layout-focus')) {
         document.querySelectorAll('.term-panel').forEach(p => p.classList.remove('focused'));
         entry.el.classList.add('focused');
+        state.activeLayout = 'focus';
       } else if (grid.classList.contains('layout-half')) {
         document.querySelectorAll('.term-panel').forEach(p => p.classList.remove('primary'));
         entry.el.classList.add('primary');
+        state.activeLayout = 'half';
+        state.primaryId = id;
       }
 
       // Focus the xterm textarea (without stealing pointer)
@@ -918,6 +963,7 @@
 
       // Refit if layout changed (focus / half swap)
       requestAnimationFrame(() => fitAll());
+      saveUiStateSoon();
       renderSwitcher();
     }
 
@@ -1188,6 +1234,34 @@
     }
 
     // ===== Panel actions =====
+    function applyFocusLayout(id, opts = {}) {
+      const grid = document.getElementById('termGrid');
+      grid.className = 'grid-container layout-focus';
+      document.querySelectorAll('.term-panel').forEach(p => {
+        p.classList.remove('focused', 'primary');
+      });
+      const panel = document.getElementById(`panel-${id}`);
+      if (panel) panel.classList.add('focused');
+      state.focusedId = id;
+      state.primaryId = null;
+      state.activeLayout = 'focus';
+      if (opts.persist !== false) saveUiStateSoon();
+      requestAnimationFrame(() => fitAll());
+    }
+
+    function applyHalfLayout(id, opts = {}) {
+      const grid = document.getElementById('termGrid');
+      grid.className = 'grid-container layout-half';
+      document.querySelectorAll('.term-panel').forEach(p => p.classList.remove('focused', 'primary'));
+      const panel = document.getElementById(`panel-${id}`);
+      if (panel) panel.classList.add('primary');
+      state.primaryId = id;
+      state.focusedId = id;
+      state.activeLayout = 'half';
+      if (opts.persist !== false) saveUiStateSoon();
+      requestAnimationFrame(() => fitAll());
+    }
+
     function focusPanel(id) {
       const grid = document.getElementById('termGrid');
       const isAlreadyFocused = grid.classList.contains('layout-focus') && state.focusedId === id;
@@ -1200,17 +1274,8 @@
           p.style.display = '';
         });
       } else {
-        grid.className = 'grid-container layout-focus';
-        document.querySelectorAll('.term-panel').forEach(p => {
-          p.classList.remove('focused');
-        });
-        const panel = document.getElementById(`panel-${id}`);
-        if (panel) panel.classList.add('focused');
-        state.focusedId = id;
+        applyFocusLayout(id);
       }
-
-      // Re-fit all visible terminals
-      requestAnimationFrame(() => fitAll());
     }
 
     function reconnectSession(id) {
@@ -1275,12 +1340,7 @@
     }
 
     function halfPanel(id) {
-      const grid = document.getElementById('termGrid');
-      grid.className = 'grid-container layout-half';
-      document.querySelectorAll('.term-panel').forEach(p => p.classList.remove('primary'));
-      const panel = document.getElementById(`panel-${id}`);
-      if (panel) panel.classList.add('primary');
-      requestAnimationFrame(() => fitAll());
+      applyHalfLayout(id);
     }
 
     async function closePanel(id) {
@@ -1842,13 +1902,16 @@
     }
 
     // ===== Layout =====
-    function setLayout(layout) {
+    function setLayout(layout, opts = {}) {
       const wasControl = state.layout === 'control';
       // Only persist "real" grid layouts as state.layout; the control view is
       // an overlay, not a target to restore to when the user hits Escape.
       if (layout !== 'control') {
         state.layout = layout;
       }
+      state.activeLayout = layout;
+      state.focusedId = null;
+      state.primaryId = null;
       const grid = document.getElementById('termGrid');
       grid.className = `grid-container layout-${layout}`;
 
@@ -1880,9 +1943,8 @@
       }
 
       requestAnimationFrame(() => fitAll());
+      if (opts.persist !== false) saveUiStateSoon();
     }
-
-    // ===== Helpers =====
     function getStatusColor(status) {
       const colors = {
         starting: '#7aa2f7',

@@ -24,6 +24,54 @@ let _rumenPoolFailed = false;
 let _rumenPoolFailedAt = 0;
 const RUMEN_POOL_RETRY_MS = 30_000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const UI_LAYOUTS = new Set(['1x1', '2x1', '2x2', '3x2', '2x4', '4x2', 'orch', 'control', 'focus', 'half']);
+const UI_STATE_DEFAULT = {
+  layout: '2x1',
+  baseLayout: '2x1',
+  focusedId: null,
+  primaryId: null,
+  updatedAt: null
+};
+
+function getUiStatePath() {
+  return path.join(os.homedir(), '.passideck', 'ui-state.json');
+}
+
+function sanitizeUiState(input) {
+  const src = input && typeof input === 'object' ? input : {};
+  const next = { ...UI_STATE_DEFAULT };
+  if (UI_LAYOUTS.has(src.layout)) next.layout = src.layout;
+  if (UI_LAYOUTS.has(src.baseLayout) && !['focus', 'half'].includes(src.baseLayout)) {
+    next.baseLayout = src.baseLayout;
+  } else if (!['focus', 'half'].includes(next.layout)) {
+    next.baseLayout = next.layout;
+  }
+  if (typeof src.focusedId === 'string' && src.focusedId.length <= 80) next.focusedId = src.focusedId;
+  if (typeof src.primaryId === 'string' && src.primaryId.length <= 80) next.primaryId = src.primaryId;
+  next.updatedAt = typeof src.updatedAt === 'string' ? src.updatedAt : null;
+  return next;
+}
+
+function readUiState() {
+  try {
+    const raw = fs.readFileSync(getUiStatePath(), 'utf8');
+    return sanitizeUiState(JSON.parse(raw));
+  } catch {
+    return { ...UI_STATE_DEFAULT };
+  }
+}
+
+function writeUiState(input) {
+  const state = sanitizeUiState(input);
+  state.updatedAt = new Date().toISOString();
+  const file = getUiStatePath();
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+  fs.renameSync(tmp, file);
+  return state;
+}
+
 function getRumenPool() {
   if (_rumenPool) return _rumenPool;
   if (_rumenPoolFailed) {
@@ -946,6 +994,21 @@ function createServer(config) {
       statusColors,
       firstRun
     });
+  });
+
+  // GET/PUT /api/ui-state - device-independent UI layout state.
+  // Stored on the PassiDeck server so phone/laptop/desktop restore the same view.
+  app.get('/api/ui-state', (req, res) => {
+    res.json(readUiState());
+  });
+
+  app.put('/api/ui-state', (req, res) => {
+    try {
+      res.json(writeUiState(req.body || {}));
+    } catch (err) {
+      console.error('[ui-state] write failed:', err.message);
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // POST /api/projects - add a new project on the fly, persist to config.yaml
