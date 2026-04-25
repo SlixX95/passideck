@@ -1301,6 +1301,16 @@ function createServer(config) {
       session: session.toJSON()
     }));
 
+    // Browser reload creates a new xterm instance. Without replay it attaches
+    // to a live PTY but renders blank until the next output, which looks broken.
+    // Replay the server-side tail so prompts/current screen are visible again.
+    if (session._outputBuffer) {
+      ws.send(JSON.stringify({
+        type: 'output',
+        data: session._outputBuffer
+      }));
+    }
+
     // Client → PTY
     ws.on('message', (msg) => {
       try {
