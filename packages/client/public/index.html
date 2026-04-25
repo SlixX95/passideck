@@ -7,35 +7,85 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body data-theme="blue">
   <header class="topbar">
-    <div class="brand">PassiDeck</div>
-    <nav class="layouts" aria-label="Layout">
-      <button data-layout="1x1">1x1</button>
-      <button data-layout="2x1">2x1</button>
-      <button data-layout="2x2">2x2</button>
-      <button data-layout="3x2">3x2</button>
-      <button data-layout="2x4">2x4</button>
-      <button data-layout="4x2">4x2</button>
-    </nav>
-    <nav class="quick" aria-label="Quick launch">
-      <button data-command="/bin/bash">shell</button>
-      <button data-command="hermes">hermes</button>
-      <button data-command="codex">codex</button>
-    </nav>
+    <div class="topbar-row topbar-row-1">
+      <div class="topbar-left">
+        <div class="topbar-logo">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
+            <rect x="1" y="1" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
+            <rect x="10" y="1" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
+            <rect x="1" y="10" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
+            <rect x="10" y="10" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.2"/>
+          </svg>
+          PassiDeck
+        </div>
+        <div class="topbar-stats">
+          <span class="topbar-stat"><span class="dot"></span><span id="stat-active">0</span> Fenster</span>
+        </div>
+      </div>
+
+      <nav class="topbar-center layouts" aria-label="Layout">
+        <button class="layout-btn" data-layout="1x1">1x1</button>
+        <button class="layout-btn" data-layout="1x2">1x2</button>
+        <button class="layout-btn" data-layout="2x1">2x1</button>
+        <button class="layout-btn" data-layout="1x3">1x3</button>
+        <button class="layout-btn" data-layout="3x1">3x1</button>
+        <button class="layout-btn" data-layout="2x2">2x2</button>
+        <button class="layout-btn" data-layout="3x2">3x2</button>
+        <button class="layout-btn" data-layout="2x3">2x3</button>
+        <button class="layout-btn" data-layout="2x4">2x4</button>
+        <button class="layout-btn" data-layout="4x2">4x2</button>
+        <button class="layout-btn" data-layout="3x3">3x3</button>
+      </nav>
+    </div>
+
+    <div class="topbar-row topbar-row-2">
+      <div class="term-switcher" aria-label="Fensterauswahl">
+        <div class="term-switcher-label">Alt+1…9</div>
+        <div class="switcher-grid" id="switcherGrid"></div>
+      </div>
+
+      <nav class="topbar-ql" aria-label="Schnellstart">
+        <button class="topbar-ql-btn" data-command="/bin/bash" title="Open a bash shell">shell</button>
+        <button class="topbar-ql-btn" data-command="hermes" title="Open Hermes CLI, then return to shell after Ctrl-C/exit">hermes</button>
+        <button class="topbar-ql-btn" data-command="codex" title="Open Codex CLI, then return to shell after Ctrl-C/exit">codex</button>
+      </nav>
+
+      <button id="settingsToggle" class="chrome-btn" title="Settings">settings</button>
+      <div class="topbar-row-2-spacer"></div>
+    </div>
   </header>
 
-  <main id="termGrid" class="grid layout-2x1">
-    <section id="emptyState" class="empty">
-      <h1>Keine Terminals.</h1>
+  <section id="settingsPanel" class="settings-panel" hidden>
+    <label for="themeSelect">Theme</label>
+    <select id="themeSelect">
+      <option value="blue">Blue</option>
+      <option value="green">Green</option>
+      <option value="amber">Amber</option>
+      <option value="purple">Purple</option>
+      <option value="red">Red</option>
+      <option value="mono">Mono</option>
+    </select>
+  </section>
+
+  <main class="grid-container layout-2x1" id="termGrid">
+    <section class="empty-state" id="emptyState">
+      <svg width="64" height="64" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+        <rect x="4" y="4" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/>
+        <rect x="26" y="4" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/>
+        <rect x="4" y="26" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/>
+        <rect x="26" y="26" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/>
+      </svg>
+      <h2>No terminals yet.</h2>
       <p>shell, hermes oder codex öffnen.</p>
+      <div class="quick-launch-group">
+        <button class="quick-launch-btn" data-command="/bin/bash"><span class="ql-cmd">shell</span><span class="ql-desc">Open a shell</span></button>
+        <button class="quick-launch-btn" data-command="hermes"><span class="ql-cmd">hermes</span><span class="ql-desc">Open Hermes CLI</span></button>
+        <button class="quick-launch-btn" data-command="codex"><span class="ql-cmd">codex</span><span class="ql-desc">Open Codex CLI</span></button>
+      </div>
     </section>
   </main>
-
-  <footer class="promptbar">
-    <input id="promptInput" placeholder="command…" autocomplete="off" spellcheck="false">
-    <button id="promptLaunch">launch</button>
-  </footer>
 
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>

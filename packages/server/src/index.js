@@ -11,8 +11,9 @@ try { pty = require('@homebridge/node-pty-prebuilt-multiarch'); } catch {}
 const { SessionManager } = require('./session');
 const { loadConfig } = require('./config');
 
-const UI_LAYOUTS = new Set(['1x1', '2x1', '2x2', '3x2', '2x4', '4x2', 'focus', 'half']);
-const UI_STATE_DEFAULT = { layout: '2x1', baseLayout: '2x1', focusedId: null, primaryId: null, updatedAt: null };
+const UI_LAYOUTS = new Set(['1x1', '1x2', '2x1', '1x3', '3x1', '2x2', '3x2', '2x3', '2x4', '4x2', '3x3', 'focus', 'half']);
+const UI_THEMES = new Set(['blue', 'green', 'amber', 'purple', 'red', 'mono']);
+const UI_STATE_DEFAULT = { layout: '2x1', baseLayout: '2x1', focusedId: null, primaryId: null, activeId: null, theme: 'blue', updatedAt: null };
 
 function uiStatePath() {
   return path.join(os.homedir(), '.passideck', 'ui-state.json');
@@ -26,6 +27,8 @@ function sanitizeUiState(input) {
   else if (!['focus', 'half'].includes(out.layout)) out.baseLayout = out.layout;
   if (typeof src.focusedId === 'string' && src.focusedId.length <= 100) out.focusedId = src.focusedId;
   if (typeof src.primaryId === 'string' && src.primaryId.length <= 100) out.primaryId = src.primaryId;
+  if (typeof src.activeId === 'string' && src.activeId.length <= 100) out.activeId = src.activeId;
+  if (UI_THEMES.has(src.theme)) out.theme = src.theme;
   if (typeof src.updatedAt === 'string') out.updatedAt = src.updatedAt;
   return out;
 }
@@ -53,10 +56,15 @@ function resolveCwd(config, cwd, project) {
 
 function splitCommand(command, shell) {
   const cmd = String(command || '').trim();
+  const sh = shell || '/bin/bash';
   const plainShell = /^(zsh|bash|fish|sh|dash|tcsh|ksh|csh|pwsh|powershell|\/bin\/bash|\/bin\/sh)$/i.test(cmd);
-  if (!cmd) return { file: shell || '/bin/bash', args: [] };
+  if (!cmd) return { file: sh, args: [] };
   if (plainShell) return { file: cmd, args: [] };
-  return { file: shell || '/bin/bash', args: ['-lc', cmd] };
+
+  // Run quick commands like `hermes` and `codex` inside an interactive shell.
+  // Ctrl-C then interrupts the foreground CLI, not the whole PTY session, so the
+  // pane drops back to a normal shell prompt instead of becoming dead.
+  return { file: sh, args: ['-i'], initialInput: `${cmd}\r` };
 }
 
 function createServer(config = loadConfig()) {
@@ -106,6 +114,7 @@ function createServer(config = loadConfig()) {
         session.meta.statusDetail = `Exited ${exitCode}${signal ? ` ${signal}` : ''}`;
         if (session.ws?.readyState === 1) session.ws.send(JSON.stringify({ type: 'exit', exitCode, signal }));
       });
+      if (launch.initialInput) setTimeout(() => term.write(launch.initialInput), 150);
       console.log(`[pty] ${session.id} pid=${session.pid} command=${session.meta.command}`);
       res.json(session.toJSON());
     } catch (err) {
