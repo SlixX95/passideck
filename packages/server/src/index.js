@@ -13,6 +13,8 @@ const { loadConfig } = require('./config');
 
 const UI_LAYOUTS = new Set(['1x1', '1x2', '2x1', '1x3', '3x1', '2x2', '3x2', '2x3', '2x4', '4x2', '3x3', 'focus', 'half']);
 const UI_THEMES = new Set(['blue', 'green', 'amber', 'purple', 'red', 'mono']);
+const UPLOAD_RETENTION_DAYS = 7;
+
 const UI_STATE_DEFAULT = { layout: '2x1', baseLayout: '2x1', focusedId: null, primaryId: null, activeId: null, theme: 'blue', updatedAt: null };
 
 function uiStatePath() {
@@ -88,6 +90,32 @@ function saveUploadedBlob(input) {
   };
 }
 
+function cleanupOldUploads(maxDays = UPLOAD_RETENTION_DAYS) {
+  const root = uploadsRoot();
+  if (!fs.existsSync(root)) return { removed: 0, bytes: 0 };
+  const cutoff = Date.now() - maxDays * 86400000;
+  let removed = 0;
+  let bytes = 0;
+  for (const dayDir of fs.readdirSync(root)) {
+    const dirPath = path.join(root, dayDir);
+    const stat = fs.statSync(dirPath);
+    if (!stat.isDirectory()) continue;
+    if (stat.mtimeMs >= cutoff) continue;
+    // Delete entire day folder
+    for (const file of fs.readdirSync(dirPath)) {
+      const filePath = path.join(dirPath, file);
+      try {
+        const fStat = fs.statSync(filePath);
+        bytes += fStat.size;
+        fs.unlinkSync(filePath);
+        removed++;
+      } catch {}
+    }
+    try { fs.rmdirSync(dirPath); } catch {}
+  }
+  return { removed, bytes };
+}
+
 function resolveCwd(config, cwd, project) {
   const raw = cwd || config.projects?.[project]?.path || os.homedir();
   return path.resolve(String(raw).replace(/^~/, os.homedir()));
@@ -139,6 +167,12 @@ function createServer(config = loadConfig()) {
   app.post('/api/uploads', (req, res) => {
     try { res.json(saveUploadedBlob(req.body || {})); }
     catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.post('/api/uploads/cleanup', (req, res) => {
+    const maxDays = Number(req.body?.maxDays) || UPLOAD_RETENTION_DAYS;
+    const result = cleanupOldUploads(maxDays);
+    res.json({ ok: true, ...result });
   });
 
   app.post('/api/sessions', (req, res) => {
@@ -239,5 +273,7 @@ if (require.main === module) {
   const { server } = createServer(config);
   const port = config.port || 3000;
   const host = config.host || '127.0.0.1';
+  const result = cleanupOldUploads();
+  if (result.removed > 0) console.log(`[uploads] cleaned ${result.removed} files (${Math.round(result.bytes/1024)}KB)`);
   server.listen(port, host, () => console.log(`PassiDeck http://${host}:${port}`));
 }

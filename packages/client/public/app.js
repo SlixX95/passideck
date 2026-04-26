@@ -504,6 +504,40 @@ function movePanelBefore(sourceId, targetId) {
   movePanel(sourceId, targetId, 'before');
 }
 
+function flashPaneExit(el) {
+  el.classList.add('flash-exit');
+  setTimeout(() => el.classList.remove('flash-exit'), 2000);
+}
+
+function playBell() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 800;
+    osc.type = 'sine';
+    gain.gain.setValueAtTime(0.15, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + 0.3);
+  } catch {}
+}
+
+function notifySessionExit(title, exitCode) {
+  try {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'granted') {
+      new Notification(`PassiDeck: ${title}`, { body: `Session exited (code ${exitCode ?? '?'})`, icon: '/favicon.ico' });
+    } else if (Notification.permission !== 'denied') {
+      Notification.requestPermission().then(p => {
+        if (p === 'granted') new Notification(`PassiDeck: ${title}`, { body: `Session exited (code ${exitCode ?? '?'})` });
+      });
+    }
+  } catch {}
+}
+
 function attachSocket(id, term, el) {
   const ws = new WebSocket(`${WS_BASE}?session=${encodeURIComponent(id)}`);
   ws.onmessage = (event) => {
@@ -520,6 +554,9 @@ function attachSocket(id, term, el) {
     if (msg.type === 'output') writeTerminalOutput(term, msg.data, () => scheduleTerminalSnapshot(id));
     if (msg.type === 'exit') {
       el.classList.add('exited');
+      flashPaneExit(el);
+      playBell();
+      notifySessionExit(panelTitle(session), msg.exitCode);
       renderSwitcher();
     }
   };
