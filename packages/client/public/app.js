@@ -648,18 +648,34 @@ async function uploadBlob({ name, type, data }) {
   return api('POST', '/api/uploads', { name, type, data });
 }
 
-function pasteIntoActiveTerminal(text) {
+function activeTerminalEntry() {
   const id = state.activeId || state.order[0];
-  const entry = id ? state.sessions.get(id) : null;
+  return id ? state.sessions.get(id) : null;
+}
+
+function pasteIntoActiveTerminal(text) {
+  const entry = activeTerminalEntry();
   if (!entry?.ws || entry.ws.readyState !== WebSocket.OPEN) return false;
   entry.ws.send(JSON.stringify({ type: 'input', data: text }));
   entry.term.focus();
   return true;
 }
 
-function formatInsertedPath(upload) {
-  // Hermes CLI auto-attaches images only when the local path starts the input.
-  // Prepend at line start so this also works after the user already typed a prompt.
+function isHermesSession(entry) {
+  const meta = entry?.session?.meta || {};
+  const command = String(meta.command || '').trim().toLowerCase();
+  const label = String(meta.label || '').trim().toLowerCase();
+  return command === 'hermes' || command.endsWith('/hermes') || label === 'hermes';
+}
+
+function formatUploadInsertion(upload) {
+  const entry = activeTerminalEntry();
+  if (isHermesSession(entry) && /^image\//i.test(upload.type || '')) {
+    // Codex-style UX for Hermes: attach first, show Hermes' [📎 Image #N] badge,
+    // then Pascal can type a normal prompt without a raw file path in the composer.
+    return `/image ${upload.path}\r`;
+  }
+  // Fallback for shell/Codex/unknown panes: keep the old explicit local path behavior.
   return `\x01${upload.path} `;
 }
 
@@ -668,6 +684,35 @@ function findImageFileFromClipboardItems(items) {
     if (item.kind === 'file' && item.type?.startsWith('image/')) return item.getAsFile();
   }
   return null;
+}
+
+function shouldLetBrowserHandlePaste(target) {
+  const el = target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
+  if (!el) return false;
+  // xterm uses a hidden textarea; Ctrl+V there must go through the PTY bridge.
+  if (el.closest('.terminal, .xterm')) return false;
+  if (el.closest('.term-title[contenteditable="true"]')) return true;
+  if (el.closest('input, textarea, select')) return true;
+  if (el.closest('[contenteditable]:not([contenteditable="false"])')) return true;
+  return false;
+}
+
+function handleTerminalPaste(e) {
+  if (shouldLetBrowserHandlePaste(e.target)) return;
+
+  const file = findImageFileFromClipboardItems(e.clipboardData?.items);
+  if (file) {
+    e.preventDefault();
+    clearClipboardPasteMode();
+    uploadFile(file, { pasteIntoTerminal: true });
+    return;
+  }
+
+  const text = e.clipboardData?.getData('text/plain');
+  if (text && pasteIntoActiveTerminal(text)) {
+    e.preventDefault();
+    clearClipboardPasteMode();
+  }
 }
 
 function armClipboardPasteMode() {
@@ -730,7 +775,7 @@ async function uploadFile(file, opts = {}) {
   try {
     const data = await readFileAsDataUrl(file);
     const upload = await uploadBlob({ name: file.name, type: file.type || 'application/octet-stream', data });
-    if (opts.pasteIntoTerminal) pasteIntoActiveTerminal(formatInsertedPath(upload));
+    if (opts.pasteIntoTerminal) pasteIntoActiveTerminal(formatUploadInsertion(upload));
   } catch (err) {
     console.error(err);
     alert(`Upload failed: ${err.message}`);
@@ -783,14 +828,7 @@ document.getElementById('fileInput').onchange = e => {
 };
 document.getElementById('clipboardImageBtn').onclick = () => uploadClipboardImage();
 document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
-document.addEventListener('paste', e => {
-  if (!state.clipboardPasteArmed) return;
-  const file = findImageFileFromClipboardItems(e.clipboardData?.items);
-  if (!file) return;
-  e.preventDefault();
-  clearClipboardPasteMode();
-  uploadFile(file, { pasteIntoTerminal: true });
-});
+document.addEventListener('paste', handleTerminalPaste, true);
 window.addEventListener('resize', () => requestAnimationFrame(fitAll));
 window.addEventListener('beforeunload', saveAllTerminalSnapshots);
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveAllTerminalSnapshots(); });
