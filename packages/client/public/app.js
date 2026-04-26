@@ -715,6 +715,16 @@ function handleTerminalPaste(e) {
   }
 }
 
+function letBrowserOwnTerminalPasteShortcut(e) {
+  const key = String(e.key || '').toLowerCase();
+  if (key !== 'v' || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+  const target = e.target?.nodeType === Node.ELEMENT_NODE ? e.target : e.target?.parentElement;
+  if (!target?.closest('.terminal, .xterm')) return;
+  // xterm may otherwise turn Ctrl+V into raw ^V. Stop xterm key handling, but do not preventDefault;
+  // the browser then emits a real paste event that handleTerminalPaste can route to the PTY/upload bridge.
+  e.stopImmediatePropagation();
+}
+
 function armClipboardPasteMode() {
   const btn = document.getElementById('clipboardImageBtn');
   state.clipboardPasteArmed = true;
@@ -829,6 +839,7 @@ document.getElementById('fileInput').onchange = e => {
 document.getElementById('clipboardImageBtn').onclick = () => uploadClipboardImage();
 document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
 document.addEventListener('paste', handleTerminalPaste, true);
+document.addEventListener('keydown', letBrowserOwnTerminalPasteShortcut, true);
 window.addEventListener('resize', () => requestAnimationFrame(fitAll));
 window.addEventListener('beforeunload', saveAllTerminalSnapshots);
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveAllTerminalSnapshots(); });

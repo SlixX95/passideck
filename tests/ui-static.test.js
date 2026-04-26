@@ -45,6 +45,8 @@ assertNotIncludes(app, 'title="focus"', 'focus pane button must be removed');
 assertNotIncludes(app, 'title="half"', 'half pane button must be removed');
 assertIncludes(app, 'title="close">×</button>', 'close X must remain');
 assertIncludes(app, 'document.addEventListener(\'paste\', handleTerminalPaste, true)', 'Ctrl+V must route paste events into active terminal before xterm/browser handlers');
+assertIncludes(app, 'document.addEventListener(\'keydown\', letBrowserOwnTerminalPasteShortcut, true)', 'Ctrl+V keydown must bypass xterm raw ^V handling');
+assertIncludes(app, 'e.stopImmediatePropagation();', 'Ctrl+V must stop xterm from consuming browser paste shortcut');
 assertIncludes(app, 'function shouldLetBrowserHandlePaste', 'normal editable fields must keep browser paste behavior');
 assertIncludes(app, "el.closest('.terminal, .xterm')", 'xterm hidden textarea must paste through PTY bridge');
 assertIncludes(app, "e.clipboardData?.getData('text/plain')", 'plain text clipboard must paste into active terminal');
