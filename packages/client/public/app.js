@@ -22,7 +22,8 @@ const state = {
   activeId: null,
   theme: 'blue',
   saveTimer: null,
-  launchBusy: false
+  launchBusy: false,
+  uploadBusy: false
 };
 
 async function api(method, path, body) {
@@ -265,6 +266,87 @@ async function launch(command) {
   }
 }
 
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('file read failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadBlob({ name, type, data }) {
+  return api('POST', '/api/uploads', { name, type, data });
+}
+
+function pasteIntoActiveTerminal(text) {
+  const id = state.activeId || state.order[0];
+  const entry = id ? state.sessions.get(id) : null;
+  if (!entry?.ws || entry.ws.readyState !== WebSocket.OPEN) return false;
+  entry.ws.send(JSON.stringify({ type: 'input', data: text }));
+  entry.term.focus();
+  return true;
+}
+
+function formatInsertedPath(upload) {
+  return `${upload.path} `;
+}
+
+async function uploadFile(file) {
+  if (!file || state.uploadBusy) return;
+  state.uploadBusy = true;
+  try {
+    const data = await readFileAsDataUrl(file);
+    const upload = await uploadBlob({ name: file.name, type: file.type || 'application/octet-stream', data });
+    pasteIntoActiveTerminal(formatInsertedPath(upload));
+  } catch (err) {
+    console.error(err);
+    alert(`Upload failed: ${err.message}`);
+  } finally {
+    state.uploadBusy = false;
+  }
+}
+
+async function captureScreenshot() {
+  if (state.uploadBusy) return;
+  const id = state.activeId || state.order[0];
+  const entry = id ? state.sessions.get(id) : null;
+  if (!entry) return alert('Kein aktives Fenster');
+  state.uploadBusy = true;
+  try {
+    const rows = [...entry.el.querySelectorAll('.xterm-rows > div')].map(row => row.textContent || '');
+    const header = panelTitle(entry.session);
+    const fontSize = 14;
+    const lineHeight = 19;
+    const pad = 14;
+    const width = Math.max(900, Math.min(2200, entry.el.getBoundingClientRect().width * 2));
+    const height = Math.max(320, pad * 3 + 24 + rows.length * lineHeight);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.floor(width);
+    canvas.height = Math.floor(height);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = THEMES[state.theme].background;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--tg-surface') || '#161821';
+    ctx.fillRect(0, 0, canvas.width, 38);
+    ctx.fillStyle = THEMES[state.theme].cursor;
+    ctx.font = 'bold 15px monospace';
+    ctx.fillText(header, pad, 24);
+    ctx.fillStyle = THEMES[state.theme].foreground;
+    ctx.font = `${fontSize}px monospace`;
+    rows.forEach((line, i) => ctx.fillText(line, pad, 54 + i * lineHeight));
+    const data = canvas.toDataURL('image/png');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const upload = await uploadBlob({ name: `passideck-${stamp}.png`, type: 'image/png', data });
+    pasteIntoActiveTerminal(formatInsertedPath(upload));
+  } catch (err) {
+    console.error(err);
+    alert(`Screenshot failed: ${err.message}`);
+  } finally {
+    state.uploadBusy = false;
+  }
+}
+
 async function init() {
   const [sessions, ui] = await Promise.all([
     api('GET', '/api/sessions').catch(() => []),
@@ -296,6 +378,13 @@ document.getElementById('settingsToggle').onclick = () => {
   const panel = document.getElementById('settingsPanel');
   panel.hidden = !panel.hidden;
 };
+document.getElementById('uploadFileBtn').onclick = () => document.getElementById('fileInput').click();
+document.getElementById('fileInput').onchange = e => {
+  const file = e.target.files?.[0];
+  e.target.value = '';
+  uploadFile(file);
+};
+document.getElementById('screenshotBtn').onclick = () => captureScreenshot();
 document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
 window.addEventListener('resize', () => requestAnimationFrame(fitAll));
 document.addEventListener('keydown', e => {
@@ -312,6 +401,14 @@ document.addEventListener('keydown', e => {
   if (e.ctrlKey && e.shiftKey && key === 'n') {
     e.preventDefault();
     launch('/bin/bash');
+  }
+  if (e.ctrlKey && e.shiftKey && key === 'u') {
+    e.preventDefault();
+    document.getElementById('fileInput').click();
+  }
+  if (e.ctrlKey && e.shiftKey && key === 's') {
+    e.preventDefault();
+    captureScreenshot();
   }
 });
 

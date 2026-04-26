@@ -49,6 +49,45 @@ function writeUiState(input) {
   return state;
 }
 
+function uploadsRoot() {
+  return path.join(os.homedir(), '.passideck', 'uploads');
+}
+
+function safeFileName(name) {
+  const base = path.basename(String(name || 'upload.bin'));
+  return base.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 120) || 'upload.bin';
+}
+
+function saveUploadedBlob(input) {
+  const src = input && typeof input === 'object' ? input : {};
+  const raw = String(src.data || src.base64 || '');
+  const match = raw.match(/^data:([^;,]+)?;base64,(.*)$/);
+  const mime = String(src.type || (match && match[1]) || 'application/octet-stream');
+  const b64 = match ? match[2] : raw;
+  const buffer = Buffer.from(b64, 'base64');
+  if (!buffer.length) throw new Error('Empty upload');
+  if (buffer.length > 50 * 1024 * 1024) throw new Error('Upload too large');
+
+  const day = new Date().toISOString().slice(0, 10);
+  const dir = path.join(uploadsRoot(), day);
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const filename = `${stamp}-${safeFileName(src.name)}`;
+  const file = path.join(dir, filename);
+  fs.writeFileSync(file, buffer);
+  const rel = `/${day}/${filename}`;
+  return {
+    ok: true,
+    name: filename,
+    originalName: src.name || filename,
+    type: mime,
+    size: buffer.length,
+    path: file,
+    url: `/uploads${rel}`,
+    insert: file
+  };
+}
+
 function resolveCwd(config, cwd, project) {
   const raw = cwd || config.projects?.[project]?.path || os.homedir();
   return path.resolve(String(raw).replace(/^~/, os.homedir()));
@@ -83,7 +122,8 @@ function createServer(config = loadConfig()) {
   const wss = new WebSocketServer({ server, path: '/ws' });
   const sessions = new SessionManager();
 
-  app.use(express.json());
+  app.use(express.json({ limit: '64mb' }));
+  app.use('/uploads', express.static(uploadsRoot()));
   app.use(express.static(path.join(__dirname, '..', '..', 'client', 'public')));
 
   app.get('/api/health', (_req, res) => res.json({ ok: true, sessions: sessions.getAll().length }));
@@ -95,6 +135,11 @@ function createServer(config = loadConfig()) {
   });
 
   app.get('/api/sessions', (_req, res) => res.json(sessions.getAll()));
+
+  app.post('/api/uploads', (req, res) => {
+    try { res.json(saveUploadedBlob(req.body || {})); }
+    catch (err) { res.status(400).json({ error: err.message }); }
+  });
 
   app.post('/api/sessions', (req, res) => {
     if (!pty) return res.status(500).json({ error: 'PTY support not available' });
