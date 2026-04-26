@@ -23,8 +23,8 @@ class Session {
 
   appendOutput(data) {
     this._outputBuffer += data;
-    if (this._outputBuffer.length > 65536) {
-      this._outputBuffer = this._outputBuffer.slice(-65536);
+    if (this._outputBuffer.length > 1048576) {
+      this._outputBuffer = this._outputBuffer.slice(-1048576);
     }
   }
 

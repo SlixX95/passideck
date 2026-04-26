@@ -59,6 +59,12 @@ function isPlainShellCommand(command) {
   return !cmd || /^(zsh|bash|fish|sh|dash|tcsh|ksh|csh|pwsh|powershell|\/bin\/bash|\/bin\/sh)$/i.test(cmd);
 }
 
+function normalizeTerminalOutput(data) {
+  // Keep TUI output in xterm's main buffer. Alternate-screen mode kills
+  // browser scrollback and makes reload reconstruction look empty/broken.
+  return String(data).replace(/\x1b\[\?(?:47|1047|1048|1049)[hl]/g, '');
+}
+
 function splitCommand(command, shell) {
   const cmd = String(command || '').trim();
   const sh = shell || '/bin/bash';
@@ -109,8 +115,9 @@ function createServer(config = loadConfig()) {
       session.pid = term.pid;
       session.meta.status = 'active';
       term.onData((data) => {
-        session.appendOutput(data);
-        if (session.ws?.readyState === 1) session.ws.send(JSON.stringify({ type: 'output', data }));
+        const normalized = normalizeTerminalOutput(data);
+        session.appendOutput(normalized);
+        if (session.ws?.readyState === 1) session.ws.send(JSON.stringify({ type: 'output', data: normalized }));
       });
       term.onExit(({ exitCode, signal }) => {
         session.meta.status = 'exited';
@@ -157,7 +164,7 @@ function createServer(config = loadConfig()) {
     if (!session) return ws.close(4001, 'Session not found');
     session.ws = ws;
     ws.send(JSON.stringify({ type: 'meta', session: session.toJSON() }));
-    if (session._outputBuffer && isPlainShellCommand(session.meta.command)) {
+    if (session._outputBuffer) {
       ws.send(JSON.stringify({ type: 'output', data: session._outputBuffer }));
     }
 
@@ -165,7 +172,6 @@ function createServer(config = loadConfig()) {
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (msg.type === 'input' && session.pty) session.pty.write(String(msg.data || ''));
-      if (msg.type === 'redraw' && session.pty) session.pty.write('\x0c');
       if (msg.type === 'resize' && session.pty) {
         const cols = Math.max(2, Number(msg.cols) || 120);
         const rows = Math.max(2, Number(msg.rows) || 30);

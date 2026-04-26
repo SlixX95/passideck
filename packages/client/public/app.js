@@ -196,15 +196,7 @@ function attachSocket(id, term, el) {
       renderSwitcher();
     }
   };
-  ws.onopen = () => {
-    requestAnimationFrame(() => {
-      fitAll();
-      const entry = state.sessions.get(id);
-      if (entry && ws.readyState === WebSocket.OPEN && !isPlainShellCommand(entry.session.meta.command)) {
-        setTimeout(() => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: 'redraw' })), 80);
-      }
-    });
-  };
+  ws.onopen = () => requestAnimationFrame(fitAll);
   ws.onclose = () => setTimeout(() => reconnect(id), 1000);
   return ws;
 }
