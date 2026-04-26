@@ -117,6 +117,11 @@ function updateEmpty() {
   document.getElementById('stat-active').textContent = String(state.sessions.size);
 }
 
+function isPlainShellCommand(command) {
+  const cmd = String(command || '').trim();
+  return !cmd || /^(zsh|bash|fish|sh|dash|tcsh|ksh|csh|pwsh|powershell|\/bin\/bash|\/bin\/sh)$/i.test(cmd);
+}
+
 function panelTitle(session) {
   return session.meta.label || session.meta.command || session.id.slice(0, 8);
 }
@@ -161,17 +166,19 @@ function createPanel(session) {
   term.loadAddon(new WebLinksAddon.WebLinksAddon());
   term.open(el.querySelector('.terminal'));
 
-  const ws = attachSocket(id, term, el);
+  const ro = new ResizeObserver(() => fitAll());
+  ro.observe(el.querySelector('.terminal'));
   term.onData(data => {
     const entry = state.sessions.get(id);
     if (entry?.ws?.readyState === WebSocket.OPEN) entry.ws.send(JSON.stringify({ type: 'input', data }));
   });
 
-  const ro = new ResizeObserver(() => fitAll());
-  ro.observe(el.querySelector('.terminal'));
-
-  state.sessions.set(id, { session, el, term, fit, ws, ro });
+  state.sessions.set(id, { session, el, term, fit, ws: null, ro });
   state.order.push(id);
+
+  const ws = attachSocket(id, term, el);
+  state.sessions.get(id).ws = ws;
+
   updateEmpty();
   renderSwitcher();
   selectPanel(id, { persist: false });
@@ -189,7 +196,15 @@ function attachSocket(id, term, el) {
       renderSwitcher();
     }
   };
-  ws.onopen = () => requestAnimationFrame(fitAll);
+  ws.onopen = () => {
+    requestAnimationFrame(() => {
+      fitAll();
+      const entry = state.sessions.get(id);
+      if (entry && ws.readyState === WebSocket.OPEN && !isPlainShellCommand(entry.session.meta.command)) {
+        setTimeout(() => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ type: 'redraw' })), 80);
+      }
+    });
+  };
   ws.onclose = () => setTimeout(() => reconnect(id), 1000);
   return ws;
 }

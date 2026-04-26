@@ -241,6 +241,8 @@ button, select {
 .term-actions button.danger:hover { color: var(--tg-red); border-color: var(--tg-red); }
 .terminal { flex: 1; min-height: 0; padding: 4px; }
 .xterm { height: 100%; }
+.xterm-viewport { overflow-y: auto !important; }
+.xterm-screen { min-height: 100%; }
 
 .empty-state {
   place-self: center;

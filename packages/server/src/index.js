@@ -54,12 +54,16 @@ function resolveCwd(config, cwd, project) {
   return path.resolve(String(raw).replace(/^~/, os.homedir()));
 }
 
+function isPlainShellCommand(command) {
+  const cmd = String(command || '').trim();
+  return !cmd || /^(zsh|bash|fish|sh|dash|tcsh|ksh|csh|pwsh|powershell|\/bin\/bash|\/bin\/sh)$/i.test(cmd);
+}
+
 function splitCommand(command, shell) {
   const cmd = String(command || '').trim();
   const sh = shell || '/bin/bash';
-  const plainShell = /^(zsh|bash|fish|sh|dash|tcsh|ksh|csh|pwsh|powershell|\/bin\/bash|\/bin\/sh)$/i.test(cmd);
   if (!cmd) return { file: sh, args: [] };
-  if (plainShell) return { file: cmd, args: [] };
+  if (isPlainShellCommand(cmd)) return { file: cmd, args: [] };
 
   // Run quick commands like `hermes` and `codex` inside an interactive shell.
   // Ctrl-C then interrupts the foreground CLI, not the whole PTY session, so the
@@ -153,12 +157,15 @@ function createServer(config = loadConfig()) {
     if (!session) return ws.close(4001, 'Session not found');
     session.ws = ws;
     ws.send(JSON.stringify({ type: 'meta', session: session.toJSON() }));
-    if (session._outputBuffer) ws.send(JSON.stringify({ type: 'output', data: session._outputBuffer }));
+    if (session._outputBuffer && isPlainShellCommand(session.meta.command)) {
+      ws.send(JSON.stringify({ type: 'output', data: session._outputBuffer }));
+    }
 
     ws.on('message', (raw) => {
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (msg.type === 'input' && session.pty) session.pty.write(String(msg.data || ''));
+      if (msg.type === 'redraw' && session.pty) session.pty.write('\x0c');
       if (msg.type === 'resize' && session.pty) {
         const cols = Math.max(2, Number(msg.cols) || 120);
         const rows = Math.max(2, Number(msg.rows) || 30);
