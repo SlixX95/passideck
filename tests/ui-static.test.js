@@ -18,6 +18,7 @@ function assertNotIncludes(haystack, needle, message) {
 
 assertIncludes(app, 'const TERM_SNAPSHOT_PREFIX', 'terminal contents must be cached client-side for reload');
 assertIncludes(app, 'function terminalSnapshot', 'terminal buffer must be captured before reload');
+assertIncludes(app, 'entry.serialize?.serialize', 'reload snapshot must preserve ANSI SGR/colors via xterm serialize addon');
 assertIncludes(app, 'buffer.viewportY', 'reload snapshot must capture the visible viewport, not scrollback tail');
 assertIncludes(app, 'function hasTerminalSnapshot', 'server replay marker must be skipped when a client snapshot exists');
 assertIncludes(app, 'restoreTerminalSnapshot(id, term)', 'snapshot must restore after the pane is fitted');
@@ -89,6 +90,9 @@ assertIncludes(css, '.chrome-peek', 'hidden chrome needs a tiny restore affordan
 assertIncludes(app, 'const CHROME_PREF_KEY', 'chrome visibility must persist client-side');
 assertIncludes(app, 'function toggleChrome', 'chrome hide/show feature required');
 assertIncludes(app, "e.altKey && e.key === '0'", 'Alt+0 must toggle chrome visibility');
+assertIncludes(html, 'addon-serialize.min.js', 'xterm serialize addon must load locally for color-safe reload snapshots');
+assertIncludes(app, 'async function ensureSerializeAddon', 'serialize addon must be force-loaded before init');
+assertIncludes(app, 'Function(code).call(window)', 'local serialize addon must execute with window as UMD global');
 assertIncludes(html, 'id="chromeToggle"', 'topbar needs hide ui button');
 assertIncludes(html, 'id="chromePeek"', 'hidden topbar needs restore button');
 assertNotIncludes(html, 'PassiDeck</div>', 'topbar codename/logo text should not be visible');

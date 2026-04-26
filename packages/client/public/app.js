@@ -246,7 +246,13 @@ function snapshotKey(id) {
   return `${TERM_SNAPSHOT_PREFIX}${id}`;
 }
 
-function terminalSnapshot(term) {
+function terminalSnapshot(entry) {
+  const term = entry?.term;
+  if (!term) return '';
+  try {
+    const serialized = entry.serialize?.serialize({ scrollback: Math.max(0, term.rows || 30) });
+    if (serialized) return serialized.slice(-TERM_SNAPSHOT_MAX_CHARS);
+  } catch {}
   const buffer = term.buffer?.active;
   if (!buffer) return '';
   // Persist exactly the visible viewport, not scrollback tail. TUI apps (Hermes/Codex)
@@ -272,7 +278,7 @@ function hasTerminalSnapshot(id) {
 function saveTerminalSnapshot(id) {
   const entry = state.sessions.get(id);
   if (!entry?.term) return;
-  const text = terminalSnapshot(entry.term);
+  const text = terminalSnapshot(entry);
   try {
     if (text) localStorage.setItem(snapshotKey(id), JSON.stringify({ id, text, savedAt: Date.now() }));
   } catch {}
@@ -292,7 +298,8 @@ function restoreTerminalSnapshot(id, term) {
     const snapshot = JSON.parse(raw);
     const text = String(snapshot.text || '');
     if (!text) return false;
-    term.write(text.replace(/\n/g, '\r\n'));
+    try { term.reset(); } catch {}
+    term.write(text);
     return true;
   } catch {
     return false;
@@ -423,7 +430,9 @@ function createPanel(session) {
     theme: THEMES[state.theme]
   });
   const fit = new FitAddon.FitAddon();
+  const serialize = window.SerializeAddon ? new SerializeAddon.SerializeAddon() : null;
   term.loadAddon(fit);
+  if (serialize) term.loadAddon(serialize);
   term.loadAddon(new WebLinksAddon.WebLinksAddon());
   term.open(el.querySelector('.terminal'));
 
@@ -436,7 +445,7 @@ function createPanel(session) {
   });
 
   const hasSnapshot = hasTerminalSnapshot(id);
-  state.sessions.set(id, { session, el, term, fit, ws: null, ro, restored: hasSnapshot, snapshotTimer: null });
+  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, restored: hasSnapshot, snapshotTimer: null });
   state.order = state.order.filter(existing => existing !== id);
   state.order.push(id);
 
@@ -777,7 +786,14 @@ document.addEventListener('keydown', e => {
   }
 });
 
-init().catch(err => {
+async function ensureSerializeAddon() {
+  if (window.SerializeAddon) return;
+  const res = await fetch('addon-serialize.min.js?v=20260426');
+  const code = await res.text();
+  Function(code).call(window);
+}
+
+ensureSerializeAddon().then(init).catch(err => {
   console.error(err);
   document.getElementById('emptyState').innerHTML = '<h2>PassiDeck Fehler.</h2><p>Konsole prüfen.</p>';
 });
