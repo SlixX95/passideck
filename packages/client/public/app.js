@@ -294,9 +294,43 @@ function formatInsertedPath(upload) {
   return `\x01${upload.path} `;
 }
 
-async function uploadFile(file) {
-  if (!file || state.uploadBusy) return;
+function findImageFileFromClipboardItems(items) {
+  for (const item of items || []) {
+    if (item.kind === 'file' && item.type?.startsWith('image/')) return item.getAsFile();
+  }
+  return null;
+}
+
+async function uploadClipboardImage() {
+  if (state.uploadBusy) return;
   state.uploadBusy = true;
+  try {
+    let file = null;
+    if (navigator.clipboard?.read && window.isSecureContext) {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find(t => t.startsWith('image/'));
+        if (type) {
+          const blob = await item.getType(type);
+          const ext = type.split('/')[1] || 'png';
+          file = new File([blob], `clipboard-image-${new Date().toISOString().replace(/[:.]/g, '-')}.${ext}`, { type });
+          break;
+        }
+      }
+    }
+    if (!file) throw new Error('Kein Bild im Clipboard oder Clipboard API blockiert. Bild kopieren, Button klicken, dann Ctrl+V auf der Seite.');
+    await uploadFile(file, { keepBusy: true });
+  } catch (err) {
+    console.warn(err);
+    alert(err.message);
+  } finally {
+    state.uploadBusy = false;
+  }
+}
+
+async function uploadFile(file, opts = {}) {
+  if (!file || (state.uploadBusy && !opts.keepBusy)) return;
+  if (!opts.keepBusy) state.uploadBusy = true;
   try {
     const data = await readFileAsDataUrl(file);
     const upload = await uploadBlob({ name: file.name, type: file.type || 'application/octet-stream', data });
@@ -305,47 +339,7 @@ async function uploadFile(file) {
     console.error(err);
     alert(`Upload failed: ${err.message}`);
   } finally {
-    state.uploadBusy = false;
-  }
-}
-
-async function captureScreenshot() {
-  if (state.uploadBusy) return;
-  const id = state.activeId || state.order[0];
-  const entry = id ? state.sessions.get(id) : null;
-  if (!entry) return alert('Kein aktives Fenster');
-  state.uploadBusy = true;
-  try {
-    const rows = [...entry.el.querySelectorAll('.xterm-rows > div')].map(row => row.textContent || '');
-    const header = panelTitle(entry.session);
-    const fontSize = 14;
-    const lineHeight = 19;
-    const pad = 14;
-    const width = Math.max(900, Math.min(2200, entry.el.getBoundingClientRect().width * 2));
-    const height = Math.max(320, pad * 3 + 24 + rows.length * lineHeight);
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.floor(width);
-    canvas.height = Math.floor(height);
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = THEMES[state.theme].background;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--tg-surface') || '#161821';
-    ctx.fillRect(0, 0, canvas.width, 38);
-    ctx.fillStyle = THEMES[state.theme].cursor;
-    ctx.font = 'bold 15px monospace';
-    ctx.fillText(header, pad, 24);
-    ctx.fillStyle = THEMES[state.theme].foreground;
-    ctx.font = `${fontSize}px monospace`;
-    rows.forEach((line, i) => ctx.fillText(line, pad, 54 + i * lineHeight));
-    const data = canvas.toDataURL('image/png');
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const upload = await uploadBlob({ name: `passideck-${stamp}.png`, type: 'image/png', data });
-    pasteIntoActiveTerminal(formatInsertedPath(upload));
-  } catch (err) {
-    console.error(err);
-    alert(`Screenshot failed: ${err.message}`);
-  } finally {
-    state.uploadBusy = false;
+    if (!opts.keepBusy) state.uploadBusy = false;
   }
 }
 
@@ -386,8 +380,14 @@ document.getElementById('fileInput').onchange = e => {
   e.target.value = '';
   uploadFile(file);
 };
-document.getElementById('screenshotBtn').onclick = () => captureScreenshot();
+document.getElementById('clipboardImageBtn').onclick = () => uploadClipboardImage();
 document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
+document.addEventListener('paste', e => {
+  const file = findImageFileFromClipboardItems(e.clipboardData?.items);
+  if (!file) return;
+  e.preventDefault();
+  uploadFile(file);
+});
 window.addEventListener('resize', () => requestAnimationFrame(fitAll));
 document.addEventListener('keydown', e => {
   const key = e.key.toLowerCase();
@@ -408,9 +408,9 @@ document.addEventListener('keydown', e => {
     e.preventDefault();
     document.getElementById('fileInput').click();
   }
-  if (e.ctrlKey && e.shiftKey && key === 's') {
+  if (e.ctrlKey && e.shiftKey && key === 'v') {
     e.preventDefault();
-    captureScreenshot();
+    uploadClipboardImage();
   }
 });
 
