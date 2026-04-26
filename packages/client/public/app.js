@@ -289,7 +289,9 @@ function pasteIntoActiveTerminal(text) {
 }
 
 function formatInsertedPath(upload) {
-  return `${upload.path} `;
+  // Hermes CLI auto-attaches images only when the local path starts the input.
+  // Prepend at line start so this also works after the user already typed a prompt.
+  return `\x01${upload.path} `;
 }
 
 async function uploadFile(file) {
