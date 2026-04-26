@@ -1,0 +1,96 @@
+const fs = require('fs');
+const path = require('path');
+const assert = require('assert');
+
+const root = path.resolve(__dirname, '..');
+const app = fs.readFileSync(path.join(root, 'packages/client/public/app.js'), 'utf8');
+const server = fs.readFileSync(path.join(root, 'packages/server/src/index.js'), 'utf8');
+const session = fs.readFileSync(path.join(root, 'packages/server/src/session.js'), 'utf8');
+const css = fs.readFileSync(path.join(root, 'packages/client/public/style.css'), 'utf8');
+const html = fs.readFileSync(path.join(root, 'packages/client/public/index.html'), 'utf8');
+
+function assertIncludes(haystack, needle, message) {
+  assert.ok(haystack.includes(needle), message || `Expected ${needle}`);
+}
+function assertNotIncludes(haystack, needle, message) {
+  assert.ok(!haystack.includes(needle), message || `Did not expect ${needle}`);
+}
+
+assertIncludes(app, 'const TERM_SNAPSHOT_PREFIX', 'terminal contents must be cached client-side for reload');
+assertIncludes(app, 'function terminalSnapshot', 'terminal buffer must be captured before reload');
+assertIncludes(app, 'buffer.viewportY', 'reload snapshot must capture the visible viewport, not scrollback tail');
+assertIncludes(app, 'function hasTerminalSnapshot', 'server replay marker must be skipped when a client snapshot exists');
+assertIncludes(app, 'restoreTerminalSnapshot(id, term)', 'snapshot must restore after the pane is fitted');
+assertIncludes(app, 'function restoreTerminalSnapshot', 'terminal buffer must be restored after reload');
+assertIncludes(app, 'window.addEventListener(\'beforeunload\', saveAllTerminalSnapshots)', 'terminal snapshots must save on reload');
+assertIncludes(app, "includes('output replay disabled')", 'server reconnect marker must not overwrite restored terminal contents');
+assertIncludes(app, 'writeTerminalOutput(term, msg.data, () => scheduleTerminalSnapshot(id))', 'live output must refresh terminal snapshots');
+assertIncludes(app, 'const LAYOUT_SLOTS', 'layouts must declare exact visible slot counts');
+assertIncludes(app, 'function visiblePaneIds', 'layouts must hide panes beyond slot capacity');
+assertIncludes(app, 'function applyLayoutVisibility', 'layout visibility must be applied after selection/order changes');
+assertIncludes(css, '.term-panel.layout-hidden', 'hidden overflow panes must not consume grid slots');
+assertIncludes(css, 'grid-column: 1 / -1', 'empty state must span all layout columns');
+assertIncludes(css, 'grid-row: 1 / -1', 'empty state must span all layout rows');
+assertIncludes(app, 'requestAnimationFrame(fitAll);', 'newly visible hidden panes must be refit after selection');
+assertIncludes(app, 'function customTitle', 'pane names must prefer editable custom titles');
+assertIncludes(app, 'function savePanePrefs', 'pane names/order must persist without backend restart');
+assertIncludes(app, 'function movePanelBefore', 'drag-sort must reorder panes');
+assertIncludes(app, 'dragstart', 'panes must be draggable');
+assertIncludes(app, 'drop', 'panes must accept drops');
+assertIncludes(app, 'contenteditable="true"', 'pane title must be editable inline');
+assertIncludes(app, 'aria-label="Fenstername"', 'editable title needs an accessible label');
+assertNotIncludes(app, '<span class="term-id">', 'session codename/id must not render in pane header');
+assertNotIncludes(app, 'title="focus"', 'focus pane button must be removed');
+assertNotIncludes(app, 'title="half"', 'half pane button must be removed');
+assertIncludes(app, 'title="close">×</button>', 'close X must remain');
+assertIncludes(app, 'if (!state.clipboardPasteArmed) return;', 'image paste must not auto-insert into random active shells unless armed');
+assertIncludes(app, 'uploadFile(file, { pasteIntoTerminal: true });', 'explicit file upload must still insert into active terminal');
+assertIncludes(app, 'uploadFile(file, { pasteIntoTerminal: true, keepBusy: true });', 'explicit clipboard button must still insert into active terminal');
+assertIncludes(app, 'function sanitizeTerminalInput', 'terminal-generated replies must be filtered before reaching PTY');
+assertIncludes(app, 'sanitizeTerminalInput(data)', 'xterm onData must sanitize CPR/OSC replies');
+assertIncludes(app, 'function sanitizeTerminalOutput', 'terminal replay output must be sanitized client-side');
+assertIncludes(app, 'writeTerminalReplay(term, msg.data)', 'reload replay must use plain reset-safe writer');
+assertIncludes(app, 'normalizeReplayText(data)', 'reload replay must strip raw terminal controls');
+assertIncludes(app, "includes('output replay disabled')", 'server replay-disabled marker must never be printed into terminal contents');
+assertIncludes(app, "msg.type === 'replay'", 'client must handle server replay messages separately from live output');
+assertIncludes(app, 'writeTerminalOutput(term, msg.data, () => scheduleTerminalSnapshot(id))', 'live output must go through chunked/sanitized writer and snapshot refresh');
+assertIncludes(app, 'sanitizeTerminalOutput(data)', 'replayed output must strip old leaked RGB/CPR junk');
+assertIncludes(server, "type: 'replay'", 'server must send reload snapshots as replay messages, not raw output');
+assertIncludes(server, "output replay disabled", 'server must not replay old pane output on browser reload');
+assertNotIncludes(server, 'session.replaySnapshot()', 'server must not replay old snapshots on reload');
+assertIncludes(session, 'stripAnsiForReplay', 'server replay sanitizer kept for future safe snapshots');
+assertIncludes(session, 'plain snapshot', 'reload snapshot sanitizer must be explicitly plain text');
+assertIncludes(app, 'OSC color reports', 'RGB color-query replies must be documented/filtered');
+assertIncludes(app, 'CSI cursor reports', 'CPR cursor reports must be documented/filtered');
+assertIncludes(app, 'bare leaked OSC color report fragments', 'old visible rgb junk must be documented/filtered');
+assertIncludes(app, 'semicolons/ESC stripped to 101110...3R', 'binary-looking 10/11/3R leak must be documented/filtered');
+assertIncludes(app, 'sanitizeTerminalInput(data)', 'stripped terminal replies must be filtered before PTY');
+assertIncludes(app, 'writeTerminalOutput(term, msg.data, () => scheduleTerminalSnapshot(id))', 'stripped terminal replies must be filtered on live output');
+assertIncludes(app, 'class="term-drag-handle"', 'pane header needs a free drag handle separate from editable title and X');
+assertIncludes(app, 'drop-before', 'drag target must show before-placement indicator');
+assertIncludes(app, 'drop-after', 'drag target must show after-placement indicator');
+assertIncludes(app, 'function movePanel', 'drag reorder must support logical before/after placement');
+assertIncludes(app, 'savePanePrefs();', 'reordered windows must persist across reload');
+
+assertIncludes(css, '.term-panel.dragging', 'dragging visual state required');
+assertIncludes(css, '.term-panel.drop-before::before', 'drop-before indicator required');
+assertIncludes(css, '.term-panel.drop-after::after', 'drop-after indicator required');
+assertIncludes(css, '.term-drag-handle', 'drag handle styling required');
+assertIncludes(css, '.xterm-viewport::-webkit-scrollbar', 'terminal scrollbar must be themed');
+assertIncludes(css, 'scrollbar-width: thin', 'terminal scrollbar must be thin');
+assertIncludes(css, 'scrollbar-color:', 'terminal scrollbar must use dark colors');
+assertIncludes(css, '.term-title[contenteditable="true"]', 'editable title styling required');
+assertIncludes(css, 'height: 18px;', 'pane header must be ultra compact');
+assertIncludes(css, '--tg-radius: 0;', 'shell panels must be square, not rounded');
+assertIncludes(css, 'gap: 2px;', 'terminal grid must use very small gaps');
+assertIncludes(css, 'padding: 1px;', 'terminal body padding must be minimal');
+assertIncludes(css, 'body.chrome-hidden .topbar { display: none; }', 'chrome can be hidden for maximum shell space');
+assertIncludes(css, '.chrome-peek', 'hidden chrome needs a tiny restore affordance');
+assertIncludes(app, 'const CHROME_PREF_KEY', 'chrome visibility must persist client-side');
+assertIncludes(app, 'function toggleChrome', 'chrome hide/show feature required');
+assertIncludes(app, "e.altKey && e.key === '0'", 'Alt+0 must toggle chrome visibility');
+assertIncludes(html, 'id="chromeToggle"', 'topbar needs hide ui button');
+assertIncludes(html, 'id="chromePeek"', 'hidden topbar needs restore button');
+assertNotIncludes(html, 'PassiDeck</div>', 'topbar codename/logo text should not be visible');
+
+console.log('ui-static ok');

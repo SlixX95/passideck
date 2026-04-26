@@ -23,7 +23,7 @@
     "dev": "node packages/server/src/index.js",
     "server": "node packages/server/src/index.js",
     "start": "node packages/cli/src/index.js",
-    "test": "node --check packages/server/src/index.js && node --check packages/client/public/app.js"
+    "test": "node --check packages/server/src/index.js && node --check packages/client/public/app.js && node tests/ui-static.test.js"
   },
   "dependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",

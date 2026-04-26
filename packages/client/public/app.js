@@ -3,6 +3,19 @@ const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const WS_BASE = `${WS_PROTOCOL}//${window.location.host}/ws`;
 
 const LAYOUTS = ['1x1', '1x2', '2x1', '1x3', '3x1', '2x2', '3x2', '2x3', '2x4', '4x2', '3x3'];
+const LAYOUT_SLOTS = Object.freeze({
+  '1x1': 1,
+  '1x2': 2,
+  '2x1': 2,
+  '1x3': 3,
+  '3x1': 3,
+  '2x2': 4,
+  '3x2': 6,
+  '2x3': 6,
+  '2x4': 8,
+  '4x2': 8,
+  '3x3': 9
+});
 const THEMES = {
   blue:   { background: '#0f1117', foreground: '#c8ccd8', cursor: '#7aa2f7', selectionBackground: '#3d5a9e' },
   green:  { background: '#0f1117', foreground: '#d5e8d0', cursor: '#9ece6a', selectionBackground: '#4c6f38' },
@@ -25,8 +38,15 @@ const state = {
   launchBusy: false,
   uploadBusy: false,
   clipboardPasteArmed: false,
-  clipboardPasteTimer: null
+  clipboardPasteTimer: null,
+  panePrefs: { titles: {}, order: [] }
 };
+
+const PANE_PREFS_KEY = 'passideck:pane-prefs:v1';
+const CHROME_PREF_KEY = 'passideck:chrome-hidden:v1';
+const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v1:';
+const TERM_SNAPSHOT_MAX_LINES = 240;
+const TERM_SNAPSHOT_MAX_CHARS = 64000;
 
 async function api(method, path, body) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
@@ -52,6 +72,27 @@ function saveUiState() {
   state.saveTimer = setTimeout(() => api('PUT', '/api/ui-state', uiPayload()).catch(console.error), 150);
 }
 
+function visiblePaneIds(layout = state.activeLayout) {
+  const ids = state.order.filter(id => state.sessions.has(id));
+  const cap = layout === 'focus' ? 1 : layout === 'half' ? 2 : (LAYOUT_SLOTS[layout] || ids.length || 1);
+  if (!ids.length) return new Set();
+  if (ids.length <= cap) return new Set(ids);
+  const prioritized = [];
+  const push = id => { if (id && ids.includes(id) && !prioritized.includes(id)) prioritized.push(id); };
+  if (layout === 'focus') push(state.focusedId || state.activeId || ids[0]);
+  else if (layout === 'half') { push(state.primaryId || state.activeId || ids[0]); push(state.activeId); }
+  else push(state.activeId);
+  ids.forEach(push);
+  return new Set(prioritized.slice(0, cap));
+}
+
+function applyLayoutVisibility() {
+  const visible = visiblePaneIds();
+  for (const [id, entry] of state.sessions) {
+    entry.el.classList.toggle('layout-hidden', !visible.has(id));
+  }
+}
+
 function setLayout(layout, opts = {}) {
   if (!layout || ![...LAYOUTS, 'focus', 'half'].includes(layout)) return;
   const grid = document.getElementById('termGrid');
@@ -63,6 +104,7 @@ function setLayout(layout, opts = {}) {
     state.primaryId = null;
     document.querySelectorAll('.term-panel').forEach(p => p.classList.remove('focused', 'primary'));
   }
+  applyLayoutVisibility();
   document.querySelectorAll('.layout-btn').forEach(b => b.classList.toggle('active', b.dataset.layout === layout));
   requestAnimationFrame(fitAll);
   if (opts.persist !== false) saveUiState();
@@ -71,11 +113,12 @@ function setLayout(layout, opts = {}) {
 function focusPanel(id, opts = {}) {
   const entry = state.sessions.get(id);
   if (!entry) return;
+  state.focusedId = id;
+  state.primaryId = null;
   setLayout('focus', { persist: false });
   document.querySelectorAll('.term-panel').forEach(p => p.classList.remove('focused', 'primary'));
   entry.el.classList.add('focused');
-  state.focusedId = id;
-  state.primaryId = null;
+  applyLayoutVisibility();
   selectPanel(id, { persist: false });
   if (opts.persist !== false) saveUiState();
 }
@@ -83,11 +126,12 @@ function focusPanel(id, opts = {}) {
 function halfPanel(id, opts = {}) {
   const entry = state.sessions.get(id);
   if (!entry) return;
+  state.focusedId = id;
+  state.primaryId = id;
   setLayout('half', { persist: false });
   document.querySelectorAll('.term-panel').forEach(p => p.classList.remove('focused', 'primary'));
   entry.el.classList.add('primary');
-  state.focusedId = id;
-  state.primaryId = id;
+  applyLayoutVisibility();
   selectPanel(id, { persist: false });
   if (opts.persist !== false) saveUiState();
 }
@@ -102,6 +146,16 @@ function setTheme(theme, opts = {}) {
     entry.term.options.theme = THEMES[theme];
   }
   if (opts.persist !== false) saveUiState();
+}
+
+function setChromeHidden(hidden) {
+  document.body.classList.toggle('chrome-hidden', Boolean(hidden));
+  try { localStorage.setItem(CHROME_PREF_KEY, hidden ? '1' : '0'); } catch {}
+  requestAnimationFrame(fitAll);
+}
+
+function toggleChrome() {
+  setChromeHidden(!document.body.classList.contains('chrome-hidden'));
 }
 
 function fitAll() {
@@ -125,8 +179,177 @@ function isPlainShellCommand(command) {
   return !cmd || /^(zsh|bash|fish|sh|dash|tcsh|ksh|csh|pwsh|powershell|\/bin\/bash|\/bin\/sh)$/i.test(cmd);
 }
 
+function stripTerminalReplyJunk(data) {
+  return String(data || '')
+    // CSI cursor reports / CPR: ESC [ row ; col R
+    .replace(/\x1b\[[0-9;?]*R/g, '')
+    // OSC color reports: ESC ] 10/11/12 ; rgb:.... BEL or ST
+    .replace(/\x1b\](?:10|11|12);rgb:[0-9a-f/]+(?:\x07|\x1b\\)/gi, '')
+    // Old buffers may already contain bare leaked OSC color report fragments.
+    .replace(/(?:^|[;\s])(?:10|11|12);rgb:[0-9a-f]{2,4}(?:\/[0-9a-f]{2,4}){2}/gi, '')
+    .replace(/(?:^|[;\s])(?:rgb:[0-9a-f]{2,4}(?:\/[0-9a-f]{2,4}){2})/gi, '')
+    .replace(/(?:^|[;\s])(?:\d{1,3};\d{1,3}R)+/g, '')
+    .replace(/(?:^|[;\s])(?:\d{1,3}R)+/g, '')
+    // Some browsers/bridges drop ESC, BEL, semicolons, and `rgb:...`, leaving
+    // semicolons/ESC stripped to 101110...3R from OSC 10/11 + CPR replies.
+    .replace(/\b(?=(?:(?:10|11|12|\d{1,3}R){4,}))(?=(?:(?:10|11|12|\d{1,3}R)*R))(?:10|11|12|\d{1,3}R){4,}\b/g, '');
+}
+
+function sanitizeTerminalInput(data) {
+  // xterm can answer app probes itself. Do not forward those terminal-generated
+  // replies to bash/readline, where they echo as junk like `3R3R10;rgb:...`.
+  return stripTerminalReplyJunk(data);
+}
+
+const OUTPUT_FRAME_LIMIT = 256 * 1024;
+
+function normalizeReplayText(data) {
+  return String(data || '')
+    .replace(/\x1bc/g, '')
+    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b[P_^][\s\S]*?\x1b\\/g, '')
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+    .replace(/\x1b[@-Z\\-_]/g, '')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+}
+
+function sanitizeTerminalOutput(data) {
+  let text = stripTerminalReplyJunk(data);
+  if (text.length > OUTPUT_FRAME_LIMIT) text = `\r\n[PassiDeck: großer Replay gekürzt — letzte ${OUTPUT_FRAME_LIMIT} Zeichen]\r\n` + text.slice(-OUTPUT_FRAME_LIMIT);
+  return text;
+}
+
+function writeTerminalOutput(term, data, done) {
+  const text = sanitizeTerminalOutput(data);
+  const chunkSize = 32768;
+  let offset = 0;
+  function writeChunk() {
+    const chunk = text.slice(offset, offset + chunkSize);
+    if (!chunk) { if (done) done(); return; }
+    offset += chunkSize;
+    term.write(chunk, () => {
+      if (offset < text.length) requestAnimationFrame(writeChunk);
+      else if (done) done();
+    });
+  }
+  writeChunk();
+}
+
+function writeTerminalReplay(term, data) {
+  // Browser reload gets a fresh xterm. Do not replay old cursor/TUI state into it.
+  // Reset first, then write plain snapshot. Live output after reconnect stays raw.
+  try { term.reset(); } catch {}
+  writeTerminalOutput(term, normalizeReplayText(data));
+}
+
+function snapshotKey(id) {
+  return `${TERM_SNAPSHOT_PREFIX}${id}`;
+}
+
+function terminalSnapshot(term) {
+  const buffer = term.buffer?.active;
+  if (!buffer) return '';
+  // Persist exactly the visible viewport, not scrollback tail. TUI apps (Hermes/Codex)
+  // keep menus in the active viewport; using buffer.length tail can restore a different
+  // slice after reload and make the screen appear to change.
+  const rows = Math.max(1, Math.min(TERM_SNAPSHOT_MAX_LINES, term.rows || 30));
+  const start = Math.max(0, buffer.viewportY || 0);
+  const end = Math.min(buffer.length || 0, start + rows);
+  const lines = [];
+  for (let i = start; i < end; i += 1) {
+    const line = buffer.getLine(i);
+    lines.push(line ? line.translateToString(false) : '');
+  }
+  let text = lines.join('\r\n').replace(/[\r\n]+$/g, '');
+  if (text.length > TERM_SNAPSHOT_MAX_CHARS) text = text.slice(-TERM_SNAPSHOT_MAX_CHARS);
+  return text;
+}
+
+function hasTerminalSnapshot(id) {
+  try { return Boolean(localStorage.getItem(snapshotKey(id))); } catch { return false; }
+}
+
+function saveTerminalSnapshot(id) {
+  const entry = state.sessions.get(id);
+  if (!entry?.term) return;
+  const text = terminalSnapshot(entry.term);
+  try {
+    if (text) localStorage.setItem(snapshotKey(id), JSON.stringify({ id, text, savedAt: Date.now() }));
+  } catch {}
+}
+
+function scheduleTerminalSnapshot(id) {
+  const entry = state.sessions.get(id);
+  if (!entry) return;
+  clearTimeout(entry.snapshotTimer);
+  entry.snapshotTimer = setTimeout(() => saveTerminalSnapshot(id), 120);
+}
+
+function restoreTerminalSnapshot(id, term) {
+  try {
+    const raw = localStorage.getItem(snapshotKey(id));
+    if (!raw) return false;
+    const snapshot = JSON.parse(raw);
+    const text = String(snapshot.text || '');
+    if (!text) return false;
+    term.write(text.replace(/\n/g, '\r\n'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function saveAllTerminalSnapshots() {
+  for (const id of state.sessions.keys()) saveTerminalSnapshot(id);
+}
+
+function loadPanePrefs() {
+  try {
+    const prefs = JSON.parse(localStorage.getItem(PANE_PREFS_KEY) || '{}');
+    state.panePrefs = {
+      titles: prefs.titles && typeof prefs.titles === 'object' ? prefs.titles : {},
+      order: Array.isArray(prefs.order) ? prefs.order.filter(id => typeof id === 'string') : []
+    };
+  } catch {
+    state.panePrefs = { titles: {}, order: [] };
+  }
+}
+
+function savePanePrefs() {
+  state.panePrefs.order = state.order.slice();
+  localStorage.setItem(PANE_PREFS_KEY, JSON.stringify(state.panePrefs));
+}
+
+function defaultTitle(session) {
+  return session.meta.label || session.meta.command || 'Fenster';
+}
+
+function customTitle(session) {
+  const title = state.panePrefs.titles?.[session.id];
+  return title || defaultTitle(session);
+}
+
 function panelTitle(session) {
-  return session.meta.label || session.meta.command || session.id.slice(0, 8);
+  return customTitle(session);
+}
+
+function clearDropTargets() {
+  document.querySelectorAll('.term-panel.drop-before, .term-panel.drop-after')
+    .forEach(panel => panel.classList.remove('drop-before', 'drop-after'));
+}
+
+function dropSide(event, el) {
+  const rect = el.getBoundingClientRect();
+  const horizontal = rect.width >= rect.height;
+  const midpoint = horizontal ? rect.left + rect.width / 2 : rect.top + rect.height / 2;
+  return (horizontal ? event.clientX : event.clientY) < midpoint ? 'before' : 'after';
+}
+
+function markDropTarget(event, el) {
+  const side = dropSide(event, el);
+  clearDropTargets();
+  el.classList.add(side === 'before' ? 'drop-before' : 'drop-after');
+  return side;
 }
 
 function createPanel(session) {
@@ -138,11 +361,9 @@ function createPanel(session) {
   el.id = `panel-${id}`;
   el.innerHTML = `
     <div class="term-header">
-      <span class="term-title">${escapeHtml(panelTitle(session))}</span>
-      <span class="term-id">${id.slice(0, 8)}</span>
+      <span class="term-title" contenteditable="true" spellcheck="false" aria-label="Fenstername">${escapeHtml(panelTitle(session))}</span>
+      <span class="term-drag-handle" draggable="true" title="Fenster ziehen" aria-label="Fenster ziehen">⋮⋮</span>
       <div class="term-actions">
-        <button title="focus">□</button>
-        <button title="half">▅</button>
         <button class="danger" title="close">×</button>
       </div>
     </div>
@@ -150,11 +371,48 @@ function createPanel(session) {
   `;
   grid.appendChild(el);
 
-  const [focusBtn, halfBtn, closeBtn] = el.querySelectorAll('button');
-  focusBtn.onclick = () => focusPanel(id);
-  halfBtn.onclick = () => halfPanel(id);
+  const titleEl = el.querySelector('.term-title');
+  const dragHandle = el.querySelector('.term-drag-handle');
+  const closeBtn = el.querySelector('button');
+  titleEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); titleEl.blur(); }
+    if (e.key === 'Escape') { e.preventDefault(); titleEl.textContent = panelTitle(session); titleEl.blur(); }
+  });
+  titleEl.addEventListener('blur', () => {
+    const next = titleEl.textContent.trim();
+    if (next && next !== defaultTitle(session)) state.panePrefs.titles[id] = next;
+    else delete state.panePrefs.titles[id];
+    titleEl.textContent = panelTitle(session);
+    savePanePrefs();
+    renderSwitcher();
+  });
+  titleEl.addEventListener('mousedown', e => e.stopPropagation());
   closeBtn.onclick = () => closePanel(id);
   el.addEventListener('mousedown', () => selectPanel(id));
+  dragHandle.addEventListener('dragstart', e => {
+    e.dataTransfer.setData('text/plain', id);
+    e.dataTransfer.effectAllowed = 'move';
+    el.classList.add('dragging');
+  });
+  dragHandle.addEventListener('dragend', () => {
+    el.classList.remove('dragging');
+    clearDropTargets();
+  });
+  el.addEventListener('dragover', e => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    markDropTarget(e, el);
+  });
+  el.addEventListener('dragleave', e => {
+    if (!el.contains(e.relatedTarget)) el.classList.remove('drop-before', 'drop-after');
+  });
+  el.addEventListener('drop', e => {
+    e.preventDefault();
+    const sourceId = e.dataTransfer.getData('text/plain');
+    const side = markDropTarget(e, el);
+    clearDropTargets();
+    movePanel(sourceId, id, side);
+  });
 
   const term = new Terminal({
     fontFamily: "'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, monospace",
@@ -173,10 +431,13 @@ function createPanel(session) {
   ro.observe(el.querySelector('.terminal'));
   term.onData(data => {
     const entry = state.sessions.get(id);
-    if (entry?.ws?.readyState === WebSocket.OPEN) entry.ws.send(JSON.stringify({ type: 'input', data }));
+    const clean = sanitizeTerminalInput(data);
+    if (clean && entry?.ws?.readyState === WebSocket.OPEN) entry.ws.send(JSON.stringify({ type: 'input', data: clean }));
   });
 
-  state.sessions.set(id, { session, el, term, fit, ws: null, ro });
+  const hasSnapshot = hasTerminalSnapshot(id);
+  state.sessions.set(id, { session, el, term, fit, ws: null, ro, restored: hasSnapshot, snapshotTimer: null });
+  state.order = state.order.filter(existing => existing !== id);
   state.order.push(id);
 
   const ws = attachSocket(id, term, el);
@@ -185,7 +446,53 @@ function createPanel(session) {
   updateEmpty();
   renderSwitcher();
   selectPanel(id, { persist: false });
+  requestAnimationFrame(() => {
+    fitAll();
+    const entry = state.sessions.get(id);
+    if (entry && hasSnapshot) {
+      entry.restored = restoreTerminalSnapshot(id, term);
+      requestAnimationFrame(() => {
+        try { fit.fit(); sendResize(id); } catch {}
+        scheduleTerminalSnapshot(id);
+      });
+    }
+  });
+}
+
+function applyPanelOrder() {
+  const grid = document.getElementById('termGrid');
+  state.order = state.order.filter(id => state.sessions.has(id));
+  for (const id of state.order) {
+    const entry = state.sessions.get(id);
+    if (entry) grid.appendChild(entry.el);
+  }
+  applyLayoutVisibility();
+  renderSwitcher();
   requestAnimationFrame(fitAll);
+}
+
+function restorePanelOrder() {
+  const preferred = state.panePrefs.order.filter(id => state.sessions.has(id));
+  const missing = state.order.filter(id => !preferred.includes(id));
+  state.order = [...preferred, ...missing];
+  applyPanelOrder();
+}
+
+function movePanel(sourceId, targetId, side = 'before') {
+  if (!sourceId || !targetId || sourceId === targetId) return;
+  if (!state.sessions.has(sourceId) || !state.sessions.has(targetId)) return;
+  const next = state.order.filter(id => id !== sourceId);
+  const targetIndex = next.indexOf(targetId);
+  const insertAt = side === 'after' ? targetIndex + 1 : targetIndex;
+  next.splice(insertAt, 0, sourceId);
+  state.order = next;
+  applyPanelOrder();
+  selectPanel(sourceId, { persist: false });
+  savePanePrefs();
+}
+
+function movePanelBefore(sourceId, targetId) {
+  movePanel(sourceId, targetId, 'before');
 }
 
 function attachSocket(id, term, el) {
@@ -193,7 +500,15 @@ function attachSocket(id, term, el) {
   ws.onmessage = (event) => {
     let msg;
     try { msg = JSON.parse(event.data); } catch { return; }
-    if (msg.type === 'output') term.write(msg.data);
+    const entry = state.sessions.get(id);
+    if (msg.type === 'replay') {
+      // The server intentionally does not replay PTY history anymore. Do not print its
+      // reconnect marker into the terminal: that visibly changes shell contents on every
+      // browser reload. A saved client viewport snapshot is restored separately.
+      if (String(msg.data || '').includes('output replay disabled')) return;
+      if (!entry?.restored) writeTerminalReplay(term, msg.data);
+    }
+    if (msg.type === 'output') writeTerminalOutput(term, msg.data, () => scheduleTerminalSnapshot(id));
     if (msg.type === 'exit') {
       el.classList.add('exited');
       renderSwitcher();
@@ -233,7 +548,9 @@ function selectPanel(id, opts = {}) {
   state.activeId = id;
   document.querySelectorAll('.term-panel').forEach(p => p.classList.remove('active'));
   entry.el.classList.add('active');
+  applyLayoutVisibility();
   entry.term.focus();
+  requestAnimationFrame(fitAll);
   renderSwitcher();
   if (opts.persist !== false) saveUiState();
 }
@@ -245,6 +562,8 @@ async function closePanel(id) {
     try { entry.ro.disconnect(); } catch {}
     try { entry.ws.close(); } catch {}
     try { entry.term.dispose(); } catch {}
+    clearTimeout(entry.snapshotTimer);
+    try { localStorage.removeItem(snapshotKey(id)); } catch {}
     entry.el.remove();
     state.sessions.delete(id);
     state.order = state.order.filter(existing => existing !== id);
@@ -253,6 +572,7 @@ async function closePanel(id) {
   updateEmpty();
   renderSwitcher();
   if (state.activeId) selectPanel(state.activeId, { persist: false });
+  savePanePrefs();
   saveUiState();
 }
 
@@ -263,6 +583,7 @@ async function launch(command) {
     const cmd = String(command || '').trim() || '/bin/bash';
     const session = await api('POST', '/api/sessions', { command: cmd, label: cmd });
     createPanel(session);
+    savePanePrefs();
   } finally {
     setTimeout(() => { state.launchBusy = false; }, 250);
   }
@@ -348,7 +669,7 @@ async function uploadClipboardImage() {
       armClipboardPasteMode();
       return;
     }
-    await uploadFile(file, { keepBusy: true });
+    await uploadFile(file, { pasteIntoTerminal: true, keepBusy: true });
   } catch (err) {
     console.warn(err);
     armClipboardPasteMode();
@@ -363,7 +684,7 @@ async function uploadFile(file, opts = {}) {
   try {
     const data = await readFileAsDataUrl(file);
     const upload = await uploadBlob({ name: file.name, type: file.type || 'application/octet-stream', data });
-    pasteIntoActiveTerminal(formatInsertedPath(upload));
+    if (opts.pasteIntoTerminal) pasteIntoActiveTerminal(formatInsertedPath(upload));
   } catch (err) {
     console.error(err);
     alert(`Upload failed: ${err.message}`);
@@ -373,6 +694,8 @@ async function uploadFile(file, opts = {}) {
 }
 
 async function init() {
+  loadPanePrefs();
+  try { document.body.classList.toggle('chrome-hidden', localStorage.getItem(CHROME_PREF_KEY) === '1'); } catch {}
   const [sessions, ui] = await Promise.all([
     api('GET', '/api/sessions').catch(() => []),
     api('GET', '/api/ui-state').catch(() => null)
@@ -380,6 +703,7 @@ async function init() {
 
   setTheme(ui?.theme || 'blue', { persist: false });
   sessions.forEach(createPanel);
+  restorePanelOrder();
 
   const base = ui?.baseLayout || ui?.layout || '2x1';
   state.layout = LAYOUTS.includes(base) ? base : '2x1';
@@ -403,22 +727,27 @@ document.getElementById('settingsToggle').onclick = () => {
   const panel = document.getElementById('settingsPanel');
   panel.hidden = !panel.hidden;
 };
+document.getElementById('chromeToggle').onclick = toggleChrome;
+document.getElementById('chromePeek').onclick = toggleChrome;
 document.getElementById('uploadFileBtn').onclick = () => document.getElementById('fileInput').click();
 document.getElementById('fileInput').onchange = e => {
   const file = e.target.files?.[0];
   e.target.value = '';
-  uploadFile(file);
+  uploadFile(file, { pasteIntoTerminal: true });
 };
 document.getElementById('clipboardImageBtn').onclick = () => uploadClipboardImage();
 document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
 document.addEventListener('paste', e => {
+  if (!state.clipboardPasteArmed) return;
   const file = findImageFileFromClipboardItems(e.clipboardData?.items);
   if (!file) return;
   e.preventDefault();
   clearClipboardPasteMode();
-  uploadFile(file);
+  uploadFile(file, { pasteIntoTerminal: true });
 });
 window.addEventListener('resize', () => requestAnimationFrame(fitAll));
+window.addEventListener('beforeunload', saveAllTerminalSnapshots);
+document.addEventListener('visibilitychange', () => { if (document.hidden) saveAllTerminalSnapshots(); });
 document.addEventListener('keydown', e => {
   const key = e.key.toLowerCase();
   if (e.key === 'Escape') {
@@ -429,6 +758,10 @@ document.addEventListener('keydown', e => {
     e.preventDefault();
     const id = state.order[Number(e.key) - 1];
     if (id) selectPanel(id);
+  }
+  if (e.altKey && e.key === '0') {
+    e.preventDefault();
+    toggleChrome();
   }
   if (e.ctrlKey && e.shiftKey && key === 'n') {
     e.preventDefault();

@@ -209,9 +209,7 @@ function createServer(config = loadConfig()) {
     if (!session) return ws.close(4001, 'Session not found');
     session.ws = ws;
     ws.send(JSON.stringify({ type: 'meta', session: session.toJSON() }));
-    if (session._outputBuffer) {
-      ws.send(JSON.stringify({ type: 'output', data: session._outputBuffer }));
-    }
+    ws.send(JSON.stringify({ type: 'replay', data: '\r\n[PassiDeck reconnect: output replay disabled; live session still running]\r\n' }));
 
     ws.on('message', (raw) => {
       let msg;
