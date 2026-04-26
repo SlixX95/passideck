@@ -23,7 +23,9 @@ const state = {
   theme: 'blue',
   saveTimer: null,
   launchBusy: false,
-  uploadBusy: false
+  uploadBusy: false,
+  clipboardPasteArmed: false,
+  clipboardPasteTimer: null
 };
 
 async function api(method, path, body) {
@@ -301,28 +303,55 @@ function findImageFileFromClipboardItems(items) {
   return null;
 }
 
+function armClipboardPasteMode() {
+  const btn = document.getElementById('clipboardImageBtn');
+  state.clipboardPasteArmed = true;
+  clearTimeout(state.clipboardPasteTimer);
+  btn.textContent = 'press Ctrl+V';
+  btn.classList.add('armed');
+  state.clipboardPasteTimer = setTimeout(() => {
+    state.clipboardPasteArmed = false;
+    btn.textContent = 'clipboard image';
+    btn.classList.remove('armed');
+  }, 12000);
+  window.focus();
+}
+
+function clearClipboardPasteMode() {
+  const btn = document.getElementById('clipboardImageBtn');
+  state.clipboardPasteArmed = false;
+  clearTimeout(state.clipboardPasteTimer);
+  btn.textContent = 'clipboard image';
+  btn.classList.remove('armed');
+}
+
 async function uploadClipboardImage() {
   if (state.uploadBusy) return;
+  if (!navigator.clipboard?.read || !window.isSecureContext) {
+    armClipboardPasteMode();
+    return;
+  }
   state.uploadBusy = true;
   try {
     let file = null;
-    if (navigator.clipboard?.read && window.isSecureContext) {
-      const items = await navigator.clipboard.read();
-      for (const item of items) {
-        const type = item.types.find(t => t.startsWith('image/'));
-        if (type) {
-          const blob = await item.getType(type);
-          const ext = type.split('/')[1] || 'png';
-          file = new File([blob], `clipboard-image-${new Date().toISOString().replace(/[:.]/g, '-')}.${ext}`, { type });
-          break;
-        }
+    const items = await navigator.clipboard.read();
+    for (const item of items) {
+      const type = item.types.find(t => t.startsWith('image/'));
+      if (type) {
+        const blob = await item.getType(type);
+        const ext = type.split('/')[1] || 'png';
+        file = new File([blob], `clipboard-image-${new Date().toISOString().replace(/[:.]/g, '-')}.${ext}`, { type });
+        break;
       }
     }
-    if (!file) throw new Error('Kein Bild im Clipboard oder Clipboard API blockiert. Bild kopieren, Button klicken, dann Ctrl+V auf der Seite.');
+    if (!file) {
+      armClipboardPasteMode();
+      return;
+    }
     await uploadFile(file, { keepBusy: true });
   } catch (err) {
     console.warn(err);
-    alert(err.message);
+    armClipboardPasteMode();
   } finally {
     state.uploadBusy = false;
   }
@@ -386,6 +415,7 @@ document.addEventListener('paste', e => {
   const file = findImageFileFromClipboardItems(e.clipboardData?.items);
   if (!file) return;
   e.preventDefault();
+  clearClipboardPasteMode();
   uploadFile(file);
 });
 window.addEventListener('resize', () => requestAnimationFrame(fitAll));

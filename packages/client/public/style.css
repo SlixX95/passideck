@@ -150,9 +150,10 @@ button, select {
 .topbar-ql-btn { color: var(--tg-accent) !important; }
 .topbar-ql-btn:hover, .chrome-btn:hover { color: var(--tg-text); border-color: var(--tg-border-active); background: var(--tg-surface-hover); }
 .topbar-ql-btn:hover { background: var(--tg-accent-dim); color: var(--tg-bg) !important; }
-#uploadFileBtn, #screenshotBtn { color: var(--tg-accent); }
-#uploadFileBtn:hover, #screenshotBtn:hover { border-color: var(--tg-accent-dim); }
+#uploadFileBtn, #clipboardImageBtn { color: var(--tg-accent); }
+#uploadFileBtn:hover, #clipboardImageBtn:hover { border-color: var(--tg-accent-dim); }
 
+.chrome-btn.armed { color: var(--tg-accent); border-color: var(--tg-accent); background: var(--tg-accent-dim); }
 .settings-panel[hidden] { display: none; }
 .settings-panel {
   position: fixed;
