@@ -210,9 +210,31 @@ function smartRestorePanel(id) {
     // Platz da → einfach restore
     restorePanel(id);
   } else if (state.activeId && state.activeId !== id) {
-    // Kein Platz → aktives Pane minimieren, dieses öffnen
-    minimizePanel(state.activeId);
-    restorePanel(id);
+    // Kein Platz → aktives Pane minimieren, dieses an dessen Position öffnen
+    const activeEntry = state.sessions.get(state.activeId);
+    const restoreEntry = state.sessions.get(id);
+    if (activeEntry && restoreEntry) {
+      // Swap DOM positions in grid
+      const grid = document.getElementById('termGrid');
+      const hidden = document.getElementById('hiddenPanes');
+      // Move active to hidden, restore to active's position
+      const activeNext = activeEntry.el.nextSibling;
+      if (activeNext && activeNext.parentElement === grid) {
+        grid.insertBefore(restoreEntry.el, activeNext);
+      } else {
+        grid.appendChild(restoreEntry.el);
+      }
+      hidden.appendChild(activeEntry.el);
+    }
+    state.minimized.add(state.activeId);
+    activeEntry.el.classList.add('minimized');
+    activeEntry.el.classList.add('layout-hidden');
+    state.minimized.delete(id);
+    restoreEntry.el.classList.remove('minimized');
+    restoreEntry.el.classList.remove('layout-hidden');
+    updateMinimizedBar();
+    selectPanel(id, { persist: false });
+    requestAnimationFrame(() => { fitAll(); setTimeout(fitAll, 50); });
   } else {
     // Fallback: erstes sichtbares Pane minimieren
     const firstVisible = state.order.find(oid => state.sessions.has(oid) && !state.minimized.has(oid));
