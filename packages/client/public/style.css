@@ -440,18 +440,20 @@ button, select {
   position: fixed;
   top: 0;
   right: 0;
-  z-index: 80;
+  z-index: 2147483647;
   display: none;
-  height: 18px;
-  padding: 0 6px;
-  border: 1px solid var(--tg-border);
+  height: 28px;
+  min-width: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--tg-accent);
   border-top: 0;
   border-right: 0;
   border-radius: 0;
-  background: rgba(15,17,23,.88);
+  background: rgba(15,17,23,.96);
   color: var(--tg-accent);
-  font: 10px var(--tg-mono);
+  font: 12px var(--tg-mono);
   cursor: pointer;
+  pointer-events: auto;
 }
 body.chrome-hidden .chrome-peek { display: block; }
 body.chrome-hidden .settings-panel { display: none !important; }

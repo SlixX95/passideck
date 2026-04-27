@@ -55,6 +55,27 @@ function requestClosePanel(id) {
   showCloseConfirm(id, panelTitle(entry.session));
 }
 
+let closeHitLayerInstalled = false;
+function installCloseHitLayer() {
+  if (closeHitLayerInstalled) return;
+  closeHitLayerInstalled = true;
+  document.addEventListener('pointerdown', e => {
+    if (document.getElementById('closeModal')?.classList.contains('open')) return;
+    for (const btn of document.querySelectorAll('#termGrid .term-panel:not(.layout-hidden) button.danger')) {
+      const rect = btn.getBoundingClientRect();
+      const pad = 8;
+      const inside = e.clientX >= rect.left - pad && e.clientX <= rect.right + pad && e.clientY >= rect.top - pad && e.clientY <= rect.bottom + pad;
+      if (!inside) continue;
+      const id = btn.dataset.paneId;
+      if (!id) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      requestClosePanel(id);
+      return;
+    }
+  }, true);
+}
+
 async function api(method, path, body) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
   if (body !== undefined) opts.body = JSON.stringify(body);
@@ -597,11 +618,7 @@ function createPanel(session) {
     e.stopPropagation();
     if (!document.getElementById('closeModal')?.classList.contains('open')) requestClosePanel(id);
   };
-  closeBtn.addEventListener('pointerdown', e => {
-    e.preventDefault();
-    e.stopPropagation();
-    requestClosePanel(id);
-  });
+  closeBtn.addEventListener('pointerdown', e => e.stopPropagation());
   closeBtn.addEventListener('mousedown', e => e.stopPropagation());
   closeBtn.addEventListener('mouseup', e => e.stopPropagation());
   // Only select panel when clicking on terminal area, not header (buttons/title/drag)
@@ -1170,6 +1187,7 @@ async function init() {
 
   setTheme(ui?.theme || 'blue', { persist: false });
   setFontSize(state.fontSize, { persist: false });
+  installCloseHitLayer();
   buildGridPicker();
   sessions.forEach(createPanel);
   restorePanelOrder();

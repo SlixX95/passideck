@@ -154,6 +154,7 @@ assertIncludes(css, '.term-panel.minimized', 'minimized panel CSS required');
 /* Close Confirmation */
 assertIncludes(app, 'function isSessionExited', 'exit detection for close confirmation');
 assertIncludes(app, 'function requestClosePanel', 'close must route through a single requestClosePanel helper');
+assertIncludes(app, 'function installCloseHitLayer', 'close must have coordinate-based hit layer for full-grid clicks');
 assertIncludes(app, 'showCloseConfirm', 'close must show confirmation modal for running sessions');
 assertIncludes(html, 'id="closeModal"', 'close confirmation modal HTML required');
 assertNotIncludes(app, 'installGlobalActionGuards', 'global capture guards caused close/minimize event races');
