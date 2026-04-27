@@ -15,6 +15,9 @@ const UI_LAYOUTS = new Set(['1x1', '1x2', '2x1', '1x3', '3x1', '2x2', '3x2', '2x
 const UI_THEMES = new Set(['blue', 'green', 'amber', 'purple', 'red', 'mono']);
 const UPLOAD_RETENTION_DAYS = 7;
 
+let lastCpuSample = null;
+let lastNetSample = null;
+
 const UI_STATE_DEFAULT = { layout: '2x1', baseLayout: '2x1', focusedId: null, primaryId: null, activeId: null, theme: 'blue', updatedAt: null };
 
 function uiStatePath() {
@@ -132,6 +135,75 @@ function normalizeTerminalOutput(data) {
   return String(data).replace(/\x1b\[\?(?:47|1047|1048|1049)[hl]/g, '');
 }
 
+function cpuSample() {
+  const cpus = os.cpus();
+  const totals = cpus.reduce((acc, cpu) => {
+    for (const value of Object.values(cpu.times)) acc.total += value;
+    acc.idle += cpu.times.idle;
+    return acc;
+  }, { idle: 0, total: 0 });
+  return { ...totals, at: Date.now() };
+}
+
+function networkSample() {
+  const sample = { rx: 0, tx: 0, at: Date.now() };
+  try {
+    const lines = fs.readFileSync('/proc/net/dev', 'utf8').split('\n').slice(2);
+    for (const line of lines) {
+      const [ifaceRaw, restRaw] = line.trim().split(':');
+      if (!restRaw) continue;
+      const iface = ifaceRaw.trim();
+      if (!iface || iface === 'lo') continue;
+      const fields = restRaw.trim().split(/\s+/).map(Number);
+      sample.rx += fields[0] || 0;
+      sample.tx += fields[8] || 0;
+    }
+  } catch {}
+  return sample;
+}
+
+function percent(value) {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function readSystemMetrics() {
+  const nowCpu = cpuSample();
+  const nowNet = networkSample();
+  let cpu = 0;
+  if (lastCpuSample) {
+    const idle = nowCpu.idle - lastCpuSample.idle;
+    const total = nowCpu.total - lastCpuSample.total;
+    cpu = total > 0 ? (1 - idle / total) * 100 : 0;
+  }
+  lastCpuSample = nowCpu;
+
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  const ram = totalMem > 0 ? ((totalMem - freeMem) / totalMem) * 100 : 0;
+
+  let rxPerSec = 0;
+  let txPerSec = 0;
+  if (lastNetSample) {
+    const seconds = Math.max(0.001, (nowNet.at - lastNetSample.at) / 1000);
+    rxPerSec = Math.max(0, (nowNet.rx - lastNetSample.rx) / seconds);
+    txPerSec = Math.max(0, (nowNet.tx - lastNetSample.tx) / seconds);
+  }
+  lastNetSample = nowNet;
+  const netBytes = rxPerSec + txPerSec;
+  const net = percent(Math.min(100, Math.log10(netBytes + 1) * 12));
+
+  return {
+    ok: true,
+    at: new Date().toISOString(),
+    cpu: percent(cpu),
+    ram: percent(ram),
+    net,
+    load: os.loadavg()[0],
+    memory: { used: totalMem - freeMem, total: totalMem, free: freeMem },
+    network: { rxPerSec: Math.round(rxPerSec), txPerSec: Math.round(txPerSec) }
+  };
+}
+
 function splitCommand(command, shell) {
   const cmd = String(command || '').trim();
   const sh = shell || '/bin/bash';
@@ -155,6 +227,7 @@ function createServer(config = loadConfig()) {
   app.use(express.static(path.join(__dirname, '..', '..', 'client', 'public')));
 
   app.get('/api/health', (_req, res) => res.json({ ok: true, sessions: sessions.getAll().length }));
+  app.get('/api/system-metrics', (_req, res) => res.json(readSystemMetrics()));
   app.get('/api/config', (_req, res) => res.json({ projects: config.projects || {}, defaultTheme: config.defaultTheme || 'tokyo-night' }));
   app.get('/api/ui-state', (_req, res) => res.json(readUiState()));
   app.put('/api/ui-state', (req, res) => {

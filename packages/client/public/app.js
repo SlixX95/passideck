@@ -41,6 +41,7 @@ const state = {
   uploadBusy: false,
   clipboardPasteArmed: false,
   clipboardPasteTimer: null,
+  systemMonitorTimer: null,
   pointerDrag: null,
   panePrefs: { titles: {}, order: [] }
 };
@@ -362,6 +363,39 @@ function setChromeHidden(hidden) {
   requestAnimationFrame(fitAll);
 }
 
+function updateSystemMonitor(metrics) {
+  const monitor = document.getElementById('systemMonitor');
+  if (!monitor || !metrics) return;
+  for (const key of ['cpu', 'ram', 'net']) {
+    const cell = monitor.querySelector(`[data-metric="${key}"]`);
+    const value = Math.max(0, Math.min(100, Math.round(Number(metrics[key]) || 0)));
+    cell?.style.setProperty('--v', `${value}%`);
+    const label = cell?.querySelector('b');
+    if (label) label.textContent = `${value}%`;
+  }
+}
+
+async function pollSystemMonitor() {
+  if (!document.body.classList.contains('system-monitor-on')) return;
+  try {
+    updateSystemMonitor(await api('GET', '/api/system-metrics'));
+  } catch (err) {
+    console.warn('system metrics unavailable', err);
+  }
+}
+
+function startSystemMonitorPolling() {
+  if (state.systemMonitorTimer) return;
+  pollSystemMonitor();
+  state.systemMonitorTimer = setInterval(pollSystemMonitor, 1000);
+}
+
+function stopSystemMonitorPolling() {
+  if (!state.systemMonitorTimer) return;
+  clearInterval(state.systemMonitorTimer);
+  state.systemMonitorTimer = null;
+}
+
 function setSystemMonitorVisible(visible, opts = {}) {
   const enabled = Boolean(visible);
   document.body.classList.toggle('system-monitor-on', enabled);
@@ -369,6 +403,8 @@ function setSystemMonitorVisible(visible, opts = {}) {
   const toggle = document.getElementById('systemMonitorToggle');
   if (monitor) monitor.hidden = !enabled;
   if (toggle) toggle.checked = enabled;
+  if (enabled) startSystemMonitorPolling();
+  else stopSystemMonitorPolling();
   if (opts.persist !== false) {
     try { localStorage.setItem(SYSTEM_MONITOR_KEY, enabled ? '1' : '0'); } catch {}
   }
