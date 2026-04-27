@@ -277,7 +277,7 @@ button, select {
 }
 .term-panel.drop-after::after { left: auto; right: 4px; }
 .term-panel.exited { opacity: .55; }
-.term-panel.layout-hidden { display: none !important; }
+.term-panel.layout-hidden { visibility: hidden !important; width: 0 !important; height: 0 !important; overflow: hidden !important; flex-shrink: 0 !important; }
 
 .term-header {
   height: 18px;
@@ -330,7 +330,7 @@ button, select {
 }
 .term-actions button:hover { color: var(--tg-accent); border-color: var(--tg-accent-dim); }
 .term-actions button.danger:hover { color: var(--tg-red); border-color: var(--tg-red); }
-.term-panel.minimized { display: none !important; }
+.term-panel.minimized { visibility: hidden !important; width: 0 !important; height: 0 !important; overflow: hidden !important; flex-shrink: 0 !important; }
 
 /* Minimized Tab Bar */
 .minimized-bar {
