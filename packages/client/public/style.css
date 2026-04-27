@@ -76,7 +76,7 @@ button, select { font: inherit; }
 }
 .command-center::before { left: 0; background: linear-gradient(90deg, var(--tg-surface), transparent); }
 .command-center::after { right: 0; background: linear-gradient(270deg, var(--tg-surface), transparent); }
-.status-chip, .hotkey-chip, .topbar-ql-btn, .chrome-btn, .switcher-btn, .grid-picker-inline .grid-picker-item {
+.status-chip, .topbar-ql-btn, .chrome-btn, .switcher-btn, .grid-picker-inline .grid-picker-item {
   height: 21px;
   border: 1px solid var(--tg-border);
   background: linear-gradient(180deg, var(--tg-surface-hover), #050909);
@@ -96,7 +96,6 @@ button, select { font: inherit; }
 .launch-strip { display: flex; gap: 3px; }
 .topbar-ql-btn { padding: 0 7px; color: var(--tg-accent); cursor: pointer; border-color: var(--tg-accent-dim); }
 .topbar-ql-btn:hover { background: var(--tg-accent-dim); color: var(--tg-bg); border-color: var(--tg-accent); }
-.hotkey-chip { flex: 0 0 auto; color: var(--tg-text-dim); opacity: .75; padding: 0 6px; }
 .switcher-grid {
   display: flex;
   gap: 3px;
