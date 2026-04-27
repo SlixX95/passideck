@@ -223,6 +223,7 @@ function minimizePanel(id) {
   state.minimized.add(id);
   updateMinimizedBar();
   applyLayoutVisibility();
+  requestAnimationFrame(fitAll);
 }
 
 function restorePanel(id) {
@@ -233,6 +234,11 @@ function restorePanel(id) {
   updateMinimizedBar();
   applyLayoutVisibility();
   selectPanel(id, { persist: false });
+  // Fit after restore — panel was display:none, needs full resize cycle
+  requestAnimationFrame(() => {
+    fitAll();
+    setTimeout(fitAll, 50);
+  });
 }
 
 function updateMinimizedBar() {
