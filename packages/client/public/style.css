@@ -106,9 +106,9 @@ button, select {
 .layout-picker-btn.active { color: var(--tg-accent); }
 
 .grid-picker-popup {
-  position: absolute;
-  top: 100%;
-  left: 0;
+  position: fixed;
+  top: auto;
+  left: auto;
   z-index: 60;
   background: var(--tg-surface);
   border: 1px solid var(--tg-border);

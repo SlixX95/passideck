@@ -149,8 +149,15 @@ function updateGridPickerActive() {
 function toggleGridPicker(force) {
   const popup = document.getElementById('gridPickerPopup');
   const btn = document.getElementById('gridPickerToggle');
-  if (!popup) return;
+  if (!popup || !btn) return;
   const show = force !== undefined ? force : popup.hidden;
+  if (show) {
+    // Position popup near the layout button, clamped to viewport
+    const parent = btn.closest('.topbar-row') || btn.parentElement;
+    const pr = parent.getBoundingClientRect();
+    popup.style.top = `${pr.bottom + 4}px`;
+    popup.style.left = `${Math.max(4, pr.left + 4)}px`;
+  }
   popup.hidden = !show;
   btn.classList.toggle('active', show);
 }
