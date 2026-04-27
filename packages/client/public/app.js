@@ -622,11 +622,15 @@ function createPanel(session) {
       showCloseConfirm(id, panelTitle(session));
     }
   };
-  // Capture pointerdown immediately — preventDefault blocks focus/layout shift, fire click synchronously
+  // pointerdown: show modal immediately, prevent layout shift from interfering
   closeBtn.addEventListener('pointerdown', e => {
     e.preventDefault();
     e.stopPropagation();
-    closeBtn.click();
+    if (isSessionExited(session)) {
+      closePanel(id);
+    } else {
+      showCloseConfirm(id, panelTitle(session));
+    }
   });
   // Only select panel when clicking on terminal area, not header (buttons/title/drag)
   el.querySelector('.terminal').addEventListener('mousedown', () => selectPanel(id));
@@ -1248,7 +1252,12 @@ function hideCloseConfirm() {
 }
 document.getElementById('closeModalConfirm').onclick = () => { if (closeConfirmCallback) closeConfirmCallback(); };
 document.getElementById('closeModalCancel').onclick = hideCloseConfirm;
-document.getElementById('closeModal').addEventListener('click', e => { if (e.target === e.currentTarget) hideCloseConfirm(); });
+document.getElementById('closeModal').addEventListener('click', e => {
+  // Only close if clicking directly on overlay, not from a propagated button click
+  if (e.target === document.getElementById('closeModal') && !e.composedPath().includes(document.querySelector('.modal-box'))) {
+    hideCloseConfirm();
+  }
+});
 
 document.addEventListener('paste', handleTerminalPaste, true);
 document.addEventListener('keydown', letBrowserOwnTerminalPasteShortcut, true);
