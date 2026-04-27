@@ -127,6 +127,7 @@ button, select {
   width: 100%;
 }
 .grid-picker-item {
+  flex: 0 0 calc((100% - 24px) / 5);
   display: flex;
   align-items: center;
   justify-content: center;
