@@ -262,44 +262,6 @@ function updateMinimizedBar() {
       : 'Wiederherstellen';
     tab.innerHTML = `<span class="min-title">${escapeHtml(panelTitle(entry.session))}</span><button class="restore-btn" title="${tip}">□</button>`;
 
-    // Swap-select popup on hover when no slot
-    if (willReplace) {
-      let swapMenu = null;
-      let closeTimer = null;
-      tab.addEventListener('mouseenter', () => {
-        clearTimeout(closeTimer);
-        document.querySelectorAll('.swap-menu').forEach(m => m.remove());
-        const visibleIds = state.order.filter(oid => state.sessions.has(oid) && !state.minimized.has(oid));
-        if (visibleIds.length === 0) return;
-        swapMenu = document.createElement('div');
-        swapMenu.className = 'swap-menu';
-        swapMenu.innerHTML = '<div class="swap-menu-title">Ersetze:</div>' +
-          visibleIds.map(vId => {
-            const vEntry = state.sessions.get(vId);
-            const title = panelTitle(vEntry.session);
-            return `<button data-swap="${vId}">${escapeHtml(title)}</button>`;
-          }).join('');
-        swapMenu.querySelectorAll('button').forEach(btn => {
-          btn.onclick = (e) => {
-            e.stopPropagation();
-            minimizePanel(btn.dataset.swap);
-            restorePanel(id);
-            swapMenu.remove();
-            swapMenu = null;
-          };
-        });
-        // Keep menu open when hovering over it
-        swapMenu.addEventListener('mouseenter', () => clearTimeout(closeTimer));
-        swapMenu.addEventListener('mouseleave', () => {
-          closeTimer = setTimeout(() => { if (swapMenu) swapMenu.remove(); }, 300);
-        });
-        tab.appendChild(swapMenu);
-      });
-      tab.addEventListener('mouseleave', () => {
-        closeTimer = setTimeout(() => { if (swapMenu && swapMenu.parentNode) swapMenu.remove(); }, 300);
-      });
-    }
-
     tab.querySelector('.min-title').onclick = (e) => { e.stopPropagation(); smartRestorePanel(id); };
     tab.querySelector('.restore-btn').onclick = (e) => { e.stopPropagation(); smartRestorePanel(id); };
     tabs.appendChild(tab);
