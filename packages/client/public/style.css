@@ -352,6 +352,7 @@ button, select {
   gap: 4px;
   max-width: 120px;
   background: var(--tg-bg);
+  position: relative;
   border: 1px solid var(--tg-border);
   color: var(--tg-text-dim);
   padding: 1px 6px;
@@ -376,6 +377,45 @@ button, select {
   line-height: 1;
 }
 .minimized-tab .restore-btn:hover { color: var(--tg-accent); }
+
+/* Swap menu */
+.swap-menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  background: var(--tg-surface);
+  border: 1px solid var(--tg-border);
+  box-shadow: 0 4px 16px rgba(0,0,0,.5);
+  padding: 4px 0;
+  min-width: 160px;
+  z-index: 80;
+}
+.swap-menu-title {
+  padding: 4px 8px;
+  font-size: 10px;
+  color: var(--tg-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.swap-menu button {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--tg-text);
+  padding: 6px 8px;
+  text-align: left;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.swap-menu button:hover {
+  background: var(--tg-surface-hover);
+  color: var(--tg-accent);
+}
+
 .terminal { flex: 1 1 auto; width: 100%; min-width: 0; min-height: 0; padding: 1px; box-sizing: border-box; overflow: hidden; }
 .xterm { height: 100%; width: 100%; min-width: 0; max-width: 100%; }
 .xterm-viewport {
