@@ -622,9 +622,13 @@ function createPanel(session) {
       showCloseConfirm(id, panelTitle(session));
     }
   };
-  // pointerdown: show modal immediately, prevent layout shift from interfering
-  closeBtn.addEventListener('pointerdown', e => {
+  // mousedown capture: prevent focus/selection, defer modal to after click
+  closeBtn.addEventListener('mousedown', e => {
     e.preventDefault();
+    e.stopPropagation();
+  }, true);
+  // Show modal on mouseup — overlay won't steal the event anymore
+  closeBtn.addEventListener('mouseup', e => {
     e.stopPropagation();
     if (isSessionExited(session)) {
       closePanel(id);
