@@ -144,7 +144,8 @@ assertIncludes(app, 'function setFontSize', 'font size setter must apply to all 
 assertIncludes(app, 'FONT_SIZE_KEY', 'font size must persist in localStorage');
 
 /* Minimize */
-assertIncludes(html, 'id="minimizedBar"', 'minimized tab bar container required');
+assertIncludes(html, '<section class="minimized-bar" id="minimizedBar" hidden>', 'minimized tab bar container required');
+assertIncludes(html, '<div class="minimized-tabs" id="minimizedTabs"></div>\n  </section>', 'minimized bar section must be closed correctly');
 assertIncludes(app, 'function minimizePanel', 'minimize function must hide panel and add to minimized set');
 assertIncludes(app, 'function restorePanel', 'restore function must show panel and remove from minimized set');
 assertIncludes(css, '.minimized-bar', 'minimized bar CSS required');

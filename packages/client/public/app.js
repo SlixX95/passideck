@@ -1224,7 +1224,7 @@ document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
 document.getElementById('fontSizeSlider').oninput = e => setFontSize(Number(e.target.value));
 
 // ── Close Confirmation Modal ──
-let closeConfirmCallback = null;
+let closeConfirmSessionId = null;
 let closeModalOpenedAt = 0;
 function showCloseConfirm(sessionId, title) {
   const modal = document.getElementById('closeModal');
@@ -1239,12 +1239,9 @@ function showCloseConfirm(sessionId, title) {
   modal.style.visibility = 'visible';
   modal.style.opacity = '1';
   closeModalOpenedAt = Date.now();
+  closeConfirmSessionId = sessionId;
   void modal.offsetHeight; // force style/layout flush now
 
-  closeConfirmCallback = () => {
-    hideCloseConfirm();
-    closePanel(sessionId);
-  };
   setTimeout(() => document.getElementById('closeModalConfirm')?.focus(), 0);
 }
 function hideCloseConfirm() {
@@ -1252,10 +1249,26 @@ function hideCloseConfirm() {
   modal.classList.remove('open');
   modal.style.display = 'none';
   modal.hidden = true;
-  closeConfirmCallback = null;
+  closeConfirmSessionId = null;
 }
-document.getElementById('closeModalConfirm').onclick = () => { if (closeConfirmCallback) closeConfirmCallback(); };
+function runCloseConfirm() {
+  const id = closeConfirmSessionId;
+  if (!id) return;
+  hideCloseConfirm();
+  closePanel(id);
+}
+document.getElementById('closeModalConfirm').onclick = runCloseConfirm;
+document.getElementById('closeModalConfirm').addEventListener('pointerdown', e => {
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  runCloseConfirm();
+}, true);
 document.getElementById('closeModalCancel').onclick = hideCloseConfirm;
+document.getElementById('closeModalCancel').addEventListener('pointerdown', e => {
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  hideCloseConfirm();
+}, true);
 document.getElementById('closeModal').addEventListener('click', e => {
   // Ignore the same physical click that opened the modal.
   if (Date.now() - closeModalOpenedAt < 400) return;
