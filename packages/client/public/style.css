@@ -451,22 +451,26 @@ body.pane-dragging { cursor: grabbing; user-select: none; }
 
 .chrome-peek {
   position: fixed;
-  top: 0;
+  top: 50%;
   right: 0;
+  transform: translateY(-50%);
   z-index: 2147483647;
   display: none;
-  height: 28px;
-  min-width: 44px;
-  padding: 0 10px;
+  height: 54px;
+  min-width: 28px;
+  padding: 0 6px;
   border: 1px solid var(--tg-accent);
-  border-top: 0;
   border-right: 0;
   border-radius: 0;
-  background: rgba(15,17,23,.96);
+  background: rgba(2,5,5,.96);
   color: var(--tg-accent);
-  font: 12px var(--tg-mono);
+  font: 11px var(--tg-mono);
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  letter-spacing: .08em;
   cursor: pointer;
   pointer-events: auto;
+  box-shadow: 0 0 18px color-mix(in srgb, var(--tg-accent) 22%, transparent);
 }
 body.chrome-hidden .chrome-peek { display: block; }
 body.chrome-hidden .settings-panel { display: none !important; }

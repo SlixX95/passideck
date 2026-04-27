@@ -65,6 +65,8 @@ function installCloseHitLayer() {
   closeHitLayerInstalled = true;
   document.addEventListener('pointerdown', e => {
     if (document.getElementById('closeModal')?.classList.contains('open')) return;
+    if (e.target?.closest?.('#chromePeek')) return;
+    if (document.elementFromPoint(e.clientX, e.clientY)?.closest?.('#chromePeek')) return;
     for (const btn of document.querySelectorAll('#termGrid .term-panel:not(.layout-hidden) button.danger')) {
       const rect = btn.getBoundingClientRect();
       const pad = 8;
