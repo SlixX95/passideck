@@ -621,10 +621,12 @@ function createPanel(session) {
       showCloseConfirm(id, panelTitle(session));
     }
   };
-  closeBtn.addEventListener('mousedown', e => e.stopPropagation());
-  closeBtn.addEventListener('mouseup', e => e.stopPropagation());
-  closeBtn.addEventListener('pointerdown', e => e.stopPropagation());
-  closeBtn.addEventListener('click', e => { e.stopPropagation(); });
+  // Capture pointerdown immediately — preventDefault blocks focus/layout shift, fire click synchronously
+  closeBtn.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    closeBtn.click();
+  });
   // Only select panel when clicking on terminal area, not header (buttons/title/drag)
   el.querySelector('.terminal').addEventListener('mousedown', () => selectPanel(id));
   dragHandle.addEventListener('dragstart', e => {
