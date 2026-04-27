@@ -825,6 +825,7 @@ async function launch(command) {
     const cmd = String(command || '').trim() || '/bin/bash';
     const session = await api('POST', '/api/sessions', { command: cmd, label: cmd });
     createPanel(session);
+    autoMinimizeExcess();
     savePanePrefs();
   } finally {
     setTimeout(() => { state.launchBusy = false; }, 250);
