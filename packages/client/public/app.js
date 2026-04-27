@@ -98,7 +98,11 @@ function setLayout(layout, opts = {}) {
   state.layout = layout;
   applyLayoutVisibility();
   updateGridPickerActive();
-  requestAnimationFrame(fitAll);
+  // Two-pass fit: immediate + delayed to let browser finish reflow
+  requestAnimationFrame(() => {
+    fitAll();
+    setTimeout(fitAll, 50);
+  });
   if (opts.persist !== false) saveUiState();
 }
 
@@ -1057,7 +1061,10 @@ document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
 document.getElementById('fontSizeSlider').oninput = e => setFontSize(Number(e.target.value));
 document.addEventListener('paste', handleTerminalPaste, true);
 document.addEventListener('keydown', letBrowserOwnTerminalPasteShortcut, true);
-window.addEventListener('resize', () => requestAnimationFrame(fitAll));
+window.addEventListener('resize', () => {
+    fitAll();
+    setTimeout(fitAll, 50);
+  });
 window.addEventListener('beforeunload', saveAllTerminalSnapshots);
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveAllTerminalSnapshots(); });
 document.addEventListener('keydown', e => {
