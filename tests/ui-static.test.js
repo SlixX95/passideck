@@ -47,7 +47,8 @@ assertIncludes(app, 'aria-label="Fenstername"', 'editable title needs an accessi
 assertNotIncludes(app, '<span class="term-id">', 'session codename/id must not render in pane header');
 assertNotIncludes(app, 'title="focus"', 'focus pane button must be removed');
 assertNotIncludes(app, 'title="half"', 'half pane button must be removed');
-assertIncludes(app, 'title="close">×</button>', 'close X must remain');
+assertIncludes(app, 'title="Schließen">×</button>', 'close X must remain');
+assertIncludes(app, 'class="minimize"', 'minimize button must exist in pane header');
 assertIncludes(app, 'document.addEventListener(\'paste\', handleTerminalPaste, true)', 'Ctrl+V must route paste events into active terminal before xterm/browser handlers');
 assertIncludes(app, 'document.addEventListener(\'keydown\', letBrowserOwnTerminalPasteShortcut, true)', 'Ctrl+V keydown must bypass xterm raw ^V handling');
 assertIncludes(app, 'e.stopImmediatePropagation();', 'Ctrl+V must stop xterm from consuming browser paste shortcut');
@@ -130,5 +131,29 @@ assertIncludes(app, 'Function(code).call(window)', 'local serialize addon must e
 assertIncludes(html, 'id="chromeToggle"', 'topbar needs hide ui button');
 assertIncludes(html, 'id="chromePeek"', 'hidden topbar needs restore button');
 assertNotIncludes(html, 'PassiDeck</div>', 'topbar codename/logo text should not be visible');
+
+/* Grid Picker */
+assertIncludes(html, 'id="gridPickerToggle"', 'layout picker toggle button required');
+assertIncludes(html, 'id="gridPickerPopup"', 'grid picker popup container required');
+assertIncludes(app, 'function buildGridPicker', 'grid picker must build visual layout options');
+assertIncludes(app, 'function gridSvg', 'grid picker must generate SVG grid icons');
+
+/* Font Size */
+assertIncludes(html, 'id="fontSizeSlider"', 'font size slider required in settings');
+assertIncludes(html, 'id="fontSizeLabel"', 'font size label required');
+assertIncludes(app, 'function setFontSize', 'font size setter must apply to all terminals');
+assertIncludes(app, 'FONT_SIZE_KEY', 'font size must persist in localStorage');
+
+/* Minimize */
+assertIncludes(html, 'id="minimizedBar"', 'minimized tab bar container required');
+assertIncludes(app, 'function minimizePanel', 'minimize function must hide panel and add to minimized set');
+assertIncludes(app, 'function restorePanel', 'restore function must show panel and remove from minimized set');
+assertIncludes(css, '.minimized-bar', 'minimized bar CSS required');
+assertIncludes(css, '.minimized-tab', 'minimized tab CSS required');
+assertIncludes(css, '.term-panel.minimized', 'minimized panel CSS required');
+
+/* Close Confirmation */
+assertIncludes(app, 'function isSessionExited', 'exit detection for close confirmation');
+assertIncludes(app, 'confirm(', 'close must show confirmation dialog for running sessions');
 
 console.log('ui-static ok');

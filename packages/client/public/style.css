@@ -87,22 +87,60 @@ button, select {
   flex-shrink: 1;
   overflow-x: auto;
   scrollbar-width: none;
+  position: relative;
 }
 .topbar-center::-webkit-scrollbar { display: none; }
-.layout-btn {
+
+/* Grid Picker */
+.layout-picker-btn {
   background: none;
   border: none;
   color: var(--tg-text-dim);
-  font-family: var(--tg-mono);
-  font-size: 10px;
   padding: 2px 6px;
-  border-radius: 0;
   cursor: pointer;
   transition: all 0.15s;
-  white-space: nowrap;
+  display: flex;
+  align-items: center;
 }
-.layout-btn:hover { color: var(--tg-text); background: var(--tg-surface-hover); }
-.layout-btn.active { color: var(--tg-accent); background: var(--tg-surface); }
+.layout-picker-btn:hover { color: var(--tg-text); background: var(--tg-surface-hover); }
+.layout-picker-btn.active { color: var(--tg-accent); }
+
+.grid-picker-popup {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 60;
+  background: var(--tg-surface);
+  border: 1px solid var(--tg-border);
+  box-shadow: 0 8px 32px rgba(0,0,0,.5);
+  padding: 8px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  width: 280px;
+}
+.grid-picker-popup:not([hidden]) { display: flex !important; }
+.grid-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  width: 100%;
+}
+.grid-picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  background: var(--tg-bg);
+  border: 1px solid var(--tg-border);
+  cursor: pointer;
+  transition: all 0.15s;
+  padding: 4px;
+}
+.grid-picker-item:hover { border-color: var(--tg-accent-dim); background: var(--tg-surface-hover); }
+.grid-picker-item.active { border-color: var(--tg-accent); background: var(--tg-accent-dim); }
+.grid-picker-item svg { width: 100%; height: 100%; color: var(--tg-text-dim); }
+.grid-picker-item.active svg { color: var(--tg-bg); }
 
 .term-switcher {
   display: flex;
@@ -181,6 +219,17 @@ button, select {
   outline: none;
 }
 .settings-panel select:focus { border-color: var(--tg-accent); }
+.settings-panel input[type="range"] {
+  width: 80px;
+  accent-color: var(--tg-accent);
+  cursor: pointer;
+}
+.font-size-label {
+  color: var(--tg-text-dim);
+  font-family: var(--tg-mono);
+  font-size: 10px;
+  min-width: 36px;
+}
 
 .grid-container {
   flex: 1 1 auto;
@@ -295,6 +344,52 @@ button, select {
 }
 .term-actions button:hover { color: var(--tg-accent); border-color: var(--tg-accent-dim); }
 .term-actions button.danger:hover { color: var(--tg-red); border-color: var(--tg-red); }
+.term-panel.minimized { display: none !important; }
+
+/* Minimized Tab Bar */
+.minimized-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--tg-surface);
+  border-top: 1px solid var(--tg-border);
+  padding: 2px 6px;
+  height: 24px;
+  flex-shrink: 0;
+}
+.minimized-bar[hidden] { display: none !important; }
+.minimized-tabs { display: flex; gap: 2px; overflow-x: auto; flex: 1; min-width: 0; scrollbar-width: none; }
+.minimized-tabs::-webkit-scrollbar { display: none; }
+.minimized-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 120px;
+  background: var(--tg-bg);
+  border: 1px solid var(--tg-border);
+  color: var(--tg-text-dim);
+  padding: 1px 6px;
+  cursor: pointer;
+  font-family: var(--tg-mono);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+.minimized-tab:hover { color: var(--tg-text); border-color: var(--tg-border-active); }
+.minimized-tab.active { color: var(--tg-accent); border-color: var(--tg-accent-dim); background: var(--tg-surface-hover); }
+.minimized-tab .restore-btn {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 11px;
+  line-height: 1;
+}
+.minimized-tab .restore-btn:hover { color: var(--tg-accent); }
 .terminal { flex: 1 1 auto; width: 100%; min-width: 0; min-height: 0; padding: 1px; box-sizing: border-box; overflow: hidden; }
 .xterm { height: 100%; width: 100%; min-width: 0; max-width: 100%; }
 .xterm-viewport {

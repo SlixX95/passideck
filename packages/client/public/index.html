@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PassiDeck</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
-  <link rel="stylesheet" href="style.css?v=20260426-bell-exit">
+  <link rel="stylesheet" href="style.css?v=20260427-gridpicker-fontsize-minimize">
 </head>
 <body data-theme="blue">
   <header class="topbar">
@@ -25,17 +25,12 @@
       </div>
 
       <nav class="topbar-center layouts" aria-label="Layout">
-        <button class="layout-btn" data-layout="1x1">1x1</button>
-        <button class="layout-btn" data-layout="1x2">1x2</button>
-        <button class="layout-btn" data-layout="2x1">2x1</button>
-        <button class="layout-btn" data-layout="1x3">1x3</button>
-        <button class="layout-btn" data-layout="3x1">3x1</button>
-        <button class="layout-btn" data-layout="2x2">2x2</button>
-        <button class="layout-btn" data-layout="3x2">3x2</button>
-        <button class="layout-btn" data-layout="2x3">2x3</button>
-        <button class="layout-btn" data-layout="2x4">2x4</button>
-        <button class="layout-btn" data-layout="4x2">4x2</button>
-        <button class="layout-btn" data-layout="3x3">3x3</button>
+        <button id="gridPickerToggle" class="layout-picker-btn" title="Layout wählen">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" id="gridPickerIcon"></svg>
+        </button>
+        <div id="gridPickerPopup" class="grid-picker-popup" hidden>
+          <div class="grid-picker-grid"></div>
+        </div>
       </nav>
     </div>
 
@@ -72,6 +67,9 @@
       <option value="red">Red</option>
       <option value="mono">Mono</option>
     </select>
+    <label for="fontSizeSlider">Font</label>
+    <input type="range" id="fontSizeSlider" min="10" max="24" value="13" step="1" title="Terminal Font-Size">
+    <span id="fontSizeLabel" class="font-size-label">13px</span>
   </section>
 
   <main class="grid-container layout-2x1" id="termGrid">
@@ -92,10 +90,14 @@
     </section>
   </main>
 
+  <div id="minimizedBar" class="minimized-bar" hidden>
+    <div class="minimized-tabs" id="minimizedTabs"></div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
   <script src="addon-serialize.min.js?v=20260426" defer></script>
-  <script src="app.js?v=20260427-nofocus-half" defer></script>
+  <script src="app.js?v=20260427-gridpicker-fontsize-minimize-confirm" defer></script>
 </body>
 </html>

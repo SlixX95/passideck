@@ -32,6 +32,8 @@ const state = {
   activeLayout: '2x1',
   activeId: null,
   theme: 'blue',
+  fontSize: 13,
+  minimized: new Set(),
   saveTimer: null,
   launchBusy: false,
   uploadBusy: false,
@@ -42,6 +44,7 @@ const state = {
 
 const PANE_PREFS_KEY = 'passideck:pane-prefs:v1';
 const CHROME_PREF_KEY = 'passideck:chrome-hidden:v1';
+const FONT_SIZE_KEY = 'passideck:font-size:v1';
 const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v1:';
 const TERM_SNAPSHOT_MAX_LINES = 5000;
 const TERM_SNAPSHOT_MAX_CHARS = 1024 * 1024;
@@ -94,9 +97,130 @@ function setLayout(layout, opts = {}) {
   state.activeLayout = layout;
   state.layout = layout;
   applyLayoutVisibility();
-  document.querySelectorAll('.layout-btn').forEach(b => b.classList.toggle('active', b.dataset.layout === layout));
+  updateGridPickerActive();
   requestAnimationFrame(fitAll);
   if (opts.persist !== false) saveUiState();
+}
+
+/* ── Grid Picker ── */
+function gridSvg(cols, rows, w = 14, h = 14) {
+  const gap = 1.5;
+  const cw = (w - gap * (cols - 1)) / cols;
+  const ch = (h - gap * (rows - 1)) / rows;
+  let rects = '';
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = c * (cw + gap);
+      const y = r * (ch + gap);
+      rects += `<rect x="${x}" y="${y}" width="${cw}" height="${ch}" rx="1"/>`;
+    }
+  }
+  return `<svg viewBox="0 0 ${w} ${h}" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1">${rects}</svg>`;
+}
+
+function buildGridPicker() {
+  const container = document.querySelector('.grid-picker-grid');
+  if (!container) return;
+  container.innerHTML = '';
+  for (const layout of LAYOUTS) {
+    const [cols, rows] = layout.split('x').map(Number);
+    const item = document.createElement('div');
+    item.className = 'grid-picker-item';
+    item.dataset.layout = layout;
+    item.title = `${cols}×${rows}`;
+    item.innerHTML = gridSvg(cols, rows);
+    item.onclick = () => { setLayout(layout); toggleGridPicker(false); };
+    container.appendChild(item);
+  }
+  updateGridPickerActive();
+}
+
+function updateGridPickerActive() {
+  document.querySelectorAll('.grid-picker-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.layout === state.activeLayout);
+  });
+  const icon = document.getElementById('gridPickerIcon');
+  if (icon) {
+    const [cols, rows] = state.activeLayout.split('x').map(Number);
+    icon.outerHTML = gridSvg(cols, rows, 16, 16).replace(/width="24" height="24"/, 'width="16" height="16" id="gridPickerIcon"');
+  }
+}
+
+function toggleGridPicker(force) {
+  const popup = document.getElementById('gridPickerPopup');
+  const btn = document.getElementById('gridPickerToggle');
+  if (!popup) return;
+  const show = force !== undefined ? force : popup.hidden;
+  popup.hidden = !show;
+  btn.classList.toggle('active', show);
+}
+
+/* ── Font Size ── */
+function setFontSize(size, opts = {}) {
+  size = Math.max(10, Math.min(24, Number(size) || 13));
+  state.fontSize = size;
+  for (const [, entry] of state.sessions) {
+    try { entry.term.setOption('fontSize', size); } catch {}
+  }
+  requestAnimationFrame(fitAll);
+  const slider = document.getElementById('fontSizeSlider');
+  const label = document.getElementById('fontSizeLabel');
+  if (slider) slider.value = size;
+  if (label) label.textContent = `${size}px`;
+  if (opts.persist !== false) {
+    try { localStorage.setItem(FONT_SIZE_KEY, String(size)); } catch {}
+  }
+}
+
+/* ── Minimize / Restore ── */
+function minimizePanel(id) {
+  const entry = state.sessions.get(id);
+  if (!entry) return;
+  entry.el.classList.add('minimized');
+  state.minimized.add(id);
+  updateMinimizedBar();
+  applyLayoutVisibility();
+}
+
+function restorePanel(id) {
+  const entry = state.sessions.get(id);
+  if (!entry) return;
+  entry.el.classList.remove('minimized');
+  state.minimized.delete(id);
+  updateMinimizedBar();
+  applyLayoutVisibility();
+  selectPanel(id, { persist: false });
+}
+
+function updateMinimizedBar() {
+  const bar = document.getElementById('minimizedBar');
+  const tabs = document.getElementById('minimizedTabs');
+  if (!bar || !tabs) return;
+
+  if (state.minimized.size === 0) {
+    bar.hidden = true;
+    tabs.innerHTML = '';
+    return;
+  }
+  bar.hidden = false;
+  tabs.innerHTML = '';
+  for (const id of state.order) {
+    if (!state.minimized.has(id)) continue;
+    const entry = state.sessions.get(id);
+    if (!entry) continue;
+    const tab = document.createElement('div');
+    tab.className = 'minimized-tab';
+    if (id === state.activeId) tab.classList.add('active');
+    tab.innerHTML = `<span class="min-title">${escapeHtml(panelTitle(entry.session))}</span><button class="restore-btn" title="Wiederherstellen">□</button>`;
+    tab.querySelector('.min-title').onclick = (e) => { e.stopPropagation(); restorePanel(id); };
+    tab.querySelector('.restore-btn').onclick = (e) => { e.stopPropagation(); restorePanel(id); };
+    tabs.appendChild(tab);
+  }
+}
+
+/* ── Close Confirmation ── */
+function isSessionExited(session) {
+  return session?.meta?.status === 'exited';
 }
 
 function setTheme(theme, opts = {}) {
@@ -342,7 +466,8 @@ function createPanel(session) {
       <span class="term-title" contenteditable="true" spellcheck="false" aria-label="Fenstername">${escapeHtml(panelTitle(session))}</span>
       <span class="term-drag-handle" draggable="true" title="Fenster ziehen" aria-label="Fenster ziehen">⋮⋮</span>
       <div class="term-actions">
-        <button class="danger" title="close">×</button>
+        <button class="minimize" title="Minimieren">−</button>
+        <button class="danger" title="Schließen">×</button>
       </div>
     </div>
     <div class="terminal" id="term-${id}"></div>
@@ -351,7 +476,7 @@ function createPanel(session) {
 
   const titleEl = el.querySelector('.term-title');
   const dragHandle = el.querySelector('.term-drag-handle');
-  const closeBtn = el.querySelector('button');
+  const [minBtn, closeBtn] = el.querySelectorAll('button');
   titleEl.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); titleEl.blur(); }
     if (e.key === 'Escape') { e.preventDefault(); titleEl.textContent = panelTitle(session); titleEl.blur(); }
@@ -363,9 +488,17 @@ function createPanel(session) {
     titleEl.textContent = panelTitle(session);
     savePanePrefs();
     renderSwitcher();
+    updateMinimizedBar();
   });
   titleEl.addEventListener('mousedown', e => e.stopPropagation());
-  closeBtn.onclick = () => closePanel(id);
+  minBtn.onclick = () => minimizePanel(id);
+  closeBtn.onclick = () => {
+    if (isSessionExited(session)) {
+      closePanel(id);
+    } else {
+      if (confirm(`${panelTitle(session)} — wirklich schließen?\nProzess wird beendet.`)) closePanel(id);
+    }
+  };
   el.addEventListener('mousedown', () => selectPanel(id));
   dragHandle.addEventListener('dragstart', e => {
     e.dataTransfer.setData('text/plain', id);
@@ -394,7 +527,7 @@ function createPanel(session) {
 
   const term = new Terminal({
     fontFamily: "'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, monospace",
-    fontSize: 13,
+    fontSize: state.fontSize,
     lineHeight: 1.2,
     cursorBlink: true,
     scrollback: 5000,
@@ -587,9 +720,11 @@ async function closePanel(id) {
     state.sessions.delete(id);
     state.order = state.order.filter(existing => existing !== id);
   }
+  state.minimized.delete(id);
   if (state.activeId === id) state.activeId = state.order[0] || null;
   updateEmpty();
   renderSwitcher();
+  updateMinimizedBar();
   if (state.activeId) selectPanel(state.activeId, { persist: false });
   savePanePrefs();
   saveUiState();
@@ -888,12 +1023,19 @@ async function uploadFile(file, opts = {}) {
 async function init() {
   loadPanePrefs();
   try { document.body.classList.toggle('chrome-hidden', localStorage.getItem(CHROME_PREF_KEY) === '1'); } catch {}
+
+  // Load saved font size
+  const savedFontSize = localStorage.getItem(FONT_SIZE_KEY);
+  if (savedFontSize && !isNaN(Number(savedFontSize))) state.fontSize = Number(savedFontSize);
+
   const [sessions, ui] = await Promise.all([
     api('GET', '/api/sessions').catch(() => []),
     api('GET', '/api/ui-state').catch(() => null)
   ]);
 
   setTheme(ui?.theme || 'blue', { persist: false });
+  setFontSize(state.fontSize, { persist: false });
+  buildGridPicker();
   sessions.forEach(createPanel);
   restorePanelOrder();
 
@@ -911,7 +1053,12 @@ function escapeHtml(str) {
   return String(str).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 }
 
-document.querySelectorAll('.layout-btn').forEach(btn => btn.onclick = () => setLayout(btn.dataset.layout));
+document.getElementById('gridPickerToggle').onclick = () => toggleGridPicker();
+document.addEventListener('click', e => {
+  const popup = document.getElementById('gridPickerPopup');
+  const btn = document.getElementById('gridPickerToggle');
+  if (popup && !popup.hidden && !popup.contains(e.target) && e.target !== btn) toggleGridPicker(false);
+});
 document.querySelectorAll('[data-command]').forEach(btn => btn.onclick = () => launch(btn.dataset.command));
 document.getElementById('settingsToggle').onclick = () => {
   const panel = document.getElementById('settingsPanel');
@@ -927,6 +1074,7 @@ document.getElementById('fileInput').onchange = e => {
 };
 document.getElementById('clipboardImageBtn').onclick = () => uploadClipboardImage();
 document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
+document.getElementById('fontSizeSlider').oninput = e => setFontSize(Number(e.target.value));
 document.addEventListener('paste', handleTerminalPaste, true);
 document.addEventListener('keydown', letBrowserOwnTerminalPasteShortcut, true);
 window.addEventListener('resize', () => requestAnimationFrame(fitAll));
@@ -935,8 +1083,9 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) saveA
 document.addEventListener('keydown', e => {
   const key = e.key.toLowerCase();
   if (e.key === 'Escape') {
+    const gp = document.getElementById('gridPickerPopup');
+    if (gp && !gp.hidden) { toggleGridPicker(false); return; }
     if (!document.getElementById('settingsPanel').hidden) document.getElementById('settingsPanel').hidden = true;
-    else if (['focus', 'half'].includes(state.activeLayout)) setLayout(state.layout);
   }
   if (e.altKey && /^[1-9]$/.test(e.key)) {
     e.preventDefault();
