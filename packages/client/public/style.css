@@ -456,3 +456,67 @@ body.chrome-hidden .settings-panel { display: none !important; }
 .flash-exit {
   animation: pane-flash-exit 2s ease-in-out;
 }
+
+/* ── Close Confirmation Modal ── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+}
+.modal-overlay[hidden] {
+  display: none;
+}
+.modal-box {
+  background: var(--tg-surface);
+  border: 1px solid var(--tg-border);
+  border-radius: 8px;
+  padding: 20px 24px;
+  min-width: 320px;
+  max-width: 90vw;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+.modal-title {
+  margin: 0 0 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--tg-text);
+}
+.modal-text {
+  margin: 0 0 20px;
+  font-size: 13px;
+  color: var(--tg-text-muted);
+}
+.modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.modal-btn {
+  padding: 6px 16px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--tg-border);
+  transition: background 0.15s, color 0.15s;
+}
+.modal-btn-cancel {
+  background: var(--tg-surface-hover);
+  color: var(--tg-text);
+}
+.modal-btn-cancel:hover {
+  background: var(--tg-border);
+}
+.modal-btn-confirm {
+  background: var(--tg-red);
+  color: #fff;
+  border-color: var(--tg-red);
+}
+.modal-btn-confirm:hover {
+  opacity: 0.85;
+}

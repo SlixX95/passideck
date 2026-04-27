@@ -582,7 +582,7 @@ function createPanel(session) {
     if (isSessionExited(session)) {
       closePanel(id);
     } else {
-      if (confirm(`${panelTitle(session)} — wirklich schließen?\nProzess wird beendet.`)) closePanel(id);
+      showCloseConfirm(id, panelTitle(session));
     }
   };
   el.addEventListener('mousedown', () => selectPanel(id));
@@ -812,6 +812,8 @@ async function closePanel(id) {
   renderSwitcher();
   updateMinimizedBar();
   if (state.activeId) selectPanel(state.activeId, { persist: false });
+  // Auto-restore minimized panels that now fit
+  autoRestoreToFillSlots();
   savePanePrefs();
   saveUiState();
 }
@@ -1155,6 +1157,27 @@ document.getElementById('fileInput').onchange = e => {
 document.getElementById('clipboardImageBtn').onclick = () => uploadClipboardImage();
 document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
 document.getElementById('fontSizeSlider').oninput = e => setFontSize(Number(e.target.value));
+
+// ── Close Confirmation Modal ──
+let closeConfirmCallback = null;
+function showCloseConfirm(sessionId, title) {
+  const modal = document.getElementById('closeModal');
+  document.getElementById('closeModalTitle').textContent = `${title} — wirklich schließen?`;
+  modal.hidden = false;
+  closeConfirmCallback = () => {
+    modal.hidden = true;
+    closeConfirmCallback = null;
+    closePanel(sessionId);
+  };
+}
+function hideCloseConfirm() {
+  document.getElementById('closeModal').hidden = true;
+  closeConfirmCallback = null;
+}
+document.getElementById('closeModalConfirm').onclick = () => { if (closeConfirmCallback) closeConfirmCallback(); };
+document.getElementById('closeModalCancel').onclick = hideCloseConfirm;
+document.getElementById('closeModal').addEventListener('click', e => { if (e.target === e.currentTarget) hideCloseConfirm(); });
+
 document.addEventListener('paste', handleTerminalPaste, true);
 document.addEventListener('keydown', letBrowserOwnTerminalPasteShortcut, true);
 window.addEventListener('resize', () => {

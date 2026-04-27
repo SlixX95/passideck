@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>PassiDeck</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
-  <link rel="stylesheet" href="style.css?v=20260427-all-tabs-green">
+  <link rel="stylesheet" href="style.css?v=20260427-close-modal">
 </head>
 <body data-theme="blue">
   <header class="topbar">
@@ -90,10 +90,22 @@
     <div class="minimized-tabs" id="minimizedTabs"></div>
   </div>
 
+  <!-- Close Confirmation Modal -->
+  <div id="closeModal" class="modal-overlay" hidden>
+    <div class="modal-box">
+      <h3 id="closeModalTitle" class="modal-title"></h3>
+      <p class="modal-text">Prozess wird beendet.</p>
+      <div class="modal-actions">
+        <button id="closeModalCancel" class="modal-btn modal-btn-cancel">Abbrechen</button>
+        <button id="closeModalConfirm" class="modal-btn modal-btn-confirm">Schließen</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.11.0/lib/addon-web-links.min.js"></script>
   <script src="addon-serialize.min.js?v=20260426" defer></script>
-  <script src="app.js?v=20260427-swap-position-fix" defer></script>
+  <script src="app.js?v=20260427-close-modal" defer></script>
 </body>
 </html>

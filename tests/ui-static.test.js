@@ -153,6 +153,7 @@ assertIncludes(css, '.term-panel.minimized', 'minimized panel CSS required');
 
 /* Close Confirmation */
 assertIncludes(app, 'function isSessionExited', 'exit detection for close confirmation');
-assertIncludes(app, 'confirm(', 'close must show confirmation dialog for running sessions');
+assertIncludes(app, 'showCloseConfirm', 'close must show confirmation modal for running sessions');
+assertIncludes(html, 'id="closeModal"', 'close confirmation modal HTML required');
 
 console.log('ui-static ok');
