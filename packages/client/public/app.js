@@ -77,6 +77,11 @@ function installGlobalActionGuards() {
   document.addEventListener('click', handler, true);
 }
 
+// Debug: track all close button interactions
+document.addEventListener('pointerdown', e => {
+  if (e.target.closest('button.danger')) console.log('[CLOSE] pointerdown on', e.target.className, 'paneId:', e.target.dataset.paneId);
+}, true);
+
 async function api(method, path, body) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
   if (body !== undefined) opts.body = JSON.stringify(body);
@@ -622,20 +627,11 @@ function createPanel(session) {
       showCloseConfirm(id, panelTitle(session));
     }
   };
-  // mousedown capture: prevent focus/selection, defer modal to after click
-  closeBtn.addEventListener('mousedown', e => {
+  // pointerdown: prevent focus/selection only, show modal AFTER click completes
+  closeBtn.addEventListener('pointerdown', e => {
     e.preventDefault();
     e.stopPropagation();
-  }, true);
-  // Show modal on mouseup — overlay won't steal the event anymore
-  closeBtn.addEventListener('mouseup', e => {
-    e.stopPropagation();
-    if (isSessionExited(session)) {
-      closePanel(id);
-    } else {
-      showCloseConfirm(id, panelTitle(session));
-    }
-  });
+  }, true); // capture phase — fires first, prevents terminal focus
   // Only select panel when clicking on terminal area, not header (buttons/title/drag)
   el.querySelector('.terminal').addEventListener('mousedown', () => selectPanel(id));
   dragHandle.addEventListener('dragstart', e => {
