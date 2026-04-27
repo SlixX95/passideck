@@ -30,8 +30,6 @@ const state = {
   order: [],
   layout: '2x1',
   activeLayout: '2x1',
-  focusedId: null,
-  primaryId: null,
   activeId: null,
   theme: 'blue',
   saveTimer: null,
@@ -45,8 +43,8 @@ const state = {
 const PANE_PREFS_KEY = 'passideck:pane-prefs:v1';
 const CHROME_PREF_KEY = 'passideck:chrome-hidden:v1';
 const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v1:';
-const TERM_SNAPSHOT_MAX_LINES = 240;
-const TERM_SNAPSHOT_MAX_CHARS = 64000;
+const TERM_SNAPSHOT_MAX_LINES = 5000;
+const TERM_SNAPSHOT_MAX_CHARS = 1024 * 1024;
 
 async function api(method, path, body) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
@@ -60,8 +58,6 @@ function uiPayload() {
   return {
     layout: state.activeLayout,
     baseLayout: state.layout,
-    focusedId: state.focusedId,
-    primaryId: state.primaryId,
     activeId: state.activeId,
     theme: state.theme
   };
@@ -74,14 +70,12 @@ function saveUiState() {
 
 function visiblePaneIds(layout = state.activeLayout) {
   const ids = state.order.filter(id => state.sessions.has(id));
-  const cap = layout === 'focus' ? 1 : layout === 'half' ? 2 : (LAYOUT_SLOTS[layout] || ids.length || 1);
+  const cap = LAYOUT_SLOTS[layout] || ids.length || 1;
   if (!ids.length) return new Set();
   if (ids.length <= cap) return new Set(ids);
   const prioritized = [];
   const push = id => { if (id && ids.includes(id) && !prioritized.includes(id)) prioritized.push(id); };
-  if (layout === 'focus') push(state.focusedId || state.activeId || ids[0]);
-  else if (layout === 'half') { push(state.primaryId || state.activeId || ids[0]); push(state.activeId); }
-  else push(state.activeId);
+  push(state.activeId);
   ids.forEach(push);
   return new Set(prioritized.slice(0, cap));
 }
@@ -94,45 +88,14 @@ function applyLayoutVisibility() {
 }
 
 function setLayout(layout, opts = {}) {
-  if (!layout || ![...LAYOUTS, 'focus', 'half'].includes(layout)) return;
+  if (!layout || ![...LAYOUTS].includes(layout)) return;
   const grid = document.getElementById('termGrid');
   grid.className = `grid-container layout-${layout}`;
   state.activeLayout = layout;
-  if (!['focus', 'half'].includes(layout)) {
-    state.layout = layout;
-    state.focusedId = null;
-    state.primaryId = null;
-    document.querySelectorAll('.term-panel').forEach(p => p.classList.remove('focused', 'primary'));
-  }
+  state.layout = layout;
   applyLayoutVisibility();
   document.querySelectorAll('.layout-btn').forEach(b => b.classList.toggle('active', b.dataset.layout === layout));
   requestAnimationFrame(fitAll);
-  if (opts.persist !== false) saveUiState();
-}
-
-function focusPanel(id, opts = {}) {
-  const entry = state.sessions.get(id);
-  if (!entry) return;
-  state.focusedId = id;
-  state.primaryId = null;
-  setLayout('focus', { persist: false });
-  document.querySelectorAll('.term-panel').forEach(p => p.classList.remove('focused', 'primary'));
-  entry.el.classList.add('focused');
-  applyLayoutVisibility();
-  selectPanel(id, { persist: false });
-  if (opts.persist !== false) saveUiState();
-}
-
-function halfPanel(id, opts = {}) {
-  const entry = state.sessions.get(id);
-  if (!entry) return;
-  state.focusedId = id;
-  state.primaryId = id;
-  setLayout('half', { persist: false });
-  document.querySelectorAll('.term-panel').forEach(p => p.classList.remove('focused', 'primary'));
-  entry.el.classList.add('primary');
-  applyLayoutVisibility();
-  selectPanel(id, { persist: false });
   if (opts.persist !== false) saveUiState();
 }
 
@@ -250,7 +213,7 @@ function terminalSnapshot(entry) {
   const term = entry?.term;
   if (!term) return '';
   try {
-    const serialized = entry.serialize?.serialize({ scrollback: Math.max(0, term.rows || 30) });
+    const serialized = entry.serialize?.serialize({ scrollback: TERM_SNAPSHOT_MAX_LINES });
     if (serialized) return serialized.slice(-TERM_SNAPSHOT_MAX_CHARS);
   } catch {}
   const buffer = term.buffer?.active;
@@ -278,10 +241,18 @@ function hasTerminalSnapshot(id) {
 function saveTerminalSnapshot(id) {
   const entry = state.sessions.get(id);
   if (!entry?.term) return;
-  const text = terminalSnapshot(entry);
-  try {
-    if (text) localStorage.setItem(snapshotKey(id), JSON.stringify({ id, text, savedAt: Date.now() }));
-  } catch {}
+  let text = terminalSnapshot(entry);
+  if (!text) return;
+  // localStorage quotas vary by browser/device. Keep the big snapshot when possible;
+  // if quota is full, degrade gracefully instead of losing reload restore entirely.
+  while (text.length > 0) {
+    try {
+      localStorage.setItem(snapshotKey(id), JSON.stringify({ id, text, savedAt: Date.now() }));
+      return;
+    } catch {}
+    if (text.length <= 65536) return;
+    text = text.slice(-Math.floor(text.length * 0.6));
+  }
 }
 
 function scheduleTerminalSnapshot(id) {
@@ -434,7 +405,9 @@ function createPanel(session) {
   term.loadAddon(fit);
   if (serialize) term.loadAddon(serialize);
   term.loadAddon(new WebLinksAddon.WebLinksAddon());
-  term.open(el.querySelector('.terminal'));
+  const termEl = el.querySelector('.terminal');
+  term.open(termEl);
+  termEl.addEventListener('contextmenu', e => handleTerminalContextMenu(e, id));
 
   const ro = new ResizeObserver(() => fitAll());
   ro.observe(el.querySelector('.terminal'));
@@ -653,37 +626,135 @@ function activeTerminalEntry() {
   return id ? state.sessions.get(id) : null;
 }
 
-function pasteIntoActiveTerminal(text) {
-  const entry = activeTerminalEntry();
-  if (!entry?.ws || entry.ws.readyState !== WebSocket.OPEN) return false;
+function pasteIntoTerminalEntry(entry, text) {
+  if (!entry?.ws || entry.ws.readyState !== WebSocket.OPEN || !text) return false;
   entry.ws.send(JSON.stringify({ type: 'input', data: text }));
   entry.term.focus();
   return true;
 }
 
-function isHermesSession(entry) {
-  const meta = entry?.session?.meta || {};
-  const command = String(meta.command || '').trim().toLowerCase();
-  const label = String(meta.label || '').trim().toLowerCase();
-  return command === 'hermes' || command.endsWith('/hermes') || label === 'hermes';
+function bracketedPastePayload(text) {
+  return `\x1b[200~${String(text || '').replace(/\x1b/g, '')}\x1b[201~`;
+}
+
+function insertIntoTerminalEntry(entry, text) {
+  return pasteIntoTerminalEntry(entry, bracketedPastePayload(text));
+}
+
+function pasteIntoActiveTerminal(text) {
+  return pasteIntoTerminalEntry(activeTerminalEntry(), text);
+}
+
+function insertIntoActiveTerminal(text) {
+  return insertIntoTerminalEntry(activeTerminalEntry(), text);
+}
+
+function fallbackCopyText(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  try { return document.execCommand('copy'); }
+  finally { ta.remove(); }
+}
+
+async function copyTextToClipboard(text) {
+  if (!text) return false;
+  if (navigator.clipboard?.writeText && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+  return fallbackCopyText(text);
+}
+
+async function readTextFromClipboard() {
+  if (!navigator.clipboard?.readText || !window.isSecureContext) return '';
+  return navigator.clipboard.readText();
+}
+
+async function pasteClipboardIntoTerminalEntry(entry) {
+  const imageFile = await readImageFileFromSystemClipboard();
+  if (imageFile) {
+    const upload = await uploadFile(imageFile, { keepBusy: true });
+    return upload ? insertIntoTerminalEntry(entry, `${upload.path} `) : false;
+  }
+  return insertIntoTerminalEntry(entry, await readTextFromClipboard());
+}
+
+async function handleTerminalContextMenu(e, id) {
+  e.preventDefault();
+  e.stopPropagation();
+  selectPanel(id, { persist: false });
+  const entry = state.sessions.get(id);
+  const selected = entry?.term?.getSelection?.() || '';
+  if (selected) {
+    try {
+      await copyTextToClipboard(selected);
+      entry.term.clearSelection?.();
+    } catch (err) {
+      console.warn('terminal right-click copy failed', err);
+    }
+    return;
+  }
+  try {
+    await pasteClipboardIntoTerminalEntry(entry);
+  } catch (err) {
+    console.warn('terminal right-click paste failed', err);
+  }
 }
 
 function formatUploadInsertion(upload) {
-  const entry = activeTerminalEntry();
-  if (isHermesSession(entry) && /^image\//i.test(upload.type || '')) {
-    // Codex-style UX for Hermes: attach first, show Hermes' [📎 Image #N] badge,
-    // then Pascal can type a normal prompt without a raw file path in the composer.
-    return `/image ${upload.path}\r`;
-  }
-  // Fallback for shell/Codex/unknown panes: keep the old explicit local path behavior.
+  // Keep uploads simple and upstream-friendly: paste the local path into the PTY.
+  // Hermes can auto-detect image paths on submit; shells/Codex/unknown panes keep
+  // the same explicit path behavior.
   return `\x01${upload.path} `;
 }
 
-function findImageFileFromClipboardItems(items) {
-  for (const item of items || []) {
+function findImageFileFromClipboardData(data) {
+  for (const file of data?.files || []) {
+    if (file.type?.startsWith('image/')) return file;
+  }
+  for (const item of data?.items || []) {
     if (item.kind === 'file' && item.type?.startsWith('image/')) return item.getAsFile();
   }
   return null;
+}
+
+async function readImageFileFromSystemClipboard() {
+  if (!navigator.clipboard?.read || !window.isSecureContext) return null;
+  const items = await navigator.clipboard.read();
+  for (const item of items || []) {
+    const type = item.types?.find(t => t.startsWith('image/'));
+    if (!type) continue;
+    const blob = await item.getType(type);
+    const ext = type.split('/')[1] || 'png';
+    return new File([blob], `clipboard-image-${new Date().toISOString().replace(/[:.]/g, '-')}.${ext}`, { type });
+  }
+  return null;
+}
+
+function imageUrlFromClipboardData(data) {
+  const uri = (data?.getData('text/uri-list') || '').split('\n').find(line => line && !line.startsWith('#')) || '';
+  const text = data?.getData('text/plain') || uri;
+  const html = data?.getData('text/html') || '';
+  const htmlSrc = html.match(/<img\b[^>]*\bsrc=["']([^"']+)["']/i)?.[1] || '';
+  const candidate = htmlSrc || text.trim();
+  if (/^data:image\//i.test(candidate)) return candidate;
+  if (/^https?:\/\//i.test(candidate) && /\.(?:png|jpe?g|gif|webp|bmp|tiff?|svg|ico)(?:[?#].*)?$/i.test(candidate)) return candidate;
+  if (/^\/uploads\/[^\s]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|svg|ico)(?:[?#].*)?$/i.test(candidate)) return candidate;
+  return '';
+}
+
+async function uploadImageUrl(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`image fetch failed: ${res.status}`);
+  const blob = await res.blob();
+  if (!blob.type?.startsWith('image/')) throw new Error('URL is not an image');
+  const name = decodeURIComponent(String(url).split('/').pop().split('?')[0]) || `clipboard-url-${Date.now()}.png`;
+  await uploadFile(new File([blob], name, { type: blob.type }), { pasteIntoTerminal: true });
 }
 
 function shouldLetBrowserHandlePaste(target) {
@@ -697,20 +768,38 @@ function shouldLetBrowserHandlePaste(target) {
   return false;
 }
 
-function handleTerminalPaste(e) {
+async function handleTerminalPaste(e) {
   if (shouldLetBrowserHandlePaste(e.target)) return;
 
-  const file = findImageFileFromClipboardItems(e.clipboardData?.items);
+  const file = findImageFileFromClipboardData(e.clipboardData);
   if (file) {
     e.preventDefault();
+    e.stopImmediatePropagation();
     clearClipboardPasteMode();
     uploadFile(file, { pasteIntoTerminal: true });
     return;
   }
 
-  const text = e.clipboardData?.getData('text/plain');
-  if (text && pasteIntoActiveTerminal(text)) {
+  const imageUrl = imageUrlFromClipboardData(e.clipboardData);
+  if (imageUrl) {
     e.preventDefault();
+    e.stopImmediatePropagation();
+    clearClipboardPasteMode();
+    try {
+      const clipboardFile = await readImageFileFromSystemClipboard();
+      if (clipboardFile) await uploadFile(clipboardFile, { pasteIntoTerminal: true });
+      else await uploadImageUrl(imageUrl);
+    } catch (err) {
+      console.warn(err);
+      insertIntoActiveTerminal(e.clipboardData?.getData('text/plain') || imageUrl);
+    }
+    return;
+  }
+
+  const text = e.clipboardData?.getData('text/plain');
+  if (text && insertIntoActiveTerminal(text)) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
     clearClipboardPasteMode();
   }
 }
@@ -780,15 +869,17 @@ async function uploadClipboardImage() {
 }
 
 async function uploadFile(file, opts = {}) {
-  if (!file || (state.uploadBusy && !opts.keepBusy)) return;
+  if (!file || (state.uploadBusy && !opts.keepBusy)) return null;
   if (!opts.keepBusy) state.uploadBusy = true;
   try {
     const data = await readFileAsDataUrl(file);
     const upload = await uploadBlob({ name: file.name, type: file.type || 'application/octet-stream', data });
     if (opts.pasteIntoTerminal) pasteIntoActiveTerminal(formatUploadInsertion(upload));
+    return upload;
   } catch (err) {
     console.error(err);
     alert(`Upload failed: ${err.message}`);
+    return null;
   } finally {
     if (!opts.keepBusy) state.uploadBusy = false;
   }
@@ -808,9 +899,7 @@ async function init() {
 
   const base = ui?.baseLayout || ui?.layout || '2x1';
   state.layout = LAYOUTS.includes(base) ? base : '2x1';
-  if (ui?.layout === 'focus' && ui.focusedId && state.sessions.has(ui.focusedId)) focusPanel(ui.focusedId, { persist: false });
-  else if (ui?.layout === 'half' && ui.primaryId && state.sessions.has(ui.primaryId)) halfPanel(ui.primaryId, { persist: false });
-  else setLayout(state.layout, { persist: false });
+  setLayout(state.layout, { persist: false });
 
   if (ui?.activeId && state.sessions.has(ui.activeId)) selectPanel(ui.activeId, { persist: false });
   else if (state.order[0]) selectPanel(state.order[0], { persist: false });
