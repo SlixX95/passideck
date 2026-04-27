@@ -1207,15 +1207,28 @@ let closeConfirmCallback = null;
 function showCloseConfirm(sessionId, title) {
   const modal = document.getElementById('closeModal');
   document.getElementById('closeModalTitle').textContent = `${title} — wirklich schließen?`;
+
+  // Do not rely on the native hidden repaint path here.
+  // In full grids some browsers defer that paint until the next layout change.
   modal.hidden = false;
+  modal.removeAttribute('hidden');
+  modal.classList.add('open');
+  modal.style.display = 'flex';
+  modal.style.visibility = 'visible';
+  modal.style.opacity = '1';
+  void modal.offsetHeight; // force style/layout flush now
+
   closeConfirmCallback = () => {
-    modal.hidden = true;
-    closeConfirmCallback = null;
+    hideCloseConfirm();
     closePanel(sessionId);
   };
+  setTimeout(() => document.getElementById('closeModalConfirm')?.focus(), 0);
 }
 function hideCloseConfirm() {
-  document.getElementById('closeModal').hidden = true;
+  const modal = document.getElementById('closeModal');
+  modal.classList.remove('open');
+  modal.style.display = 'none';
+  modal.hidden = true;
   closeConfirmCallback = null;
 }
 document.getElementById('closeModalConfirm').onclick = () => { if (closeConfirmCallback) closeConfirmCallback(); };

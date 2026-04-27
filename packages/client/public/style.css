@@ -470,15 +470,20 @@ body.chrome-hidden .settings-panel { display: none !important; }
 .modal-overlay {
   position: fixed;
   inset: 0;
-  z-index: 9999;
-  display: flex;
+  z-index: 2147483647;
+  display: none;
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.6);
   backdrop-filter: blur(4px);
 }
-.modal-overlay[hidden] {
-  display: none;
+.modal-overlay.open {
+  display: flex !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+.modal-overlay[hidden]:not(.open) {
+  display: none !important;
 }
 .modal-box {
   background: var(--tg-surface);
