@@ -72,7 +72,7 @@ function saveUiState() {
 }
 
 function visiblePaneIds(layout = state.activeLayout) {
-  const ids = state.order.filter(id => state.sessions.has(id));
+  const ids = state.order.filter(id => state.sessions.has(id) && !state.minimized.has(id));
   const cap = LAYOUT_SLOTS[layout] || ids.length || 1;
   if (!ids.length) return new Set();
   if (ids.length <= cap) return new Set(ids);
@@ -81,6 +81,15 @@ function visiblePaneIds(layout = state.activeLayout) {
   push(state.activeId);
   ids.forEach(push);
   return new Set(prioritized.slice(0, cap));
+}
+
+function autoMinimizeExcess() {
+  const visible = visiblePaneIds();
+  for (const [id, entry] of state.sessions) {
+    if (!visible.has(id) && !state.minimized.has(id)) {
+      minimizePanel(id);
+    }
+  }
 }
 
 function applyLayoutVisibility() {
@@ -97,6 +106,7 @@ function setLayout(layout, opts = {}) {
   state.activeLayout = layout;
   state.layout = layout;
   applyLayoutVisibility();
+  autoMinimizeExcess();
   updateGridPickerActive();
   // Two-pass fit: immediate + delayed to let browser finish reflow
   requestAnimationFrame(() => {
