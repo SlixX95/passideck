@@ -92,6 +92,18 @@ function autoMinimizeExcess() {
   }
 }
 
+function autoRestoreToFillSlots() {
+  const slotCount = getCurrentSlotCount();
+  const visible = getVisibleCount();
+  if (visible >= slotCount) return;
+  // Restore minimized panels in order until slots full
+  for (const id of state.order) {
+    if (!state.minimized.has(id)) continue;
+    if (getVisibleCount() >= slotCount) break;
+    restorePanel(id);
+  }
+}
+
 function applyLayoutVisibility() {
   const visible = visiblePaneIds();
   for (const [id, entry] of state.sessions) {
@@ -106,6 +118,7 @@ function setLayout(layout, opts = {}) {
   state.activeLayout = layout;
   state.layout = layout;
   applyLayoutVisibility();
+  autoRestoreToFillSlots();
   autoMinimizeExcess();
   updateGridPickerActive();
   // Two-pass fit: immediate + delayed to let browser finish reflow
@@ -252,8 +265,9 @@ function updateMinimizedBar() {
     // Swap-select popup on hover when no slot
     if (willReplace) {
       let swapMenu = null;
+      let closeTimer = null;
       tab.addEventListener('mouseenter', () => {
-        // Close any existing menus
+        clearTimeout(closeTimer);
         document.querySelectorAll('.swap-menu').forEach(m => m.remove());
         const visibleIds = state.order.filter(oid => state.sessions.has(oid) && !state.minimized.has(oid));
         if (visibleIds.length === 0) return;
@@ -271,11 +285,19 @@ function updateMinimizedBar() {
             minimizePanel(btn.dataset.swap);
             restorePanel(id);
             swapMenu.remove();
+            swapMenu = null;
           };
+        });
+        // Keep menu open when hovering over it
+        swapMenu.addEventListener('mouseenter', () => clearTimeout(closeTimer));
+        swapMenu.addEventListener('mouseleave', () => {
+          closeTimer = setTimeout(() => { if (swapMenu) swapMenu.remove(); }, 300);
         });
         tab.appendChild(swapMenu);
       });
-      tab.addEventListener('mouseleave', () => { if (swapMenu && swapMenu.parentNode) swapMenu.remove(); });
+      tab.addEventListener('mouseleave', () => {
+        closeTimer = setTimeout(() => { if (swapMenu && swapMenu.parentNode) swapMenu.remove(); }, 300);
+      });
     }
 
     tab.querySelector('.min-title').onclick = (e) => { e.stopPropagation(); smartRestorePanel(id); };
