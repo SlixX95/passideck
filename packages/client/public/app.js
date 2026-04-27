@@ -52,11 +52,7 @@ const TERM_SNAPSHOT_MAX_CHARS = 1024 * 1024;
 function requestClosePanel(id) {
   const entry = state.sessions.get(id);
   if (!entry) return;
-  if (isSessionExited(entry.session)) {
-    closePanel(id);
-  } else {
-    showCloseConfirm(id, panelTitle(entry.session));
-  }
+  showCloseConfirm(id, panelTitle(entry.session));
 }
 
 async function api(method, path, body) {
@@ -597,8 +593,15 @@ function createPanel(session) {
   minBtn.addEventListener('pointerdown', e => e.stopPropagation());
   minBtn.addEventListener('mousedown', e => e.stopPropagation());
   minBtn.addEventListener('mouseup', e => e.stopPropagation());
-  closeBtn.onclick = e => { e.stopPropagation(); requestClosePanel(id); };
-  closeBtn.addEventListener('pointerdown', e => e.stopPropagation());
+  closeBtn.onclick = e => {
+    e.stopPropagation();
+    if (!document.getElementById('closeModal')?.classList.contains('open')) requestClosePanel(id);
+  };
+  closeBtn.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    requestClosePanel(id);
+  });
   closeBtn.addEventListener('mousedown', e => e.stopPropagation());
   closeBtn.addEventListener('mouseup', e => e.stopPropagation());
   // Only select panel when clicking on terminal area, not header (buttons/title/drag)
@@ -1204,6 +1207,7 @@ document.getElementById('fontSizeSlider').oninput = e => setFontSize(Number(e.ta
 
 // ── Close Confirmation Modal ──
 let closeConfirmCallback = null;
+let closeModalOpenedAt = 0;
 function showCloseConfirm(sessionId, title) {
   const modal = document.getElementById('closeModal');
   document.getElementById('closeModalTitle').textContent = `${title} — wirklich schließen?`;
@@ -1216,6 +1220,7 @@ function showCloseConfirm(sessionId, title) {
   modal.style.display = 'flex';
   modal.style.visibility = 'visible';
   modal.style.opacity = '1';
+  closeModalOpenedAt = Date.now();
   void modal.offsetHeight; // force style/layout flush now
 
   closeConfirmCallback = () => {
@@ -1234,6 +1239,8 @@ function hideCloseConfirm() {
 document.getElementById('closeModalConfirm').onclick = () => { if (closeConfirmCallback) closeConfirmCallback(); };
 document.getElementById('closeModalCancel').onclick = hideCloseConfirm;
 document.getElementById('closeModal').addEventListener('click', e => {
+  // Ignore the same physical click that opened the modal.
+  if (Date.now() - closeModalOpenedAt < 400) return;
   // Only close if clicking directly on overlay, not from a propagated button click
   if (e.target === document.getElementById('closeModal') && !e.composedPath().includes(document.querySelector('.modal-box'))) {
     hideCloseConfirm();
