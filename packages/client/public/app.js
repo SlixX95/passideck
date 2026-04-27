@@ -105,9 +105,18 @@ function autoRestoreToFillSlots() {
 }
 
 function applyLayoutVisibility() {
+  const grid = document.getElementById('termGrid');
+  const hidden = document.getElementById('hiddenPanes');
   const visible = visiblePaneIds();
   for (const [id, entry] of state.sessions) {
-    entry.el.classList.toggle('layout-hidden', !visible.has(id));
+    const shouldHide = !visible.has(id) || state.minimized.has(id);
+    if (shouldHide && entry.el.parentElement === grid) {
+      hidden.appendChild(entry.el);
+      entry.el.classList.add('layout-hidden');
+    } else if (!shouldHide && entry.el.parentElement !== grid) {
+      grid.appendChild(entry.el);
+      entry.el.classList.remove('layout-hidden');
+    }
   }
 }
 
