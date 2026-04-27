@@ -351,9 +351,9 @@ button, select {
   align-items: center;
   gap: 4px;
   max-width: 120px;
-  background: var(--tg-bg);
-  border: 1px solid var(--tg-border);
-  color: var(--tg-text-dim);
+  background: var(--tg-surface-hover);
+  border: 1px solid var(--tg-accent-dim);
+  color: var(--tg-accent);
   padding: 1px 6px;
   cursor: pointer;
   font-family: var(--tg-mono);
@@ -365,7 +365,6 @@ button, select {
   transition: all 0.15s;
 }
 .minimized-tab:hover { color: var(--tg-text); border-color: var(--tg-border-active); }
-.minimized-tab.active { color: var(--tg-accent); border-color: var(--tg-accent-dim); background: var(--tg-surface-hover); }
 .minimized-tab .restore-btn {
   background: none;
   border: none;

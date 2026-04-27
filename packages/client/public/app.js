@@ -268,7 +268,6 @@ function updateMinimizedBar() {
     if (!entry) continue;
     const tab = document.createElement('div');
     tab.className = 'minimized-tab';
-    if (id === state.activeId) tab.classList.add('active');
     // Tooltip: zeigt was passiert wenn kein Platz
     const willReplace = getVisibleCount() >= getCurrentSlotCount();
     const replaceTarget = state.activeId && state.activeId !== id ? panelTitle(state.sessions.get(state.activeId)?.session) : null;
