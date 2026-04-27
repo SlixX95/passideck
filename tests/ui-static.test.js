@@ -154,6 +154,19 @@ assertIncludes(app, 'Function(code).call(window)', 'local serialize addon must e
 assertIncludes(html, 'id="chromeToggle"', 'topbar needs hide ui button');
 assertIncludes(html, 'id="chromePeek"', 'hidden topbar needs restore button');
 assertNotIncludes(html, 'PassiDeck</div>', 'topbar codename/logo text should not be visible');
+assertIncludes(html, 'class="command-strip"', 'topbar must be one slim command strip');
+assertIncludes(html, 'class="command-zone command-left"', 'topbar left zone required for fixed status and launch controls');
+assertIncludes(html, 'class="command-zone command-center"', 'topbar center zone required for scrollable session tabs');
+assertIncludes(html, 'class="command-zone command-right"', 'topbar right zone required for fixed controls');
+assertNotIncludes(html, 'topbar-row-1', 'old two-row topbar must not return');
+assertNotIncludes(html, 'topbar-row-2', 'old two-row topbar must not return');
+assertIncludes(css, '.command-strip', 'command strip CSS required');
+assertIncludes(css, 'grid-template-columns: auto minmax(190px, 1fr) auto;', 'session tabs must not push fixed right controls');
+assertIncludes(css, '.command-right', 'right controls must remain grouped and fixed');
+assertIncludes(css, '.command-center { overflow: hidden;', 'session tab rail must be clipped/scroll-safe');
+assertIncludes(html, '⚙ settings', 'settings button must be clearly labeled');
+assertIncludes(html, '⇧ upload', 'upload button must remain and be clearly labeled');
+assertIncludes(html, '▧ clip img', 'clipboard image button must remain and be clearly labeled');
 
 /* Grid Picker */
 assertIncludes(html, 'id="gridPickerInline"', 'inline grid picker container required in topbar');
@@ -165,6 +178,18 @@ assertIncludes(html, 'id="fontSizeSlider"', 'font size slider required in settin
 assertIncludes(html, 'id="fontSizeLabel"', 'font size label required');
 assertIncludes(app, 'function setFontSize', 'font size setter must apply to all terminals');
 assertIncludes(app, 'FONT_SIZE_KEY', 'font size must persist in localStorage');
+assertIncludes(html, '<option value="emerald">Emerald</option>', 'new cyber emerald theme option required');
+assertIncludes(html, '<option value="cyan">Cyan</option>', 'new cyber cyan theme option required');
+assertIncludes(app, 'emerald:{ background:', 'xterm emerald theme required');
+assertIncludes(app, 'cyan:   { background:', 'xterm cyan theme required');
+assertIncludes(css, 'body[data-theme="emerald"]', 'CSS emerald theme required');
+assertIncludes(css, 'body[data-theme="cyan"]', 'CSS cyan theme required');
+assertIncludes(html, 'id="systemMonitorToggle"', 'system monitor must be optional from settings');
+assertIncludes(html, 'id="systemMonitor"', 'optional bottom system monitor container required');
+assertIncludes(app, 'const SYSTEM_MONITOR_KEY', 'system monitor visibility must persist client-side');
+assertIncludes(app, 'function setSystemMonitorVisible', 'system monitor toggle helper required');
+assertIncludes(app, "localStorage.getItem(SYSTEM_MONITOR_KEY) === '1'", 'system monitor must default off unless user opted in');
+assertIncludes(css, '.system-monitor[hidden] { display: none !important; }', 'system monitor must be hideable');
 
 /* Minimize */
 assertIncludes(html, '<section class="minimized-bar" id="minimizedBar" hidden>', 'minimized tab bar container required');

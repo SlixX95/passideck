@@ -19,6 +19,8 @@ const LAYOUT_SLOTS = Object.freeze({
 const THEMES = {
   blue:   { background: '#0f1117', foreground: '#c8ccd8', cursor: '#7aa2f7', selectionBackground: '#3d5a9e' },
   green:  { background: '#0f1117', foreground: '#d5e8d0', cursor: '#9ece6a', selectionBackground: '#4c6f38' },
+  emerald:{ background: '#020505', foreground: '#d9fff0', cursor: '#00ff91', selectionBackground: '#0d6041' },
+  cyan:   { background: '#020505', foreground: '#d6fff8', cursor: '#5fffd1', selectionBackground: '#197568' },
   amber:  { background: '#0f1117', foreground: '#ead7ba', cursor: '#e0af68', selectionBackground: '#7c5f33' },
   purple: { background: '#0f1117', foreground: '#ddd3ff', cursor: '#bb9af7', selectionBackground: '#624f8f' },
   red:    { background: '#0f1117', foreground: '#f3c5cc', cursor: '#f7768e', selectionBackground: '#893b4a' },
@@ -46,6 +48,7 @@ const state = {
 const PANE_PREFS_KEY = 'passideck:pane-prefs:v1';
 const CHROME_PREF_KEY = 'passideck:chrome-hidden:v1';
 const FONT_SIZE_KEY = 'passideck:font-size:v1';
+const SYSTEM_MONITOR_KEY = 'passideck:system-monitor:v1';
 const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v1:';
 const TERM_SNAPSHOT_MAX_LINES = 20000;
 const TERM_SNAPSHOT_MAX_CHARS = 1024 * 1024;
@@ -357,6 +360,19 @@ function setChromeHidden(hidden) {
   requestAnimationFrame(fitAll);
 }
 
+function setSystemMonitorVisible(visible, opts = {}) {
+  const enabled = Boolean(visible);
+  document.body.classList.toggle('system-monitor-on', enabled);
+  const monitor = document.getElementById('systemMonitor');
+  const toggle = document.getElementById('systemMonitorToggle');
+  if (monitor) monitor.hidden = !enabled;
+  if (toggle) toggle.checked = enabled;
+  if (opts.persist !== false) {
+    try { localStorage.setItem(SYSTEM_MONITOR_KEY, enabled ? '1' : '0'); } catch {}
+  }
+  requestAnimationFrame(fitAll);
+}
+
 function toggleChrome() {
   setChromeHidden(!document.body.classList.contains('chrome-hidden'));
 }
@@ -638,7 +654,7 @@ function endPointerDrag(event) {
   document.removeEventListener('pointermove', updatePointerDrag, true);
   document.removeEventListener('pointerup', endPointerDrag, true);
   document.removeEventListener('pointercancel', endPointerDrag, true);
-  handle?.releasePointerCapture?.(event?.pointerId);
+  try { handle?.releasePointerCapture?.(event?.pointerId); } catch {}
   document.getElementById(`panel-${sourceId}`)?.classList.remove('dragging');
   document.body.classList.remove('pane-dragging');
   clearDropTargets();
@@ -660,7 +676,7 @@ function startPointerDrag(id, handle, event) {
   event.stopPropagation();
   state.pointerDrag = { sourceId: id, targetId: null, side: null, handle };
   state.draggingId = id;
-  handle.setPointerCapture?.(event.pointerId);
+  try { handle.setPointerCapture?.(event.pointerId); } catch {}
   document.getElementById(`panel-${id}`)?.classList.add('dragging');
   document.body.classList.add('pane-dragging');
   document.addEventListener('pointermove', updatePointerDrag, true);
@@ -1234,7 +1250,7 @@ function armClipboardPasteMode() {
   btn.classList.add('armed');
   state.clipboardPasteTimer = setTimeout(() => {
     state.clipboardPasteArmed = false;
-    btn.textContent = 'clipboard image';
+    btn.textContent = '▧ clip img';
     btn.classList.remove('armed');
   }, 12000);
   window.focus();
@@ -1244,7 +1260,7 @@ function clearClipboardPasteMode() {
   const btn = document.getElementById('clipboardImageBtn');
   state.clipboardPasteArmed = false;
   clearTimeout(state.clipboardPasteTimer);
-  btn.textContent = 'clipboard image';
+  btn.textContent = '▧ clip img';
   btn.classList.remove('armed');
 }
 
@@ -1310,8 +1326,9 @@ async function init() {
     api('GET', '/api/ui-state').catch(() => null)
   ]);
 
-  setTheme(ui?.theme || 'blue', { persist: false });
+  setTheme(ui?.theme || 'green', { persist: false });
   setFontSize(state.fontSize, { persist: false });
+  setSystemMonitorVisible(localStorage.getItem(SYSTEM_MONITOR_KEY) === '1', { persist: false });
   installCloseHitLayer();
   buildGridPicker();
   sessions.forEach(createPanel);
@@ -1347,6 +1364,7 @@ document.getElementById('fileInput').onchange = e => {
 document.getElementById('clipboardImageBtn').onclick = () => uploadClipboardImage();
 document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
 document.getElementById('fontSizeSlider').oninput = e => setFontSize(Number(e.target.value));
+document.getElementById('systemMonitorToggle').onchange = e => setSystemMonitorVisible(e.target.checked);
 
 // ── Close Confirmation Modal ──
 let closeConfirmSessionId = null;
