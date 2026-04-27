@@ -73,6 +73,7 @@ function installGlobalActionGuards() {
     openCloseModalFor(id);
   };
   document.addEventListener('pointerdown', handler, true);
+  document.addEventListener('mousedown', handler, true);
   document.addEventListener('click', handler, true);
 }
 
