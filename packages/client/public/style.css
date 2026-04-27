@@ -317,7 +317,7 @@ button, select {
 }
 .term-title[contenteditable="true"] { border-radius: 0; padding: 0 2px; cursor: text; font-size: 11px; }
 .term-title[contenteditable="true"]:focus { color: var(--tg-accent); box-shadow: inset 0 0 0 1px var(--tg-accent-dim); background: rgba(122,162,247,.08); }
-.term-actions { display: flex; gap: 1px; flex: 0 0 auto; }
+.term-actions { display: flex; gap: 1px; flex: 0 0 auto; position: relative; z-index: 10; }
 .term-actions button {
   background: none;
   border: 1px solid var(--tg-border);
@@ -327,6 +327,7 @@ button, select {
   cursor: pointer;
   font-size: 10px;
   line-height: 13px;
+  pointer-events: auto;
 }
 .term-actions button:hover { color: var(--tg-accent); border-color: var(--tg-accent-dim); }
 .term-actions button.danger:hover { color: var(--tg-red); border-color: var(--tg-red); }

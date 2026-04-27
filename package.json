@@ -43,5 +43,8 @@
   "license": "MIT",
   "engines": {
     "node": ">=18.0.0"
+  },
+  "devDependencies": {
+    "selenium-webdriver": "^4.43.0"
   }
 }

@@ -582,6 +582,7 @@ function createPanel(session) {
   });
   titleEl.addEventListener('mousedown', e => e.stopPropagation());
   minBtn.onclick = () => minimizePanel(id);
+  minBtn.addEventListener('mousedown', e => e.stopPropagation());
   closeBtn.onclick = () => {
     if (isSessionExited(session)) {
       closePanel(id);
@@ -589,6 +590,12 @@ function createPanel(session) {
       showCloseConfirm(id, panelTitle(session));
     }
   };
+  closeBtn.addEventListener('mousedown', e => e.stopPropagation());
+  // Camofox workaround: header catches clicks on buttons since xterm.js may intercept them
+  el.querySelector('.term-header').addEventListener('click', e => {
+    if (e.target === closeBtn) closeBtn.click();
+    if (e.target === minBtn) minBtn.click();
+  });
   el.addEventListener('mousedown', () => selectPanel(id));
   dragHandle.addEventListener('dragstart', e => {
     e.dataTransfer.setData('text/plain', id);
