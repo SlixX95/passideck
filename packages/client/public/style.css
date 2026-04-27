@@ -284,10 +284,12 @@ button, select {
   display: flex;
   align-items: center;
   gap: 3px;
-  padding: 0 3px;
+  padding: 0 40px 0 3px;
   background: var(--tg-bg);
   border-bottom: 1px solid var(--tg-border);
   flex-shrink: 0;
+  position: relative;
+  overflow: visible;
 }
 .term-drag-handle {
   flex: 0 0 18px;
@@ -319,16 +321,26 @@ button, select {
 }
 .term-title[contenteditable="true"] { border-radius: 0; padding: 0 2px; cursor: text; font-size: 11px; }
 .term-title[contenteditable="true"]:focus { color: var(--tg-accent); box-shadow: inset 0 0 0 1px var(--tg-accent-dim); background: rgba(122,162,247,.08); }
-.term-actions { display: flex; gap: 1px; flex: 0 0 auto; position: sticky; right: 0; z-index: 9999; }
+.term-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 2147483646;
+  display: flex;
+  gap: 0;
+  width: 38px;
+  height: 18px;
+  pointer-events: auto;
+}
 .term-actions button {
   background: var(--tg-surface);
   border: 1px solid var(--tg-border);
   color: var(--tg-text-dim);
   border-radius: 0;
   padding: 0;
-  min-width: 24px;
-  width: 24px;
-  height: 24px;
+  min-width: 19px;
+  width: 19px;
+  height: 18px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
