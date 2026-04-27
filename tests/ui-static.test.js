@@ -102,15 +102,24 @@ assertIncludes(app, 'bare leaked OSC color report fragments', 'old visible rgb j
 assertIncludes(app, 'semicolons/ESC stripped to 101110...3R', 'binary-looking 10/11/3R leak must be documented/filtered');
 assertIncludes(app, 'sanitizeTerminalInput(data)', 'stripped terminal replies must be filtered before PTY');
 assertIncludes(app, 'writeTerminalOutput(term, msg.data, () => scheduleTerminalSnapshot(id))', 'stripped terminal replies must be filtered on live output');
+assertIncludes(app, 'el.dataset.paneId = id;', 'pane element must expose stable id for drag/drop diagnostics');
 assertIncludes(app, 'class="term-drag-handle"', 'pane header needs a free drag handle separate from editable title and X');
 assertIncludes(app, 'drop-before', 'drag target must show before-placement indicator');
 assertIncludes(app, 'drop-after', 'drag target must show after-placement indicator');
+assertIncludes(app, 'function dropPlaceholder', 'drag reorder must show a full slot placeholder, not only a thin line');
+assertIncludes(app, 'id = \'dropPlaceholder\'', 'drag reorder must insert a visible target slot');
+assertIncludes(app, 'return new Set(ids.slice(0, cap));', 'layout visibility must preserve pane order instead of prioritizing active pane');
+assertIncludes(app, 'for (const id of state.order) {\n    const entry = state.sessions.get(id);', 'layout application must use persisted pane order');
+assertIncludes(app, '[state.order[activeIndex], state.order[restoreIndex]]', 'restore-over-active swaps must persist logical order');
 assertIncludes(app, 'function movePanel', 'drag reorder must support logical before/after placement');
 assertIncludes(app, 'savePanePrefs();', 'reordered windows must persist across reload');
 
 assertIncludes(css, '.term-panel.dragging', 'dragging visual state required');
 assertIncludes(css, '.term-panel.drop-before::before', 'drop-before indicator required');
 assertIncludes(css, '.term-panel.drop-after::after', 'drop-after indicator required');
+assertIncludes(css, '.drop-placeholder', 'drag target slot preview required');
+assertIncludes(css, 'border: 2px dashed var(--tg-accent);', 'drop placeholder must be visually obvious');
+assertIncludes(css, '.term-panel.drop-target', 'drag target pane must be highlighted');
 assertIncludes(css, '.term-drag-handle', 'drag handle styling required');
 assertIncludes(css, '.xterm-viewport::-webkit-scrollbar', 'terminal scrollbar must be themed');
 assertIncludes(css, 'scrollbar-width: thin', 'terminal scrollbar must be thin');

@@ -101,13 +101,7 @@ function saveUiState() {
 function visiblePaneIds(layout = state.activeLayout) {
   const ids = state.order.filter(id => state.sessions.has(id) && !state.minimized.has(id));
   const cap = LAYOUT_SLOTS[layout] || ids.length || 1;
-  if (!ids.length) return new Set();
-  if (ids.length <= cap) return new Set(ids);
-  const prioritized = [];
-  const push = id => { if (id && ids.includes(id) && !prioritized.includes(id)) prioritized.push(id); };
-  push(state.activeId);
-  ids.forEach(push);
-  return new Set(prioritized.slice(0, cap));
+  return new Set(ids.slice(0, cap));
 }
 
 function autoMinimizeExcess() {
@@ -135,13 +129,15 @@ function applyLayoutVisibility() {
   const grid = document.getElementById('termGrid');
   const hidden = document.getElementById('hiddenPanes');
   const visible = visiblePaneIds();
-  for (const [id, entry] of state.sessions) {
+  for (const id of state.order) {
+    const entry = state.sessions.get(id);
+    if (!entry) continue;
     const shouldHide = !visible.has(id) || state.minimized.has(id);
-    if (shouldHide && entry.el.parentElement === grid) {
-      hidden.appendChild(entry.el);
+    if (shouldHide) {
+      if (entry.el.parentElement !== hidden) hidden.appendChild(entry.el);
       entry.el.classList.add('layout-hidden');
-    } else if (!shouldHide && entry.el.parentElement !== grid) {
-      grid.appendChild(entry.el);
+    } else {
+      if (entry.el.parentElement !== grid) grid.appendChild(entry.el);
       entry.el.classList.remove('layout-hidden');
     }
   }
@@ -241,6 +237,12 @@ function smartRestorePanel(id) {
     const activeEntry = state.sessions.get(state.activeId);
     const restoreEntry = state.sessions.get(id);
     if (activeEntry && restoreEntry) {
+      const activeIndex = state.order.indexOf(state.activeId);
+      const restoreIndex = state.order.indexOf(id);
+      if (activeIndex >= 0 && restoreIndex >= 0) {
+        [state.order[activeIndex], state.order[restoreIndex]] = [state.order[restoreIndex], state.order[activeIndex]];
+        savePanePrefs();
+      }
       // Swap DOM positions in grid
       const grid = document.getElementById('termGrid');
       const hidden = document.getElementById('hiddenPanes');
@@ -553,8 +555,20 @@ function panelTitle(session) {
 }
 
 function clearDropTargets() {
-  document.querySelectorAll('.term-panel.drop-before, .term-panel.drop-after')
-    .forEach(panel => panel.classList.remove('drop-before', 'drop-after'));
+  document.querySelectorAll('.term-panel.drop-before, .term-panel.drop-after, .term-panel.drop-target')
+    .forEach(panel => panel.classList.remove('drop-before', 'drop-after', 'drop-target'));
+  document.getElementById('dropPlaceholder')?.remove();
+}
+
+function dropPlaceholder() {
+  let el = document.getElementById('dropPlaceholder');
+  if (!el) {
+    el = document.createElement('section');
+    el.id = 'dropPlaceholder';
+    el.className = 'drop-placeholder';
+    el.innerHTML = '<span>Hier ablegen</span>';
+  }
+  return el;
 }
 
 function dropSide(event, el) {
@@ -567,7 +581,11 @@ function dropSide(event, el) {
 function markDropTarget(event, el) {
   const side = dropSide(event, el);
   clearDropTargets();
-  el.classList.add(side === 'before' ? 'drop-before' : 'drop-after');
+  el.classList.add('drop-target', side === 'before' ? 'drop-before' : 'drop-after');
+  const ph = dropPlaceholder();
+  const grid = document.getElementById('termGrid');
+  if (side === 'before') grid.insertBefore(ph, el);
+  else grid.insertBefore(ph, el.nextSibling);
   return side;
 }
 
@@ -578,6 +596,7 @@ function createPanel(session) {
   const el = document.createElement('section');
   el.className = 'term-panel';
   el.id = `panel-${id}`;
+  el.dataset.paneId = id;
   el.innerHTML = `
     <div class="term-header">
       <span class="term-title" contenteditable="true" spellcheck="false" aria-label="Fenstername">${escapeHtml(panelTitle(session))}</span>
@@ -626,10 +645,14 @@ function createPanel(session) {
   dragHandle.addEventListener('dragstart', e => {
     e.dataTransfer.setData('text/plain', id);
     e.dataTransfer.effectAllowed = 'move';
+    state.draggingId = id;
     el.classList.add('dragging');
+    document.body.classList.add('pane-dragging');
   });
   dragHandle.addEventListener('dragend', () => {
+    state.draggingId = null;
     el.classList.remove('dragging');
+    document.body.classList.remove('pane-dragging');
     clearDropTargets();
   });
   el.addEventListener('dragover', e => {
