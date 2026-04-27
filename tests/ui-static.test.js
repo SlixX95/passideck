@@ -133,8 +133,7 @@ assertIncludes(html, 'id="chromePeek"', 'hidden topbar needs restore button');
 assertNotIncludes(html, 'PassiDeck</div>', 'topbar codename/logo text should not be visible');
 
 /* Grid Picker */
-assertIncludes(html, 'id="gridPickerToggle"', 'layout picker toggle button required');
-assertIncludes(html, 'id="gridPickerPopup"', 'grid picker popup container required');
+assertIncludes(html, 'id="gridPickerInline"', 'inline grid picker container required in topbar');
 assertIncludes(app, 'function buildGridPicker', 'grid picker must build visual layout options');
 assertIncludes(app, 'function gridSvg', 'grid picker must generate SVG grid icons');
 

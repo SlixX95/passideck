@@ -119,17 +119,17 @@ function gridSvg(cols, rows, w = 14, h = 14) {
 }
 
 function buildGridPicker() {
-  const container = document.querySelector('.grid-picker-grid');
+  const container = document.getElementById('gridPickerInline');
   if (!container) return;
   container.innerHTML = '';
   for (const layout of LAYOUTS) {
     const [cols, rows] = layout.split('x').map(Number);
-    const item = document.createElement('div');
+    const item = document.createElement('button');
     item.className = 'grid-picker-item';
     item.dataset.layout = layout;
     item.title = `${cols}×${rows}`;
     item.innerHTML = gridSvg(cols, rows);
-    item.onclick = () => { setLayout(layout); toggleGridPicker(false); };
+    item.onclick = () => { setLayout(layout); updateGridPickerActive(); };
     container.appendChild(item);
   }
   updateGridPickerActive();
@@ -139,20 +139,6 @@ function updateGridPickerActive() {
   document.querySelectorAll('.grid-picker-item').forEach(el => {
     el.classList.toggle('active', el.dataset.layout === state.activeLayout);
   });
-  const icon = document.getElementById('gridPickerIcon');
-  if (icon) {
-    const [cols, rows] = state.activeLayout.split('x').map(Number);
-    icon.outerHTML = gridSvg(cols, rows, 16, 16).replace(/width="24" height="24"/, 'width="16" height="16" id="gridPickerIcon"');
-  }
-}
-
-function toggleGridPicker(force) {
-  const popup = document.getElementById('gridPickerPopup');
-  const btn = document.getElementById('gridPickerToggle');
-  if (!popup || !btn) return;
-  const show = force !== undefined ? force : popup.hidden;
-  popup.hidden = !show;
-  btn.classList.toggle('active', show);
 }
 
 /* ── Font Size ── */
@@ -1053,12 +1039,6 @@ function escapeHtml(str) {
   return String(str).replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 }
 
-document.getElementById('gridPickerToggle').onclick = () => toggleGridPicker();
-document.addEventListener('click', e => {
-  const popup = document.getElementById('gridPickerPopup');
-  const btn = document.getElementById('gridPickerToggle');
-  if (popup && !popup.hidden && !popup.contains(e.target) && e.target !== btn) toggleGridPicker(false);
-});
 document.querySelectorAll('[data-command]').forEach(btn => btn.onclick = () => launch(btn.dataset.command));
 document.getElementById('settingsToggle').onclick = () => {
   const panel = document.getElementById('settingsPanel');
@@ -1083,8 +1063,6 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) saveA
 document.addEventListener('keydown', e => {
   const key = e.key.toLowerCase();
   if (e.key === 'Escape') {
-    const gp = document.getElementById('gridPickerPopup');
-    if (gp && !gp.hidden) { toggleGridPicker(false); return; }
     if (!document.getElementById('settingsPanel').hidden) document.getElementById('settingsPanel').hidden = true;
   }
   if (e.altKey && /^[1-9]$/.test(e.key)) {
