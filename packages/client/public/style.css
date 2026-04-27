@@ -105,10 +105,13 @@ button, select {
 .layout-picker-btn:hover { color: var(--tg-text); background: var(--tg-surface-hover); }
 .layout-picker-btn.active { color: var(--tg-accent); }
 
+.topbar-center.layouts {
+  overflow: visible;
+}
 .grid-picker-popup {
-  position: fixed;
-  top: auto;
-  left: auto;
+  position: absolute;
+  top: 100%;
+  right: 0;
   z-index: 60;
   background: var(--tg-surface);
   border: 1px solid var(--tg-border);
