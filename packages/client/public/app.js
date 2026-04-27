@@ -1008,7 +1008,7 @@ function renderSwitcher() {
     if (id === state.activeId) btn.classList.add('active');
     if (entry.el.classList.contains('exited')) btn.classList.add('exited');
     btn.title = `Alt+${idx + 1} · ${panelTitle(entry.session)}`;
-    btn.innerHTML = `<span>${idx + 1}</span><span class="switcher-title">${escapeHtml(panelTitle(entry.session))}</span>`;
+    btn.innerHTML = `<span class="switcher-title">${escapeHtml(panelTitle(entry.session))}</span>`;
     btn.onclick = () => selectPanel(id);
     root.appendChild(btn);
   });

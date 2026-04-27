@@ -66,13 +66,8 @@ button, select { font: inherit; }
 .command-left, .command-right { flex: 0 0 auto; }
 .command-center { overflow: hidden; position: relative; }
 .command-center::before, .command-center::after {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 18px;
-  z-index: 2;
-  pointer-events: none;
+  content: none;
+  display: none;
 }
 .command-center::before { left: 0; background: linear-gradient(90deg, var(--tg-surface), transparent); }
 .command-center::after { right: 0; background: linear-gradient(270deg, var(--tg-surface), transparent); }
@@ -100,17 +95,20 @@ button, select { font: inherit; }
   display: flex;
   gap: 3px;
   min-width: 0;
-  overflow: hidden;
-  padding: 0 18px 0 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0;
+  scrollbar-width: none;
 }
+.switcher-grid::-webkit-scrollbar { display: none; }
 .switcher-btn {
-  min-width: 56px;
-  max-width: 94px;
-  padding: 0 7px;
+  min-width: 72px;
+  max-width: 132px;
+  padding: 0 9px;
   cursor: pointer;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
 }
 .switcher-btn .switcher-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .switcher-btn:hover { color: var(--tg-accent); border-color: var(--tg-accent-dim); }
@@ -452,25 +450,29 @@ body.pane-dragging { cursor: grabbing; user-select: none; }
 .chrome-peek {
   position: fixed;
   top: 50%;
-  right: 0;
+  right: 2px;
   transform: translateY(-50%);
   z-index: 2147483647;
   display: none;
-  height: 54px;
-  min-width: 28px;
-  padding: 0 6px;
-  border: 1px solid var(--tg-accent);
-  border-right: 0;
+  height: 64px;
+  min-width: 34px;
+  padding: 0 8px;
+  border: 2px solid var(--tg-accent);
   border-radius: 0;
-  background: rgba(2,5,5,.96);
-  color: var(--tg-accent);
-  font: 11px var(--tg-mono);
+  background: color-mix(in srgb, var(--tg-bg) 82%, var(--tg-accent) 18%);
+  color: var(--tg-text-bright);
+  font: 800 12px var(--tg-mono);
   writing-mode: vertical-rl;
   text-orientation: mixed;
   letter-spacing: .08em;
   cursor: pointer;
   pointer-events: auto;
-  box-shadow: 0 0 18px color-mix(in srgb, var(--tg-accent) 22%, transparent);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--tg-accent) 22%, transparent), 0 0 0 3px rgba(0,0,0,.85);
+}
+.chrome-peek:hover, .chrome-peek:focus-visible {
+  background: var(--tg-accent);
+  color: var(--tg-bg);
+  outline: 2px solid var(--tg-text-bright);
 }
 body.chrome-hidden .chrome-peek { display: block; }
 body.chrome-hidden .settings-panel { display: none !important; }
