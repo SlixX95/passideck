@@ -173,6 +173,36 @@ function setFontSize(size, opts = {}) {
 }
 
 /* ── Minimize / Restore ── */
+function getVisibleCount() {
+  return state.sessions.size - state.minimized.size;
+}
+
+function getCurrentSlotCount() {
+  return LAYOUT_SLOTS[state.activeLayout] || 1;
+}
+
+function smartRestorePanel(id) {
+  const slotCount = getCurrentSlotCount();
+  const visible = getVisibleCount();
+  if (visible < slotCount) {
+    // Platz da → einfach restore
+    restorePanel(id);
+  } else if (state.activeId && state.activeId !== id) {
+    // Kein Platz → aktives Pane minimieren, dieses öffnen
+    minimizePanel(state.activeId);
+    restorePanel(id);
+  } else {
+    // Fallback: erstes sichtbares Pane minimieren
+    const firstVisible = state.order.find(oid => state.sessions.has(oid) && !state.minimized.has(oid));
+    if (firstVisible) {
+      minimizePanel(firstVisible);
+      restorePanel(id);
+    } else {
+      restorePanel(id);
+    }
+  }
+}
+
 function minimizePanel(id) {
   const entry = state.sessions.get(id);
   if (!entry) return;
@@ -211,9 +241,15 @@ function updateMinimizedBar() {
     const tab = document.createElement('div');
     tab.className = 'minimized-tab';
     if (id === state.activeId) tab.classList.add('active');
-    tab.innerHTML = `<span class="min-title">${escapeHtml(panelTitle(entry.session))}</span><button class="restore-btn" title="Wiederherstellen">□</button>`;
-    tab.querySelector('.min-title').onclick = (e) => { e.stopPropagation(); restorePanel(id); };
-    tab.querySelector('.restore-btn').onclick = (e) => { e.stopPropagation(); restorePanel(id); };
+    // Tooltip: zeigt was passiert wenn kein Platz
+    const willReplace = getVisibleCount() >= getCurrentSlotCount();
+    const replaceTarget = state.activeId && state.activeId !== id ? panelTitle(state.sessions.get(state.activeId)?.session) : null;
+    const tip = willReplace
+      ? `Ersetzt: ${replaceTarget || 'aktives Fenster'}`
+      : 'Wiederherstellen';
+    tab.innerHTML = `<span class="min-title">${escapeHtml(panelTitle(entry.session))}</span><button class="restore-btn" title="${tip}">□</button>`;
+    tab.querySelector('.min-title').onclick = (e) => { e.stopPropagation(); smartRestorePanel(id); };
+    tab.querySelector('.restore-btn').onclick = (e) => { e.stopPropagation(); smartRestorePanel(id); };
     tabs.appendChild(tab);
   }
 }
