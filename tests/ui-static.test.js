@@ -102,10 +102,18 @@ assertIncludes(app, 'bare leaked OSC color report fragments', 'old visible rgb j
 assertIncludes(app, 'semicolons/ESC stripped to 101110...3R', 'binary-looking 10/11/3R leak must be documented/filtered');
 assertIncludes(app, 'sanitizeTerminalInput(data)', 'stripped terminal replies must be filtered before PTY');
 assertIncludes(app, 'writeTerminalOutput(term, msg.data, () => scheduleTerminalSnapshot(id))', 'stripped terminal replies must be filtered on live output');
+assertIncludes(app, 'function startPointerDrag', 'pane drag must use pointer events, not depend on fragile browser native DnD');
+assertIncludes(app, "dragHandle.addEventListener('pointerdown'", 'drag handle must be directly grabbable by pointerdown');
+assertIncludes(app, 'function markDropTargetAt', 'pointer drag must calculate target by viewport coordinates');
+assertIncludes(app, 'nearestDropPanel', 'pointer drag must work even when not exactly over a child element');
+assertIncludes(app, 'Fenster verschieben', 'drag handle label must explain move behavior');
+assertIncludes(app, '>✥</span>', 'drag handle icon must not be confusing dot grip');
 assertIncludes(app, 'el.dataset.paneId = id;', 'pane element must expose stable id for drag/drop diagnostics');
 assertIncludes(app, 'class="term-drag-handle"', 'pane header needs a free drag handle separate from editable title and X');
 assertIncludes(app, 'drop-before', 'drag target must show before-placement indicator');
 assertIncludes(app, 'drop-after', 'drag target must show after-placement indicator');
+assertIncludes(app, 'function placeDropPlaceholder', 'drop preview must be positioned as overlay so it does not reflow the grid while dragging');
+assertIncludes(app, "ph.querySelector('span').textContent = side === 'before' ? 'Davor ablegen' : 'Danach ablegen';", 'drop preview must clearly distinguish before/after target');
 assertIncludes(app, 'function dropPlaceholder', 'drag reorder must show a full slot placeholder, not only a thin line');
 assertIncludes(app, 'id = \'dropPlaceholder\'', 'drag reorder must insert a visible target slot');
 assertIncludes(app, 'return new Set(ids.slice(0, cap));', 'layout visibility must preserve pane order instead of prioritizing active pane');
@@ -115,9 +123,13 @@ assertIncludes(app, 'function movePanel', 'drag reorder must support logical bef
 assertIncludes(app, 'savePanePrefs();', 'reordered windows must persist across reload');
 
 assertIncludes(css, '.term-panel.dragging', 'dragging visual state required');
+assertIncludes(css, 'body.pane-dragging', 'whole page must show grabbing cursor during pointer drag');
+assertIncludes(css, 'touch-action: none;', 'drag handle must not lose pointer gestures to browser panning/selection');
+assertIncludes(css, 'flex: 0 0 28px;', 'drag handle must be large enough to grab reliably');
 assertIncludes(css, '.term-panel.drop-before::before', 'drop-before indicator required');
 assertIncludes(css, '.term-panel.drop-after::after', 'drop-after indicator required');
 assertIncludes(css, '.drop-placeholder', 'drag target slot preview required');
+assertIncludes(css, 'position: absolute;', 'drop placeholder must be overlay-only and not alter grid cell geometry');
 assertIncludes(css, 'border: 2px dashed var(--tg-accent);', 'drop placeholder must be visually obvious');
 assertIncludes(css, '.term-panel.drop-target', 'drag target pane must be highlighted');
 assertIncludes(css, '.term-drag-handle', 'drag handle styling required');

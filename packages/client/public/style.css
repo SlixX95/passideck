@@ -227,6 +227,7 @@ button, select {
   padding: 2px;
   overflow: hidden;
   min-height: 0;
+  position: relative;
 }
 .layout-1x1 { grid-template-columns: 1fr; grid-template-rows: 1fr; }
 .layout-1x2 { grid-template-columns: 1fr; grid-template-rows: repeat(2, minmax(0, 1fr)); }
@@ -263,7 +264,8 @@ button, select {
   position: relative;
 }
 .term-panel.active { border-color: var(--tg-accent); box-shadow: inset 0 0 0 1px rgba(122,162,247,.22); }
-.term-panel.dragging { opacity: .42; border-color: var(--tg-accent); transform: scale(.985); }
+.term-panel.dragging { opacity: .42; border-color: var(--tg-accent); transform: scale(.985); pointer-events: none; }
+body.pane-dragging { cursor: grabbing; user-select: none; }
 .term-panel.drop-target {
   border-color: var(--tg-accent);
   box-shadow: inset 0 0 0 1px var(--tg-accent-dim), 0 0 18px rgba(122,162,247,.18);
@@ -278,16 +280,19 @@ button, select {
   pointer-events: none;
 }
 .drop-placeholder {
+  position: absolute;
+  z-index: 25;
   min-width: 0;
   min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   border: 2px dashed var(--tg-accent);
-  background: rgba(122,162,247,.10);
+  background: rgba(122,162,247,.16);
   color: var(--tg-accent);
   font: 12px var(--tg-mono);
-  box-shadow: inset 0 0 24px rgba(122,162,247,.12);
+  box-shadow: inset 0 0 24px rgba(122,162,247,.18), 0 0 22px rgba(122,162,247,.24);
+  pointer-events: none;
 }
 .drop-placeholder span { opacity: .9; }
 .term-panel.exited { opacity: .55; }
@@ -306,22 +311,26 @@ button, select {
   overflow: visible;
 }
 .term-drag-handle {
-  flex: 0 0 18px;
+  flex: 0 0 28px;
   align-self: stretch;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   color: var(--tg-text-dim);
-  border-left: 1px solid transparent;
-  border-right: 1px solid transparent;
+  border-left: 1px solid var(--tg-border);
+  border-right: 1px solid var(--tg-border);
   cursor: grab;
   user-select: none;
+  touch-action: none;
   font-family: var(--tg-mono);
-  letter-spacing: -3px;
+  font-size: 13px;
+  line-height: 18px;
+  letter-spacing: 0;
   pointer-events: auto;
+  background: var(--tg-surface);
 }
-.term-drag-handle:hover { color: var(--tg-accent); background: var(--tg-surface-hover); border-color: var(--tg-border); }
-.term-drag-handle:active { cursor: grabbing; }
+.term-drag-handle:hover, .term-drag-handle:focus-visible { color: var(--tg-accent); background: var(--tg-surface-hover); outline: 1px solid var(--tg-accent-dim); }
+.term-drag-handle:active { cursor: grabbing; color: var(--tg-accent); }
 .term-title {
   flex: 1 1 auto;
   font-weight: 600;

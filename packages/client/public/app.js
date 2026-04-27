@@ -39,6 +39,7 @@ const state = {
   uploadBusy: false,
   clipboardPasteArmed: false,
   clipboardPasteTimer: null,
+  pointerDrag: null,
   panePrefs: { titles: {}, order: [] }
 };
 
@@ -571,22 +572,115 @@ function dropPlaceholder() {
   return el;
 }
 
-function dropSide(event, el) {
+function placeDropPlaceholder(target, side) {
+  const grid = document.getElementById('termGrid');
+  const ph = dropPlaceholder();
+  const gridRect = grid.getBoundingClientRect();
+  const rect = target.getBoundingClientRect();
+  const horizontal = rect.width >= rect.height;
+  const left = rect.left - gridRect.left + grid.scrollLeft;
+  const top = rect.top - gridRect.top + grid.scrollTop;
+  ph.classList.toggle('drop-before-slot', side === 'before');
+  ph.classList.toggle('drop-after-slot', side === 'after');
+  ph.querySelector('span').textContent = side === 'before' ? 'Davor ablegen' : 'Danach ablegen';
+  ph.style.left = `${left + (horizontal && side === 'after' ? rect.width / 2 : 0)}px`;
+  ph.style.top = `${top + (!horizontal && side === 'after' ? rect.height / 2 : 0)}px`;
+  ph.style.width = `${horizontal ? rect.width / 2 : rect.width}px`;
+  ph.style.height = `${horizontal ? rect.height : rect.height / 2}px`;
+  if (ph.parentElement !== grid) grid.appendChild(ph);
+  return ph;
+}
+
+function dropSideFromPoint(x, y, el) {
   const rect = el.getBoundingClientRect();
   const horizontal = rect.width >= rect.height;
   const midpoint = horizontal ? rect.left + rect.width / 2 : rect.top + rect.height / 2;
-  return (horizontal ? event.clientX : event.clientY) < midpoint ? 'before' : 'after';
+  return (horizontal ? x : y) < midpoint ? 'before' : 'after';
+}
+
+function dropSide(event, el) {
+  return dropSideFromPoint(event.clientX, event.clientY, el);
+}
+
+function visibleDropPanels(sourceId) {
+  return [...document.querySelectorAll('#termGrid .term-panel:not(.layout-hidden)')]
+    .filter(panel => panel.dataset.paneId && panel.dataset.paneId !== sourceId);
+}
+
+function nearestDropPanel(x, y, sourceId) {
+  const panels = visibleDropPanels(sourceId);
+  let best = null;
+  let bestDistance = Infinity;
+  for (const panel of panels) {
+    const rect = panel.getBoundingClientRect();
+    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return panel;
+    const dx = Math.max(rect.left - x, 0, x - rect.right);
+    const dy = Math.max(rect.top - y, 0, y - rect.bottom);
+    const distance = dx * dx + dy * dy;
+    if (distance < bestDistance) {
+      best = panel;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+function markDropTargetAt(x, y, sourceId) {
+  const target = nearestDropPanel(x, y, sourceId);
+  if (!target) {
+    clearDropTargets();
+    return null;
+  }
+  const side = dropSideFromPoint(x, y, target);
+  clearDropTargets();
+  target.classList.add('drop-target', side === 'before' ? 'drop-before' : 'drop-after');
+  placeDropPlaceholder(target, side);
+  return { targetId: target.dataset.paneId, side };
 }
 
 function markDropTarget(event, el) {
-  const side = dropSide(event, el);
+  return markDropTargetAt(event.clientX, event.clientY, state.draggingId)?.side || dropSide(event, el);
+}
+
+function endPointerDrag(event) {
+  const drag = state.pointerDrag;
+  if (!drag) return;
+  event?.preventDefault?.();
+  const { sourceId, targetId, side, handle } = drag;
+  state.pointerDrag = null;
+  state.draggingId = null;
+  document.removeEventListener('pointermove', updatePointerDrag, true);
+  document.removeEventListener('pointerup', endPointerDrag, true);
+  document.removeEventListener('pointercancel', endPointerDrag, true);
+  handle?.releasePointerCapture?.(event?.pointerId);
+  document.getElementById(`panel-${sourceId}`)?.classList.remove('dragging');
+  document.body.classList.remove('pane-dragging');
   clearDropTargets();
-  el.classList.add('drop-target', side === 'before' ? 'drop-before' : 'drop-after');
-  const ph = dropPlaceholder();
-  const grid = document.getElementById('termGrid');
-  if (side === 'before') grid.insertBefore(ph, el);
-  else grid.insertBefore(ph, el.nextSibling);
-  return side;
+  if (targetId && targetId !== sourceId) movePanel(sourceId, targetId, side || 'after');
+}
+
+function updatePointerDrag(event) {
+  const drag = state.pointerDrag;
+  if (!drag) return;
+  event.preventDefault();
+  const next = markDropTargetAt(event.clientX, event.clientY, drag.sourceId);
+  drag.targetId = next?.targetId || null;
+  drag.side = next?.side || null;
+}
+
+function startPointerDrag(id, handle, event) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  state.pointerDrag = { sourceId: id, targetId: null, side: null, handle };
+  state.draggingId = id;
+  handle.setPointerCapture?.(event.pointerId);
+  document.getElementById(`panel-${id}`)?.classList.add('dragging');
+  document.body.classList.add('pane-dragging');
+  document.addEventListener('pointermove', updatePointerDrag, true);
+  document.addEventListener('pointerup', endPointerDrag, true);
+  document.addEventListener('pointercancel', endPointerDrag, true);
+  updatePointerDrag(event);
 }
 
 function createPanel(session) {
@@ -600,7 +694,7 @@ function createPanel(session) {
   el.innerHTML = `
     <div class="term-header">
       <span class="term-title" contenteditable="true" spellcheck="false" aria-label="Fenstername">${escapeHtml(panelTitle(session))}</span>
-      <span class="term-drag-handle" draggable="true" title="Fenster ziehen" aria-label="Fenster ziehen">⋮⋮</span>
+      <span class="term-drag-handle" role="button" tabindex="0" title="Fenster verschieben" aria-label="Fenster verschieben">✥</span>
       <div class="term-actions">
         <button class="minimize" title="Minimieren">−</button>
         <button class="danger" title="Schließen">×</button>
@@ -642,7 +736,17 @@ function createPanel(session) {
   closeBtn.addEventListener('mouseup', e => e.stopPropagation());
   // Only select panel when clicking on terminal area, not header (buttons/title/drag)
   el.querySelector('.terminal').addEventListener('mousedown', () => selectPanel(id));
+  dragHandle.addEventListener('pointerdown', e => startPointerDrag(id, dragHandle, e));
+  dragHandle.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      dragHandle.title = 'Zum Verschieben gedrückt halten und ziehen';
+    }
+  });
+  // Native HTML5 drag remains as a fallback for synthetic tests/older browsers.
+  dragHandle.draggable = true;
   dragHandle.addEventListener('dragstart', e => {
+    if (state.pointerDrag) return;
     e.dataTransfer.setData('text/plain', id);
     e.dataTransfer.effectAllowed = 'move';
     state.draggingId = id;
