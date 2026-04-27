@@ -823,6 +823,14 @@ async function launch(command) {
   state.launchBusy = true;
   try {
     const cmd = String(command || '').trim() || '/bin/bash';
+    // If grid is full and user has an active selection, minimize it first
+    // so the new shell replaces it at the same position
+    const wasActive = state.activeId;
+    const slots = getCurrentSlotCount();
+    const visible = getVisibleCount();
+    if (visible >= slots && wasActive) {
+      minimizePanel(wasActive);
+    }
     const session = await api('POST', '/api/sessions', { command: cmd, label: cmd });
     createPanel(session);
     autoMinimizeExcess();
