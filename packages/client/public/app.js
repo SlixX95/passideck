@@ -187,7 +187,7 @@ function setFontSize(size, opts = {}) {
 
 /* ── Minimize / Restore ── */
 function getVisibleCount() {
-  return state.sessions.size - state.minimized.size;
+  return state.order.filter(id => state.sessions.has(id) && !state.minimized.has(id) && !state.sessions.get(id).el.classList.contains('layout-hidden')).length;
 }
 
 function getCurrentSlotCount() {
