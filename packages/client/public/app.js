@@ -49,7 +49,7 @@ const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v1:';
 const TERM_SNAPSHOT_MAX_LINES = 20000;
 const TERM_SNAPSHOT_MAX_CHARS = 1024 * 1024;
 
-function openCloseModalFor(id) {
+function requestClosePanel(id) {
   const entry = state.sessions.get(id);
   if (!entry) return;
   if (isSessionExited(entry.session)) {
@@ -58,29 +58,6 @@ function openCloseModalFor(id) {
     showCloseConfirm(id, panelTitle(entry.session));
   }
 }
-
-let globalActionGuardInstalled = false;
-function installGlobalActionGuards() {
-  if (globalActionGuardInstalled) return;
-  globalActionGuardInstalled = true;
-  const handler = e => {
-    const btn = e.target?.closest?.('button.danger, button.minimize');
-    if (!btn) return;
-    const id = btn.dataset.paneId;
-    if (!id) return;
-    e.preventDefault();
-    e.stopPropagation();
-    openCloseModalFor(id);
-  };
-  document.addEventListener('pointerdown', handler, true);
-  document.addEventListener('mousedown', handler, true);
-  document.addEventListener('click', handler, true);
-}
-
-// Debug: track all close button interactions
-document.addEventListener('pointerdown', e => {
-  if (e.target.closest('button.danger')) console.log('[CLOSE] pointerdown on', e.target.className, 'paneId:', e.target.dataset.paneId);
-}, true);
 
 async function api(method, path, body) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
@@ -616,22 +593,14 @@ function createPanel(session) {
     updateMinimizedBar();
   });
   titleEl.addEventListener('mousedown', e => e.stopPropagation());
-  minBtn.onclick = () => minimizePanel(id);
+  minBtn.onclick = e => { e.stopPropagation(); minimizePanel(id); };
+  minBtn.addEventListener('pointerdown', e => e.stopPropagation());
   minBtn.addEventListener('mousedown', e => e.stopPropagation());
   minBtn.addEventListener('mouseup', e => e.stopPropagation());
-  minBtn.addEventListener('pointerdown', e => e.stopPropagation());
-  closeBtn.onclick = () => {
-    if (isSessionExited(session)) {
-      closePanel(id);
-    } else {
-      showCloseConfirm(id, panelTitle(session));
-    }
-  };
-  // pointerdown: prevent focus/selection only, show modal AFTER click completes
-  closeBtn.addEventListener('pointerdown', e => {
-    e.preventDefault();
-    e.stopPropagation();
-  }, true); // capture phase — fires first, prevents terminal focus
+  closeBtn.onclick = e => { e.stopPropagation(); requestClosePanel(id); };
+  closeBtn.addEventListener('pointerdown', e => e.stopPropagation());
+  closeBtn.addEventListener('mousedown', e => e.stopPropagation());
+  closeBtn.addEventListener('mouseup', e => e.stopPropagation());
   // Only select panel when clicking on terminal area, not header (buttons/title/drag)
   el.querySelector('.terminal').addEventListener('mousedown', () => selectPanel(id));
   dragHandle.addEventListener('dragstart', e => {
@@ -1198,7 +1167,6 @@ async function init() {
 
   setTheme(ui?.theme || 'blue', { persist: false });
   setFontSize(state.fontSize, { persist: false });
-  installGlobalActionGuards();
   buildGridPicker();
   sessions.forEach(createPanel);
   restorePanelOrder();
