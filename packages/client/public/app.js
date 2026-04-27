@@ -556,8 +556,8 @@ function panelTitle(session) {
 }
 
 function clearDropTargets() {
-  document.querySelectorAll('.term-panel.drop-before, .term-panel.drop-after, .term-panel.drop-target')
-    .forEach(panel => panel.classList.remove('drop-before', 'drop-after', 'drop-target'));
+  document.querySelectorAll('.term-panel.drop-target')
+    .forEach(panel => panel.classList.remove('drop-target'));
   document.getElementById('dropPlaceholder')?.remove();
 }
 
@@ -572,34 +572,20 @@ function dropPlaceholder() {
   return el;
 }
 
-function placeDropPlaceholder(target, side) {
+function placeDropPlaceholder(target) {
   const grid = document.getElementById('termGrid');
   const ph = dropPlaceholder();
   const gridRect = grid.getBoundingClientRect();
   const rect = target.getBoundingClientRect();
-  const horizontal = rect.width >= rect.height;
   const left = rect.left - gridRect.left + grid.scrollLeft;
   const top = rect.top - gridRect.top + grid.scrollTop;
-  ph.classList.toggle('drop-before-slot', side === 'before');
-  ph.classList.toggle('drop-after-slot', side === 'after');
-  ph.querySelector('span').textContent = side === 'before' ? 'Davor ablegen' : 'Danach ablegen';
-  ph.style.left = `${left + (horizontal && side === 'after' ? rect.width / 2 : 0)}px`;
-  ph.style.top = `${top + (!horizontal && side === 'after' ? rect.height / 2 : 0)}px`;
-  ph.style.width = `${horizontal ? rect.width / 2 : rect.width}px`;
-  ph.style.height = `${horizontal ? rect.height : rect.height / 2}px`;
+  ph.querySelector('span').textContent = 'Hier tauschen';
+  ph.style.left = `${left}px`;
+  ph.style.top = `${top}px`;
+  ph.style.width = `${rect.width}px`;
+  ph.style.height = `${rect.height}px`;
   if (ph.parentElement !== grid) grid.appendChild(ph);
   return ph;
-}
-
-function dropSideFromPoint(x, y, el) {
-  const rect = el.getBoundingClientRect();
-  const horizontal = rect.width >= rect.height;
-  const midpoint = horizontal ? rect.left + rect.width / 2 : rect.top + rect.height / 2;
-  return (horizontal ? x : y) < midpoint ? 'before' : 'after';
-}
-
-function dropSide(event, el) {
-  return dropSideFromPoint(event.clientX, event.clientY, el);
 }
 
 function visibleDropPanels(sourceId) {
@@ -631,22 +617,22 @@ function markDropTargetAt(x, y, sourceId) {
     clearDropTargets();
     return null;
   }
-  const side = dropSideFromPoint(x, y, target);
   clearDropTargets();
-  target.classList.add('drop-target', side === 'before' ? 'drop-before' : 'drop-after');
-  placeDropPlaceholder(target, side);
-  return { targetId: target.dataset.paneId, side };
+  target.classList.add('drop-target');
+  placeDropPlaceholder(target);
+  return { targetId: target.dataset.paneId };
 }
 
 function markDropTarget(event, el) {
-  return markDropTargetAt(event.clientX, event.clientY, state.draggingId)?.side || dropSide(event, el);
+  const next = markDropTargetAt(event.clientX, event.clientY, state.draggingId);
+  return next?.targetId ? 'swap' : 'none';
 }
 
 function endPointerDrag(event) {
   const drag = state.pointerDrag;
   if (!drag) return;
   event?.preventDefault?.();
-  const { sourceId, targetId, side, handle } = drag;
+  const { sourceId, targetId, handle } = drag;
   state.pointerDrag = null;
   state.draggingId = null;
   document.removeEventListener('pointermove', updatePointerDrag, true);
@@ -656,7 +642,7 @@ function endPointerDrag(event) {
   document.getElementById(`panel-${sourceId}`)?.classList.remove('dragging');
   document.body.classList.remove('pane-dragging');
   clearDropTargets();
-  if (targetId && targetId !== sourceId) movePanel(sourceId, targetId, side || 'after');
+  if (targetId && targetId !== sourceId) swapPanels(sourceId, targetId);
 }
 
 function updatePointerDrag(event) {
@@ -665,7 +651,7 @@ function updatePointerDrag(event) {
   event.preventDefault();
   const next = markDropTargetAt(event.clientX, event.clientY, drag.sourceId);
   drag.targetId = next?.targetId || null;
-  drag.side = next?.side || null;
+  drag.side = null;
 }
 
 function startPointerDrag(id, handle, event) {
@@ -765,14 +751,14 @@ function createPanel(session) {
     markDropTarget(e, el);
   });
   el.addEventListener('dragleave', e => {
-    if (!el.contains(e.relatedTarget)) el.classList.remove('drop-before', 'drop-after');
+    if (!el.contains(e.relatedTarget)) el.classList.remove('drop-target');
   });
   el.addEventListener('drop', e => {
     e.preventDefault();
     const sourceId = e.dataTransfer.getData('text/plain');
-    const side = markDropTarget(e, el);
+    markDropTarget(e, el);
     clearDropTargets();
-    movePanel(sourceId, id, side);
+    swapPanels(sourceId, id);
   });
 
   const term = new Terminal({
@@ -859,6 +845,18 @@ function restorePanelOrder() {
   const missing = state.order.filter(id => !preferred.includes(id));
   state.order = [...preferred, ...missing];
   applyPanelOrder();
+}
+
+function swapPanels(sourceId, targetId) {
+  if (!sourceId || !targetId || sourceId === targetId) return;
+  if (!state.sessions.has(sourceId) || !state.sessions.has(targetId)) return;
+  const sourceIndex = state.order.indexOf(sourceId);
+  const targetIndex = state.order.indexOf(targetId);
+  if (sourceIndex < 0 || targetIndex < 0) return;
+  [state.order[sourceIndex], state.order[targetIndex]] = [state.order[targetIndex], state.order[sourceIndex]];
+  applyPanelOrder();
+  selectPanel(sourceId, { persist: false });
+  savePanePrefs();
 }
 
 function movePanel(sourceId, targetId, side = 'before') {

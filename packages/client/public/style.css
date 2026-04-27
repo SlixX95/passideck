@@ -268,16 +268,7 @@ button, select {
 body.pane-dragging { cursor: grabbing; user-select: none; }
 .term-panel.drop-target {
   border-color: var(--tg-accent);
-  box-shadow: inset 0 0 0 1px var(--tg-accent-dim), 0 0 18px rgba(122,162,247,.18);
-}
-.term-panel.drop-before::before, .term-panel.drop-after::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border: 2px solid var(--tg-accent);
-  background: rgba(122,162,247,.08);
-  z-index: 20;
-  pointer-events: none;
+  box-shadow: inset 0 0 0 2px var(--tg-accent), 0 0 18px rgba(122,162,247,.22);
 }
 .drop-placeholder {
   position: absolute;
