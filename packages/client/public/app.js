@@ -518,7 +518,11 @@ function customTitle(session) {
 }
 
 function panelTitle(session) {
-  return customTitle(session);
+  const entry = state.sessions.get(session.id);
+  const custom = state.panePrefs.titles?.[session.id];
+  if (custom) return custom;
+  if (entry?.autoTitle) return entry.autoTitle;
+  return defaultTitle(session);
 }
 
 function clearDropTargets() {
@@ -627,6 +631,24 @@ function createPanel(session) {
   const termEl = el.querySelector('.terminal');
   term.open(termEl);
   termEl.addEventListener('contextmenu', e => handleTerminalContextMenu(e, id));
+
+  // Auto-detect terminal title (vim, Codex, Hermes TUI, etc.)
+  term.onTitleChange(title => {
+    const entry = state.sessions.get(id);
+    if (!entry) return;
+    // Ignore generic/empty titles
+    if (!title || /^(\s*|bash$|zsh$|\/bin\/bash$|\/bin\/zsh$)/.test(title)) return;
+    // Only update if user hasn't set a custom title
+    const custom = state.panePrefs.titles?.[id];
+    entry.autoTitle = title;
+    if (!custom) {
+      const titleEl = el.querySelector('.term-title');
+      if (titleEl && document.activeElement !== titleEl) {
+        titleEl.textContent = title;
+      }
+      updateMinimizedBar();
+    }
+  });
 
   const ro = new ResizeObserver(() => fitAll());
   ro.observe(el.querySelector('.terminal'));
