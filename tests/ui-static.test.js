@@ -19,7 +19,7 @@ function assertNotIncludes(haystack, needle, message) {
 assertIncludes(app, 'const TERM_SNAPSHOT_PREFIX', 'terminal contents must be cached client-side for reload');
 assertIncludes(app, 'function terminalSnapshot', 'terminal buffer must be captured before reload');
 assertIncludes(app, 'entry.serialize?.serialize', 'reload snapshot must preserve ANSI SGR/colors via xterm serialize addon');
-assertIncludes(app, 'const TERM_SNAPSHOT_MAX_LINES = 5000;', 'reload snapshot must keep much deeper scrollback');
+assertIncludes(app, 'const TERM_SNAPSHOT_MAX_LINES = 20000;', 'reload snapshot must keep much deeper scrollback');
 assertIncludes(app, 'const TERM_SNAPSHOT_MAX_CHARS = 1024 * 1024;', 'reload snapshot must allow about 1 MiB per pane');
 assertIncludes(app, 'entry.serialize?.serialize({ scrollback: TERM_SNAPSHOT_MAX_LINES })', 'serialize addon must capture configured scrollback, not just viewport rows');
 assertIncludes(app, 'text = text.slice(-Math.floor(text.length * 0.6))', 'snapshot save must degrade gracefully when localStorage quota is full');

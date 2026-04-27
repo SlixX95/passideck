@@ -46,7 +46,7 @@ const PANE_PREFS_KEY = 'passideck:pane-prefs:v1';
 const CHROME_PREF_KEY = 'passideck:chrome-hidden:v1';
 const FONT_SIZE_KEY = 'passideck:font-size:v1';
 const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v1:';
-const TERM_SNAPSHOT_MAX_LINES = 5000;
+const TERM_SNAPSHOT_MAX_LINES = 20000;
 const TERM_SNAPSHOT_MAX_CHARS = 1024 * 1024;
 
 async function api(method, path, body) {
@@ -616,7 +616,7 @@ function createPanel(session) {
     fontSize: state.fontSize,
     lineHeight: 1.2,
     cursorBlink: true,
-    scrollback: 5000,
+    scrollback: 20000,
     theme: THEMES[state.theme]
   });
   const fit = new FitAddon.FitAddon();
