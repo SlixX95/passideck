@@ -4,6 +4,7 @@ const { WebSocketServer } = require('ws');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const { execFileSync } = require('child_process');
 
 let pty = null;
 try { pty = require('@homebridge/node-pty-prebuilt-multiarch'); } catch {}
@@ -226,11 +227,78 @@ function splitCommand(command, shell) {
   return { file: sh, args: ['-i'], initialInput: `${cmd}\r` };
 }
 
+function tmuxName(id) {
+  return `passideck_${String(id).replace(/[^a-zA-Z0-9_]/g, '')}`;
+}
+
+function tmuxHas(name) {
+  try { execFileSync('tmux', ['has-session', '-t', name], { stdio: 'ignore' }); return true; }
+  catch { return false; }
+}
+
+function tmuxNew(name, cwd, launch) {
+  if (tmuxHas(name)) return;
+  execFileSync('tmux', ['new-session', '-d', '-s', name, '-c', cwd, launch.file, ...launch.args], { stdio: 'ignore' });
+}
+
+function tmuxKill(name) {
+  try { execFileSync('tmux', ['kill-session', '-t', name], { stdio: 'ignore' }); } catch {}
+}
+
+function attachTmux(session) {
+  if (!pty) throw new Error('PTY support not available');
+  const name = tmuxName(session.id);
+  const term = pty.spawn('tmux', ['attach-session', '-t', name], {
+    name: 'xterm-256color',
+    cols: Number(session.meta.cols) || 120,
+    rows: Number(session.meta.rows) || 30,
+    cwd: session.meta.cwd || os.homedir(),
+    env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', PASSIDECK_SESSION: session.id }
+  });
+  session.pty = term;
+  session.pid = term.pid;
+  session.tmuxName = name;
+  session.meta.status = 'active';
+  term.onData((data) => {
+    const normalized = normalizeTerminalOutput(data);
+    session.appendOutput(normalized);
+    if (session.ws?.readyState === 1) session.ws.send(JSON.stringify({ type: 'output', data: normalized }));
+  });
+  term.onExit(({ exitCode, signal }) => {
+    session.pty = null;
+    session.pid = null;
+    if (!tmuxHas(name)) {
+      session.meta.status = 'exited';
+      session.meta.exitCode = exitCode;
+      session.meta.statusDetail = `Exited ${exitCode}${signal ? ` ${signal}` : ''}`;
+      if (db && dbModule) dbModule.markSessionExited(db, session.id, exitCode, signal || '');
+      if (session.ws?.readyState === 1) session.ws.send(JSON.stringify({ type: 'exit', exitCode, signal }));
+    }
+  });
+  return term;
+}
+
+function restoreTmuxSessions(sessions) {
+  if (!db || !dbModule) return 0;
+  let n = 0;
+  for (const row of dbModule.getActiveSessions(db)) {
+    const name = tmuxName(row.id);
+    if (!tmuxHas(name)) { dbModule.markSessionExited(db, row.id, null, 'missing_tmux'); continue; }
+    const s = sessions.create({ id: row.id, command: row.command, cwd: row.cwd, label: row.label });
+    s.meta.createdAt = row.created_at || s.meta.createdAt;
+    attachTmux(s);
+    n++;
+  }
+  if (n) console.log(`[tmux] restored ${n} sessions`);
+  return n;
+}
+
 function createServer(config = loadConfig()) {
   const app = express();
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: '/ws' });
   const sessions = new SessionManager();
+  restoreTmuxSessions(sessions);
 
   app.use(express.json({ limit: '64mb' }));
   app.use('/uploads', express.static(uploadsRoot()));
@@ -278,31 +346,12 @@ function createServer(config = loadConfig()) {
     const session = sessions.create({ command: command || config.shell || '/bin/bash', cwd: resolvedCwd, label, cols, rows });
 
     try {
-      const term = pty.spawn(launch.file, launch.args, {
-        name: 'xterm-256color',
-        cols: Number(cols) || 120,
-        rows: Number(rows) || 30,
-        cwd: resolvedCwd,
-        env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', PASSIDECK_SESSION: session.id }
-      });
-      session.pty = term;
-      session.pid = term.pid;
-      session.meta.status = 'active';
-      if (db) dbModule.upsertSession(db, session);
-      term.onData((data) => {
-        const normalized = normalizeTerminalOutput(data);
-        session.appendOutput(normalized);
-        if (session.ws?.readyState === 1) session.ws.send(JSON.stringify({ type: 'output', data: normalized }));
-      });
-      term.onExit(({ exitCode, signal }) => {
-        session.meta.status = 'exited';
-        session.meta.exitCode = exitCode;
-        session.meta.statusDetail = `Exited ${exitCode}${signal ? ` ${signal}` : ''}`;
-        if (db) dbModule.markSessionExited(db, session.id, exitCode, signal || '');
-        if (session.ws?.readyState === 1) session.ws.send(JSON.stringify({ type: 'exit', exitCode, signal }));
-      });
-      if (launch.initialInput) setTimeout(() => term.write(launch.initialInput), 150);
-      console.log(`[pty] ${session.id} pid=${session.pid} command=${session.meta.command}`);
+      const name = tmuxName(session.id);
+      tmuxNew(name, resolvedCwd, launch);
+      attachTmux(session);
+      if (db && dbModule) dbModule.upsertSession(db, session);
+      if (launch.initialInput) setTimeout(() => session.pty?.write(launch.initialInput), 250);
+      console.log(`[tmux] ${session.id} attach=${session.pid} session=${name} command=${session.meta.command}`);
       res.json(session.toJSON());
     } catch (err) {
       sessions.remove(session.id);
@@ -329,8 +378,11 @@ function createServer(config = loadConfig()) {
   });
 
   app.delete('/api/sessions/:id', (req, res) => {
+    const s = sessions.get(req.params.id);
+    if (s) tmuxKill(tmuxName(s.id));
     const removed = sessions.remove(req.params.id);
     if (!removed) return res.status(404).json({ error: 'Session not found' });
+    if (db && dbModule) dbModule.markSessionExited(db, req.params.id, 0, 'closed');
     res.json({ ok: true });
   });
 
@@ -373,24 +425,8 @@ if (require.main === module) {
   const result = cleanupOldUploads();
   if (result.removed > 0) console.log(`[uploads] cleaned ${result.removed} files (${Math.round(result.bytes/1024)}KB)`);
 
-  // Cleanup stale sessions on startup
-  if (db && dbModule) {
-    const stale = dbModule.cleanupStaleSessions(db, 48);
-    if (stale > 0) console.log(`[startup] cleaned ${stale} stale DB sessions`);
-  }
-
-  // Graceful shutdown: persist sessions, then exit
   function gracefulShutdown(sig) {
-    console.log(`[shutdown] ${sig} received, persisting state...`);
-    if (db && dbModule) {
-      try {
-        dbModule.markAllActiveInterrupted(db);
-        console.log('[shutdown] all active sessions marked as interrupted in DB');
-      } catch (err) {
-        console.error('[shutdown] DB save failed:', err.message);
-      }
-    }
-    // Kill all PTYs
+    console.log(`[shutdown] ${sig} received, detaching tmux clients...`);
     for (const session of Object.values(sessions.getAll())) {
       try { process.kill(session.pid, 'SIGTERM'); } catch {}
     }

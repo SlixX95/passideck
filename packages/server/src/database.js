@@ -124,7 +124,7 @@ function upsertSession(db, session) {
   db.prepare(`
     INSERT INTO sessions (id, type, label, command, cwd, created_at, theme)
     VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET command=excluded.command, cwd=excluded.cwd
+    ON CONFLICT(id) DO UPDATE SET command=excluded.command, cwd=excluded.cwd, exited_at=NULL, exit_code=NULL, reason=NULL
   `).run(
     session.id, 'shell', meta.label || '', meta.command || '', meta.cwd || os.homedir(),
     meta.createdAt || new Date().toISOString(), meta.theme || 'tokyo-night'
