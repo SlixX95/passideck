@@ -22,14 +22,14 @@ try {
   console.warn('[db] SQLite not available:', err.message);
 }
 
-const UI_LAYOUTS = new Set(['1x1', '1x2', '2x1', '1x3', '3x1', '2x2', '3x2', '2x3', '2x4', '4x2', '3x3', 'focus', 'half']);
+const UI_LAYOUTS = new Set(['auto', '1x1', '1x2', '2x1', '1x3', '3x1', '1x4', '4x1', '2x2', '3x2', '2x3', '2x4', '4x2', '3x3', 'focus', 'half']);
 const UI_THEMES = new Set(['blue', 'green', 'amber', 'purple', 'red', 'mono']);
 const UPLOAD_RETENTION_DAYS = 7;
 
 let lastCpuSample = null;
 let lastNetSample = null;
 
-const UI_STATE_DEFAULT = { layout: '2x1', baseLayout: '2x1', focusedId: null, primaryId: null, activeId: null, theme: 'blue', updatedAt: null };
+const UI_STATE_DEFAULT = { layout: 'auto', baseLayout: 'auto', focusedId: null, primaryId: null, activeId: null, minimized: [], theme: 'blue', updatedAt: null };
 
 function uiStatePath() {
   return path.join(os.homedir(), '.passideck', 'ui-state.json');
@@ -44,6 +44,7 @@ function sanitizeUiState(input) {
   if (typeof src.focusedId === 'string' && src.focusedId.length <= 100) out.focusedId = src.focusedId;
   if (typeof src.primaryId === 'string' && src.primaryId.length <= 100) out.primaryId = src.primaryId;
   if (typeof src.activeId === 'string' && src.activeId.length <= 100) out.activeId = src.activeId;
+  if (Array.isArray(src.minimized)) out.minimized = src.minimized.filter(id => typeof id === 'string' && id.length <= 100).slice(0, 100);
   if (UI_THEMES.has(src.theme)) out.theme = src.theme;
   if (typeof src.updatedAt === 'string') out.updatedAt = src.updatedAt;
   return out;

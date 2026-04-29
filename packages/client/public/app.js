@@ -135,6 +135,7 @@ function uiPayload() {
     layout: state.activeLayout,
     baseLayout: state.layout,
     activeId: state.activeId,
+    minimized: [...state.minimized],
     theme: state.theme
   };
 }
@@ -305,6 +306,7 @@ function smartRestorePanel(id) {
     state.minimized.delete(id);
     restoreEntry.el.classList.remove('minimized');
     restoreEntry.el.classList.remove('layout-hidden');
+    savePanePrefs();
     updateMinimizedBar();
     selectPanel(id, { persist: false });
     requestAnimationFrame(() => { fitAll(); setTimeout(fitAll, 50); });
@@ -327,6 +329,7 @@ function minimizePanel(id) {
   state.minimized.add(id);
   updateMinimizedBar();
   applyLayoutVisibility();
+  savePanePrefs();
   requestAnimationFrame(fitAll);
 }
 
@@ -337,6 +340,7 @@ function restorePanel(id) {
   state.minimized.delete(id);
   updateMinimizedBar();
   applyLayoutVisibility();
+  savePanePrefs();
   selectPanel(id, { persist: false });
   // Fit after restore — panel was display:none, needs full resize cycle
   requestAnimationFrame(() => {
@@ -617,15 +621,17 @@ function loadPanePrefs() {
     const prefs = JSON.parse(localStorage.getItem(PANE_PREFS_KEY) || '{}');
     state.panePrefs = {
       titles: prefs.titles && typeof prefs.titles === 'object' ? prefs.titles : {},
-      order: Array.isArray(prefs.order) ? prefs.order.filter(id => typeof id === 'string') : []
+      order: Array.isArray(prefs.order) ? prefs.order.filter(id => typeof id === 'string') : [],
+      minimized: Array.isArray(prefs.minimized) ? prefs.minimized.filter(id => typeof id === 'string') : []
     };
   } catch {
-    state.panePrefs = { titles: {}, order: [] };
+    state.panePrefs = { titles: {}, order: [], minimized: [] };
   }
 }
 
 function savePanePrefs() {
   state.panePrefs.order = state.order.slice();
+  state.panePrefs.minimized = [...state.minimized];
   localStorage.setItem(PANE_PREFS_KEY, JSON.stringify(state.panePrefs));
 }
 
@@ -908,6 +914,7 @@ function createPanel(session, opts = {}) {
 
   const hasSnapshot = hasTerminalSnapshot(id);
   state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, restored: hasSnapshot, snapshotTimer: null });
+  if (state.minimized.has(id)) el.classList.add('minimized');
   const replaceId = opts.replaceId;
   const replaceIndex = replaceId ? state.order.indexOf(replaceId) : -1;
   state.order = state.order.filter(existing => existing !== id && existing !== replaceId);
@@ -1439,7 +1446,12 @@ async function init() {
   state.layout = LAYOUTS.includes(base) ? base : 'auto';
   setLayout(state.layout, { persist: false });
 
-  if (ui?.activeId && state.sessions.has(ui.activeId)) selectPanel(ui.activeId, { persist: false });
+  state.minimized = new Set((state.panePrefs.minimized || []).filter(id => state.sessions.has(id)));
+  state.minimized.forEach(id => state.sessions.get(id)?.el.classList.add('minimized'));
+  applyLayoutVisibility();
+  updateMinimizedBar();
+
+  if (ui?.activeId && state.sessions.has(ui.activeId) && !state.minimized.has(ui.activeId)) selectPanel(ui.activeId, { persist: false });
   else if (state.order[0]) selectPanel(state.order[0], { persist: false });
   updateEmpty();
   renderSwitcher();
@@ -1529,7 +1541,7 @@ window.addEventListener('resize', () => {
     fitAll();
     setTimeout(fitAll, 50);
   });
-window.addEventListener('beforeunload', saveAllTerminalSnapshots);
+window.addEventListener('beforeunload', () => { savePanePrefs(); saveAllTerminalSnapshots(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveAllTerminalSnapshots(); });
 document.addEventListener('keydown', e => {
   const key = e.key.toLowerCase();

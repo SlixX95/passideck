@@ -27,7 +27,7 @@ assertIncludes(app, 'buffer.viewportY', 'reload snapshot must capture the visibl
 assertIncludes(app, 'function hasTerminalSnapshot', 'server replay marker must be skipped when a client snapshot exists');
 assertIncludes(app, 'restoreTerminalSnapshot(id, term)', 'snapshot must restore after the pane is fitted');
 assertIncludes(app, 'function restoreTerminalSnapshot', 'terminal buffer must be restored after reload');
-assertIncludes(app, 'window.addEventListener(\'beforeunload\', saveAllTerminalSnapshots)', 'terminal snapshots must save on reload');
+assertIncludes(app, "window.addEventListener('beforeunload', () => { savePanePrefs(); saveAllTerminalSnapshots(); });", 'terminal snapshots and pane prefs must save on reload');
 assertIncludes(app, "includes('output replay disabled')", 'server reconnect marker must not overwrite restored terminal contents');
 assertIncludes(app, 'writeTerminalOutput(term, msg.data, () => scheduleTerminalSnapshot(id))', 'live output must refresh terminal snapshots');
 assertIncludes(app, 'const LAYOUT_SLOTS', 'layouts must declare exact visible slot counts');
@@ -39,6 +39,15 @@ assertIncludes(css, 'grid-row: 1 / -1', 'empty state must span all layout rows')
 assertIncludes(app, 'requestAnimationFrame(fitAll);', 'newly visible hidden panes must be refit after selection');
 assertIncludes(app, 'function customTitle', 'pane names must prefer editable custom titles');
 assertIncludes(app, 'function savePanePrefs', 'pane names/order must persist without backend restart');
+assertIncludes(app, 'minimized: [...state.minimized]', 'ui-state payload must include minimized panes');
+assertIncludes(app, 'state.panePrefs.minimized = [...state.minimized];', 'minimized pane ids must persist in pane prefs');
+assertIncludes(app, 'Array.isArray(prefs.minimized)', 'minimized pane ids must restore from localStorage');
+assertIncludes(app, 'state.minimized = new Set((state.panePrefs.minimized || []).filter(id => state.sessions.has(id)))', 'reload must restore minimized set before final layout');
+assertIncludes(app, "state.minimized.forEach(id => state.sessions.get(id)?.el.classList.add('minimized'));", 'reload must reapply minimized class');
+assertIncludes(app, 'savePanePrefs(); saveAllTerminalSnapshots();', 'beforeunload must save minimized/order state');
+assertIncludes(server, 'minimized: []', 'server ui-state schema must allow minimized panes after restart');
+assertIncludes(server, 'Array.isArray(src.minimized)', 'server must sanitize minimized pane ids');
+
 assertIncludes(app, 'function movePanelBefore', 'drag-sort must reorder panes');
 assertIncludes(app, 'dragstart', 'panes must be draggable');
 assertIncludes(app, 'drop', 'panes must accept drops');
