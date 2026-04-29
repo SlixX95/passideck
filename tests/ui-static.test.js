@@ -47,7 +47,7 @@ assertIncludes(app, 'aria-label="Fenstername"', 'editable title needs an accessi
 assertNotIncludes(app, '<span class="term-id">', 'session codename/id must not render in pane header');
 assertNotIncludes(app, 'title="focus"', 'focus pane button must be removed');
 assertNotIncludes(app, 'title="half"', 'half pane button must be removed');
-assertIncludes(app, 'title="Schließen">×</button>', 'close X must remain');
+assertIncludes(app, 'title="Schließen" aria-label="Schließen">×</button>', 'close X must remain and be labeled');
 assertIncludes(app, 'class="minimize"', 'minimize button must exist in pane header');
 assertIncludes(app, 'document.addEventListener(\'paste\', handleTerminalPaste, true)', 'Ctrl+V must route paste events into active terminal before xterm/browser handlers');
 assertIncludes(app, 'document.addEventListener(\'keydown\', letBrowserOwnTerminalPasteShortcut, true)', 'Ctrl+V keydown must bypass xterm raw ^V handling');
@@ -121,10 +121,11 @@ assertIncludes(app, 'id = \'dropPlaceholder\'', 'drag reorder must insert a visi
 assertIncludes(app, 'return new Set(ids.slice(0, cap));', 'layout visibility must preserve pane order instead of prioritizing active pane');
 assertIncludes(app, 'for (const id of state.order) {\n    const entry = state.sessions.get(id);', 'layout application must use persisted pane order');
 assertIncludes(app, '[state.order[activeIndex], state.order[restoreIndex]]', 'restore-over-active swaps must persist logical order');
-assertIncludes(app, 'createPanel(session, { replaceId });', 'launching into a full grid must replace the active pane without pre-minimize jump');
-assertIncludes(app, 'state.order.splice(Math.min(replaceIndex, state.order.length), 0, id);', 'new launch must take the active pane slot');
-assertIncludes(app, 'state.order.push(replaceId);', 'replaced active pane must move to minimized tail');
-assertIncludes(app, "state.sessions.get(replaceId)?.el.classList.add('minimized');", 'replaced active pane must be minimized without shifting other panes first');
+assertIncludes(app, 'function layoutSize', 'auto grid must derive rows/columns from visible pane count');
+assertIncludes(app, "const LAYOUTS = ['auto', '1x1', '2x1', '3x1', '1x2', '1x3', '2x2'];", 'manual grid buttons must be reduced to auto/orientation presets');
+assertIncludes(app, 'if (rows > cols) cols = Math.max(cols, Math.ceil(count / rows));', 'vertical presets keep row count and grow columns: 3x1 -> 3x2');
+assertIncludes(app, 'else if (cols > rows) rows = Math.max(rows, Math.ceil(count / cols));', 'horizontal presets keep column count and grow rows: 1x3 -> 2x3');
+assertIncludes(app, 'const replaceId = null;', 'new launch must grow layout instead of replacing active pane');
 assertIncludes(app, 'function movePanel', 'drag reorder must support logical before/after placement');
 assertIncludes(app, 'savePanePrefs();', 'reordered windows must persist across reload');
 
@@ -172,7 +173,7 @@ assertIncludes(html, 'class="command-zone command-right"', 'topbar right zone re
 assertNotIncludes(html, 'topbar-row-1', 'old two-row topbar must not return');
 assertNotIncludes(html, 'topbar-row-2', 'old two-row topbar must not return');
 assertIncludes(css, '.command-strip', 'command strip CSS required');
-assertIncludes(css, 'grid-template-columns: auto minmax(190px, 1fr) auto;', 'session tabs must not push fixed right controls');
+assertIncludes(css, 'grid-template-columns: auto minmax(140px, 1fr) auto;', 'session tabs must not push fixed right controls');
 assertIncludes(css, '.command-right', 'right controls must remain grouped and fixed');
 assertIncludes(css, '.command-center { overflow: hidden;', 'session tab rail must be clipped/scroll-safe');
 assertIncludes(css, '.command-center::before, .command-center::after {\n  content: none;', 'session tab fade masks must not obscure buttons');
@@ -190,6 +191,11 @@ assertIncludes(html, '▧ clip img', 'clipboard image button must remain and be 
 assertIncludes(html, 'id="gridPickerInline"', 'inline grid picker container required in topbar');
 assertIncludes(app, 'function buildGridPicker', 'grid picker must build visual layout options');
 assertIncludes(app, 'function gridSvg', 'grid picker must generate SVG grid icons');
+assertIncludes(app, 'function layoutTitle', 'grid picker must explain auto-growth behavior');
+assertIncludes(html, 'id="saveState"', 'topbar must show UI state sync status');
+assertIncludes(html, 'id="toast" class="toast" role="status" aria-live="polite"', 'non-blocking toast status required');
+assertIncludes(app, 'function showToast', 'toast helper required instead of alert');
+assertNotIncludes(app, 'alert(`Upload failed:', 'upload errors must not use blocking alert');
 
 /* Font Size */
 assertIncludes(html, 'id="fontSizeSlider"', 'font size slider required in settings');

@@ -2,20 +2,8 @@ const API = window.location.origin;
 const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const WS_BASE = `${WS_PROTOCOL}//${window.location.host}/ws`;
 
-const LAYOUTS = ['1x1', '1x2', '2x1', '1x3', '3x1', '2x2', '3x2', '2x3', '2x4', '4x2', '3x3'];
-const LAYOUT_SLOTS = Object.freeze({
-  '1x1': 1,
-  '1x2': 2,
-  '2x1': 2,
-  '1x3': 3,
-  '3x1': 3,
-  '2x2': 4,
-  '3x2': 6,
-  '2x3': 6,
-  '2x4': 8,
-  '4x2': 8,
-  '3x3': 9
-});
+const LAYOUTS = ['auto', '1x1', '2x1', '3x1', '1x2', '1x3', '2x2'];
+const LAYOUT_SLOTS = new Proxy({}, { get: (_, key) => layoutSize(String(key)).slots });
 const THEMES = {
   blue:   { background: '#0f1117', foreground: '#c8ccd8', cursor: '#7aa2f7', selectionBackground: '#3d5a9e' },
   green:  { background: '#0f1117', foreground: '#d5e8d0', cursor: '#9ece6a', selectionBackground: '#4c6f38' },
@@ -30,8 +18,8 @@ const THEMES = {
 const state = {
   sessions: new Map(),
   order: [],
-  layout: '2x1',
-  activeLayout: '2x1',
+  layout: 'auto',
+  activeLayout: 'auto',
   activeId: null,
   theme: 'blue',
   fontSize: 13,
@@ -43,7 +31,8 @@ const state = {
   clipboardPasteTimer: null,
   systemMonitorTimer: null,
   pointerDrag: null,
-  panePrefs: { titles: {}, order: [] }
+  panePrefs: { titles: {}, order: [] },
+  saveState: 'saved'
 };
 
 const PANE_PREFS_KEY = 'passideck:pane-prefs:v1';
@@ -91,6 +80,56 @@ async function api(method, path, body) {
   return res.json();
 }
 
+
+function parseLayout(layout) {
+  const m = String(layout || '').match(/^(\d+)x(\d+)$/);
+  return m ? { rows: Number(m[1]), cols: Number(m[2]) } : null;
+}
+
+function layoutSize(layout, count = visibleLayoutCount()) {
+  count = Math.max(1, Number(count) || 1);
+  const base = parseLayout(layout);
+  if (!base) {
+    const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
+    const rows = Math.max(1, Math.ceil(count / cols));
+    return { rows, cols, slots: rows * cols };
+  }
+  let { rows, cols } = base;
+  if (rows > cols) cols = Math.max(cols, Math.ceil(count / rows));
+  else if (cols > rows) rows = Math.max(rows, Math.ceil(count / cols));
+  else if (count > rows * cols) {
+    cols = Math.max(cols, Math.ceil(Math.sqrt(count)));
+    rows = Math.max(rows, Math.ceil(count / cols));
+  }
+  return { rows, cols, slots: rows * cols };
+}
+
+function layoutName(size) {
+  return `${size.rows}x${size.cols}`;
+}
+
+function visibleLayoutCount() {
+  return state.order.filter(id => state.sessions.has(id) && !state.minimized.has(id)).length || 1;
+}
+
+function applyGridSize() {
+  const grid = document.getElementById('termGrid');
+  if (!grid) return;
+  const size = layoutSize(state.layout);
+  state.activeLayout = layoutName(size);
+  grid.className = 'grid-container layout-auto';
+  grid.dataset.layout = state.layout;
+  grid.dataset.activeLayout = state.activeLayout;
+  grid.style.setProperty('--grid-rows', size.rows);
+  grid.style.setProperty('--grid-cols', size.cols);
+}
+
+function setSaveState(value) {
+  state.saveState = value;
+  const el = document.getElementById('saveState');
+  if (el) el.textContent = value;
+}
+
 function uiPayload() {
   return {
     layout: state.activeLayout,
@@ -101,13 +140,14 @@ function uiPayload() {
 }
 
 function saveUiState() {
+  setSaveState('saving');
   clearTimeout(state.saveTimer);
-  state.saveTimer = setTimeout(() => api('PUT', '/api/ui-state', uiPayload()).catch(console.error), 150);
+  state.saveTimer = setTimeout(() => api('PUT', '/api/ui-state', uiPayload()).then(() => setSaveState('saved')).catch(() => setSaveState('offline')), 150);
 }
 
 function visiblePaneIds(layout = state.activeLayout) {
   const ids = state.order.filter(id => state.sessions.has(id) && !state.minimized.has(id));
-  const cap = LAYOUT_SLOTS[layout] || ids.length || 1;
+  const cap = layoutSize(layout, ids.length).slots;
   return new Set(ids.slice(0, cap));
 }
 
@@ -133,6 +173,7 @@ function autoRestoreToFillSlots() {
 }
 
 function applyLayoutVisibility() {
+  applyGridSize();
   const grid = document.getElementById('termGrid');
   const hidden = document.getElementById('hiddenPanes');
   const visible = visiblePaneIds();
@@ -151,10 +192,7 @@ function applyLayoutVisibility() {
 }
 
 function setLayout(layout, opts = {}) {
-  if (!layout || ![...LAYOUTS].includes(layout)) return;
-  const grid = document.getElementById('termGrid');
-  grid.className = `grid-container layout-${layout}`;
-  state.activeLayout = layout;
+  if (!layout || !LAYOUTS.includes(layout)) return;
   state.layout = layout;
   applyLayoutVisibility();
   autoRestoreToFillSlots();
@@ -169,7 +207,7 @@ function setLayout(layout, opts = {}) {
 }
 
 /* ── Grid Picker ── */
-function gridSvg(cols, rows, w = 14, h = 14) {
+function gridSvg(rows, cols, w = 14, h = 14) {
   const gap = 1.5;
   const cw = (w - gap * (cols - 1)) / cols;
   const ch = (h - gap * (rows - 1)) / rows;
@@ -181,7 +219,23 @@ function gridSvg(cols, rows, w = 14, h = 14) {
       rects += `<rect x="${x}" y="${y}" width="${cw}" height="${ch}" rx="1"/>`;
     }
   }
-  return `<svg viewBox="0 0 ${w} ${h}" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1">${rects}</svg>`;
+  return `<svg viewBox="0 0 ${w} ${h}" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true">${rects}</svg>`;
+}
+
+function layoutLabel(layout) {
+  if (layout === 'auto') return 'auto';
+  const { rows, cols } = parseLayout(layout);
+  if (rows > cols) return `V${rows}`;
+  if (cols > rows) return `H${cols}`;
+  return `${rows}×${cols}`;
+}
+
+function layoutTitle(layout) {
+  if (layout === 'auto') return 'Auto grid';
+  const { rows, cols } = parseLayout(layout);
+  if (rows > cols) return `${rows} rows, grows columns`;
+  if (cols > rows) return `${cols} columns, grows rows`;
+  return `${rows}×${cols}, grows balanced`;
 }
 
 function buildGridPicker() {
@@ -189,13 +243,13 @@ function buildGridPicker() {
   if (!container) return;
   container.innerHTML = '';
   for (const layout of LAYOUTS) {
-    const [cols, rows] = layout.split('x').map(Number);
     const item = document.createElement('button');
     item.className = 'grid-picker-item';
     item.dataset.layout = layout;
-    item.title = `${cols}×${rows}`;
-    item.innerHTML = gridSvg(cols, rows);
-    item.onclick = () => { setLayout(layout); updateGridPickerActive(); };
+    item.title = layoutTitle(layout);
+    item.setAttribute('aria-label', layoutTitle(layout));
+    item.innerHTML = layout === 'auto' ? '<span>auto</span>' : gridSvg(...layout.split('x').map(Number));
+    item.onclick = () => { setLayout(layout); updateGridPickerActive(); showToast(layoutTitle(layout)); };
     container.appendChild(item);
   }
   updateGridPickerActive();
@@ -230,7 +284,7 @@ function getVisibleCount() {
 }
 
 function getCurrentSlotCount() {
-  return LAYOUT_SLOTS[state.activeLayout] || 1;
+  return layoutSize(state.activeLayout).slots;
 }
 
 function smartRestorePanel(id) {
@@ -592,8 +646,19 @@ function savePanePrefs() {
   localStorage.setItem(PANE_PREFS_KEY, JSON.stringify(state.panePrefs));
 }
 
+function sessionKind(session) {
+  const cmd = String(session.meta?.command || session.meta?.label || '').toLowerCase();
+  if (cmd.includes('hermes')) return 'Hermes';
+  if (cmd.includes('codex')) return 'Codex';
+  if (cmd.includes('bash') || cmd.includes('zsh') || cmd.includes('shell')) return 'Shell';
+  return session.meta?.label || session.meta?.command || 'Fenster';
+}
+
 function defaultTitle(session) {
-  return session.meta.label || session.meta.command || 'Fenster';
+  const kind = sessionKind(session);
+  const peers = state.order.filter(id => state.sessions.has(id) && sessionKind(state.sessions.get(id).session) === kind);
+  const n = Math.max(1, peers.indexOf(session.id) + 1 || peers.length + 1);
+  return `${kind} ${n}`;
 }
 
 function customTitle(session) {
@@ -736,8 +801,8 @@ function createPanel(session, opts = {}) {
       <span class="term-title" contenteditable="true" spellcheck="false" aria-label="Fenstername">${escapeHtml(panelTitle(session))}</span>
       <span class="term-drag-handle" role="button" tabindex="0" title="Fenster verschieben" aria-label="Fenster verschieben">✥</span>
       <div class="term-actions">
-        <button class="minimize" title="Minimieren">−</button>
-        <button class="danger" title="Schließen">×</button>
+        <button class="minimize" title="Minimieren" aria-label="Minimieren">−</button>
+        <button class="danger" title="Schließen" aria-label="Schließen">×</button>
       </div>
     </div>
     <div class="terminal" id="term-${id}"></div>
@@ -1068,10 +1133,10 @@ async function launch(command) {
   try {
     const cmd = String(command || '').trim() || '/bin/bash';
     const wasActive = state.activeId;
-    const replaceId = (getVisibleCount() >= getCurrentSlotCount() && wasActive) ? wasActive : null;
+    const replaceId = null;
     const session = await api('POST', '/api/sessions', { command: cmd, label: cmd });
     createPanel(session, { replaceId });
-    autoMinimizeExcess();
+    applyLayoutVisibility();
     savePanePrefs();
   } finally {
     setTimeout(() => { state.launchBusy = false; }, 250);
@@ -1348,11 +1413,22 @@ async function uploadFile(file, opts = {}) {
     return upload;
   } catch (err) {
     console.error(err);
-    alert(`Upload failed: ${err.message}`);
+    showToast(`Upload failed: ${err.message}`, 'error');
     return null;
   } finally {
     if (!opts.keepBusy) state.uploadBusy = false;
   }
+}
+
+
+function showToast(text, type = 'ok') {
+  const el = document.getElementById('toast');
+  if (!el) return;
+  el.textContent = text;
+  el.dataset.type = type;
+  el.hidden = false;
+  clearTimeout(showToast.timer);
+  showToast.timer = setTimeout(() => { el.hidden = true; }, 2200);
 }
 
 async function init() {
@@ -1376,8 +1452,8 @@ async function init() {
   sessions.forEach(createPanel);
   restorePanelOrder();
 
-  const base = ui?.baseLayout || ui?.layout || '2x1';
-  state.layout = LAYOUTS.includes(base) ? base : '2x1';
+  const base = ui?.baseLayout || ui?.layout || 'auto';
+  state.layout = LAYOUTS.includes(base) ? base : 'auto';
   setLayout(state.layout, { persist: false });
 
   if (ui?.activeId && state.sessions.has(ui.activeId)) selectPanel(ui.activeId, { persist: false });
@@ -1394,6 +1470,7 @@ document.querySelectorAll('[data-command]').forEach(btn => btn.onclick = () => l
 document.getElementById('settingsToggle').onclick = () => {
   const panel = document.getElementById('settingsPanel');
   panel.hidden = !panel.hidden;
+  document.getElementById('settingsToggle').setAttribute('aria-expanded', String(!panel.hidden));
 };
 document.getElementById('chromeToggle').onclick = toggleChrome;
 document.getElementById('chromePeek').onclick = toggleChrome;
