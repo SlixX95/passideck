@@ -2,7 +2,7 @@ const API = window.location.origin;
 const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const WS_BASE = `${WS_PROTOCOL}//${window.location.host}/ws`;
 
-const LAYOUTS = ['auto', '1x1', '2x1', '3x1', '1x2', '1x3', '2x2'];
+const LAYOUTS = ['auto', '1x1', '2x1', '3x1', '4x1', '1x2', '1x3', '1x4'];
 const LAYOUT_SLOTS = new Proxy({}, { get: (_, key) => layoutSize(String(key)).slots });
 const THEMES = {
   blue:   { background: '#0f1117', foreground: '#c8ccd8', cursor: '#7aa2f7', selectionBackground: '#3d5a9e' },

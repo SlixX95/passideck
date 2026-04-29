@@ -122,9 +122,11 @@ assertIncludes(app, 'return new Set(ids.slice(0, cap));', 'layout visibility mus
 assertIncludes(app, 'for (const id of state.order) {\n    const entry = state.sessions.get(id);', 'layout application must use persisted pane order');
 assertIncludes(app, '[state.order[activeIndex], state.order[restoreIndex]]', 'restore-over-active swaps must persist logical order');
 assertIncludes(app, 'function layoutSize', 'auto grid must derive rows/columns from visible pane count');
-assertIncludes(app, "const LAYOUTS = ['auto', '1x1', '2x1', '3x1', '1x2', '1x3', '2x2'];", 'manual grid buttons must be reduced to auto/orientation presets');
+assertIncludes(app, "const LAYOUTS = ['auto', '1x1', '2x1', '3x1', '4x1', '1x2', '1x3', '1x4'];", 'manual layout choices must be orientation presets without 2x2');
 assertIncludes(app, 'if (rows > cols) cols = Math.max(cols, Math.ceil(count / rows));', 'vertical presets keep row count and grow columns: 3x1 -> 3x2');
 assertIncludes(app, 'else if (cols > rows) rows = Math.max(rows, Math.ceil(count / cols));', 'horizontal presets keep column count and grow rows: 1x3 -> 2x3');
+assertIncludes(app, "'1x4'", 'four columns preset required');
+assertNotIncludes(app, "'2x2'", '2x2 preset must be removed because 2 columns auto-grows there');
 assertIncludes(app, 'const replaceId = null;', 'new launch must grow layout instead of replacing active pane');
 assertIncludes(app, 'Grid changes must not un-minimize user-hidden panes.', 'grid changes must leave minimized panes minimized');
 assertIncludes(app, 'function movePanel', 'drag reorder must support logical before/after placement');
