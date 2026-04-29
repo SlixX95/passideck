@@ -456,14 +456,32 @@ function toggleChrome() {
   setChromeHidden(!document.body.classList.contains('chrome-hidden'));
 }
 
-function fitAll() {
+function sendResize(id, entry, force = false) {
+  const cols = entry.term.cols;
+  const rows = entry.term.rows;
+  if (!force && entry.lastSentCols === cols && entry.lastSentRows === rows) return;
+  entry.lastSentCols = cols;
+  entry.lastSentRows = rows;
+  const payload = { type: 'resize', cols, rows };
+  if (entry.ws?.readyState === WebSocket.OPEN) entry.ws.send(JSON.stringify(payload));
+  else api('POST', `/api/sessions/${id}/resize`, payload).catch(() => {});
+}
+
+function fitEntry(id, entry, opts = {}) {
+  const next = entry.fit.proposeDimensions?.();
+  if (!next) { entry.fit.fit(); sendResize(id, entry, opts.force); return; }
+  const oldCols = entry.term.cols;
+  const oldRows = entry.term.rows;
+  const cols = Math.max(2, next.cols || oldCols || 80);
+  const rows = Math.max(2, next.rows || oldRows || 24);
+  const heightOnly = oldCols === cols && oldRows && oldRows !== rows;
+  entry.term.resize(cols, heightOnly && !opts.allowHeight ? oldRows : rows);
+  sendResize(id, entry, opts.force || oldCols !== cols || opts.allowHeight);
+}
+
+function fitAll(opts = {}) {
   for (const [id, entry] of state.sessions) {
-    try {
-      entry.fit.fit();
-      const payload = { type: 'resize', cols: entry.term.cols, rows: entry.term.rows };
-      if (entry.ws?.readyState === WebSocket.OPEN) entry.ws.send(JSON.stringify(payload));
-      else api('POST', `/api/sessions/${id}/resize`, payload).catch(() => {});
-    } catch {}
+    try { fitEntry(id, entry, opts); } catch {}
   }
 }
 
@@ -914,7 +932,7 @@ function createPanel(session, opts = {}) {
   });
 
   const hasSnapshot = hasTerminalSnapshot(id);
-  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, restored: hasSnapshot, snapshotTimer: null });
+  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, restored: hasSnapshot, snapshotTimer: null, lastSentCols: 0, lastSentRows: 0 });
   if (state.minimized.has(id)) el.classList.add('minimized');
   const replaceId = opts.replaceId;
   const replaceIndex = replaceId ? state.order.indexOf(replaceId) : -1;
@@ -941,7 +959,7 @@ function createPanel(session, opts = {}) {
     if (entry && hasSnapshot) {
       entry.restored = restoreTerminalSnapshot(id, term);
       requestAnimationFrame(() => {
-        try { fit.fit(); sendResize(id); } catch {}
+        try { fitEntry(id, entry, { force: true, allowHeight: true }); } catch {}
         scheduleTerminalSnapshot(id);
       });
     }
