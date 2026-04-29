@@ -121,6 +121,10 @@ assertIncludes(app, 'id = \'dropPlaceholder\'', 'drag reorder must insert a visi
 assertIncludes(app, 'return new Set(ids.slice(0, cap));', 'layout visibility must preserve pane order instead of prioritizing active pane');
 assertIncludes(app, 'for (const id of state.order) {\n    const entry = state.sessions.get(id);', 'layout application must use persisted pane order');
 assertIncludes(app, '[state.order[activeIndex], state.order[restoreIndex]]', 'restore-over-active swaps must persist logical order');
+assertIncludes(app, 'createPanel(session, { replaceId });', 'launching into a full grid must replace the active pane without pre-minimize jump');
+assertIncludes(app, 'state.order.splice(Math.min(replaceIndex, state.order.length), 0, id);', 'new launch must take the active pane slot');
+assertIncludes(app, 'state.order.push(replaceId);', 'replaced active pane must move to minimized tail');
+assertIncludes(app, "state.sessions.get(replaceId)?.el.classList.add('minimized');", 'replaced active pane must be minimized without shifting other panes first');
 assertIncludes(app, 'function movePanel', 'drag reorder must support logical before/after placement');
 assertIncludes(app, 'savePanePrefs();', 'reordered windows must persist across reload');
 

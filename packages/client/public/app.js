@@ -723,7 +723,7 @@ function startPointerDrag(id, handle, event) {
   updatePointerDrag(event);
 }
 
-function createPanel(session) {
+function createPanel(session, opts = {}) {
   if (state.sessions.has(session.id) || session.meta.status === 'exited') return;
   const id = session.id;
   const grid = document.getElementById('termGrid');
@@ -860,8 +860,18 @@ function createPanel(session) {
 
   const hasSnapshot = hasTerminalSnapshot(id);
   state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, restored: hasSnapshot, snapshotTimer: null });
-  state.order = state.order.filter(existing => existing !== id);
-  state.order.push(id);
+  const replaceId = opts.replaceId;
+  const replaceIndex = replaceId ? state.order.indexOf(replaceId) : -1;
+  state.order = state.order.filter(existing => existing !== id && existing !== replaceId);
+  if (replaceId && replaceIndex >= 0 && state.sessions.has(replaceId)) {
+    state.order.splice(Math.min(replaceIndex, state.order.length), 0, id);
+    state.order.push(replaceId);
+    state.minimized.add(replaceId);
+    state.sessions.get(replaceId)?.el.classList.add('minimized');
+    updateMinimizedBar();
+  } else {
+    state.order.push(id);
+  }
 
   const ws = attachSocket(id, term, el);
   state.sessions.get(id).ws = ws;
@@ -1057,16 +1067,10 @@ async function launch(command) {
   state.launchBusy = true;
   try {
     const cmd = String(command || '').trim() || '/bin/bash';
-    // If grid is full and user has an active selection, minimize it first
-    // so the new shell replaces it at the same position
     const wasActive = state.activeId;
-    const slots = getCurrentSlotCount();
-    const visible = getVisibleCount();
-    if (visible >= slots && wasActive) {
-      minimizePanel(wasActive);
-    }
+    const replaceId = (getVisibleCount() >= getCurrentSlotCount() && wasActive) ? wasActive : null;
     const session = await api('POST', '/api/sessions', { command: cmd, label: cmd });
-    createPanel(session);
+    createPanel(session, { replaceId });
     autoMinimizeExcess();
     savePanePrefs();
   } finally {
