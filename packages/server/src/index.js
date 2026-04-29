@@ -11,6 +11,16 @@ try { pty = require('@homebridge/node-pty-prebuilt-multiarch'); } catch {}
 const { SessionManager } = require('./session');
 const { loadConfig } = require('./config');
 
+let db = null;
+let dbModule = null;
+try {
+  const Database = require('better-sqlite3');
+  dbModule = require('./database');
+  db = dbModule.initDatabase(Database);
+} catch (err) {
+  console.warn('[db] SQLite not available:', err.message);
+}
+
 const UI_LAYOUTS = new Set(['1x1', '1x2', '2x1', '1x3', '3x1', '2x2', '3x2', '2x3', '2x4', '4x2', '3x3', 'focus', 'half']);
 const UI_THEMES = new Set(['blue', 'green', 'amber', 'purple', 'red', 'mono']);
 const UPLOAD_RETENTION_DAYS = 7;
@@ -226,7 +236,19 @@ function createServer(config = loadConfig()) {
   app.use('/uploads', express.static(uploadsRoot()));
   app.use(express.static(path.join(__dirname, '..', '..', 'client', 'public')));
 
-  app.get('/api/health', (_req, res) => res.json({ ok: true, sessions: sessions.getAll().length }));
+  app.get('/api/health', (_req, res) => {
+    const mem = process.memoryUsage();
+    const sessions = sessions.getAll();
+    const activePids = sessions.filter(s => s.pid).length;
+    res.json({
+      ok: true,
+      sessions: sessions.length,
+      activePids,
+      memory: { rss: Math.round(mem.rss / 1024 / 1024), heapUsed: Math.round(mem.heapUsed / 1024 / 1024) },
+      uptime: process.uptime(),
+      pid: process.pid
+    });
+  });
   app.get('/api/system-metrics', (_req, res) => res.json(readSystemMetrics()));
   app.get('/api/config', (_req, res) => res.json({ projects: config.projects || {}, defaultTheme: config.defaultTheme || 'tokyo-night' }));
   app.get('/api/ui-state', (_req, res) => res.json(readUiState()));
@@ -266,6 +288,7 @@ function createServer(config = loadConfig()) {
       session.pty = term;
       session.pid = term.pid;
       session.meta.status = 'active';
+      if (db) dbModule.upsertSession(db, session);
       term.onData((data) => {
         const normalized = normalizeTerminalOutput(data);
         session.appendOutput(normalized);
@@ -275,6 +298,7 @@ function createServer(config = loadConfig()) {
         session.meta.status = 'exited';
         session.meta.exitCode = exitCode;
         session.meta.statusDetail = `Exited ${exitCode}${signal ? ` ${signal}` : ''}`;
+        if (db) dbModule.markSessionExited(db, session.id, exitCode, signal || '');
         if (session.ws?.readyState === 1) session.ws.send(JSON.stringify({ type: 'exit', exitCode, signal }));
       });
       if (launch.initialInput) setTimeout(() => term.write(launch.initialInput), 150);
@@ -343,10 +367,39 @@ module.exports = { createServer, loadConfig };
 
 if (require.main === module) {
   const config = loadConfig();
-  const { server } = createServer(config);
+  const { server, sessions } = createServer(config);
   const port = config.port || 3000;
   const host = config.host || '127.0.0.1';
   const result = cleanupOldUploads();
   if (result.removed > 0) console.log(`[uploads] cleaned ${result.removed} files (${Math.round(result.bytes/1024)}KB)`);
+
+  // Cleanup stale sessions on startup
+  if (db && dbModule) {
+    const stale = dbModule.cleanupStaleSessions(db, 48);
+    if (stale > 0) console.log(`[startup] cleaned ${stale} stale DB sessions`);
+  }
+
+  // Graceful shutdown: persist sessions, then exit
+  function gracefulShutdown(sig) {
+    console.log(`[shutdown] ${sig} received, persisting state...`);
+    if (db && dbModule) {
+      try {
+        dbModule.markAllActiveInterrupted(db);
+        console.log('[shutdown] all active sessions marked as interrupted in DB');
+      } catch (err) {
+        console.error('[shutdown] DB save failed:', err.message);
+      }
+    }
+    // Kill all PTYs
+    for (const session of Object.values(sessions.getAll())) {
+      try { process.kill(session.pid, 'SIGTERM'); } catch {}
+    }
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(1), 3000);
+  }
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
   server.listen(port, host, () => console.log(`PassiDeck http://${host}:${port}`));
 }
