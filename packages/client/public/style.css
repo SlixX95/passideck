@@ -229,6 +229,17 @@ body.pane-dragging { cursor: grabbing; user-select: none; }
   position: relative;
   overflow: visible;
 }
+.connection-dot {
+  flex: 0 0 8px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #ffb020;
+  box-shadow: 0 0 8px #ffb020;
+}
+.term-panel[data-connection-status="live"] .connection-dot { background: #00d26a; box-shadow: 0 0 8px #00d26a; }
+.term-panel[data-connection-status="reconnecting"] .connection-dot { background: #ffb020; box-shadow: 0 0 8px #ffb020; }
+.term-panel[data-connection-status="offline"] .connection-dot { background: #ff453a; box-shadow: 0 0 8px #ff453a; }
 .term-drag-handle {
   flex: 0 0 28px;
   align-self: stretch;

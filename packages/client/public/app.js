@@ -49,6 +49,19 @@ function requestClosePanel(id) {
   showCloseConfirm(id, panelTitle(entry.session));
 }
 
+function setConnectionStatus(id, status) {
+  const entry = state.sessions.get(id);
+  const el = entry?.el || document.getElementById(`panel-${id}`);
+  if (!el) return;
+  el.dataset.connectionStatus = status;
+  const dot = el.querySelector('.connection-dot');
+  if (dot) {
+    const labels = { live: 'Verbunden', reconnecting: 'Verbinde neu', offline: 'Offline' };
+    dot.title = labels[status] || status;
+    dot.setAttribute('aria-label', dot.title);
+  }
+}
+
 let closeHitLayerInstalled = false;
 function installCloseHitLayer() {
   if (closeHitLayerInstalled) return;
@@ -803,8 +816,10 @@ function createPanel(session, opts = {}) {
   el.className = 'term-panel';
   el.id = `panel-${id}`;
   el.dataset.paneId = id;
+  el.dataset.connectionStatus = 'reconnecting';
   el.innerHTML = `
     <div class="term-header">
+      <span class="connection-dot" title="Verbinde neu" aria-label="Verbinde neu"></span>
       <span class="term-title" contenteditable="true" spellcheck="false" aria-label="Fenstername">${escapeHtml(panelTitle(session))}</span>
       <span class="term-drag-handle" role="button" tabindex="0" title="Fenster verschieben" aria-label="Fenster verschieben">✥</span>
       <div class="term-actions">
@@ -1064,14 +1079,23 @@ function attachSocket(id, term, el) {
     if (msg.type === 'output') writeTerminalOutput(term, msg.data, () => scheduleTerminalSnapshot(id));
     if (msg.type === 'exit') {
       el.classList.add('exited');
+      setConnectionStatus(id, 'offline');
       flashPaneExit(el);
       playBell();
       notifySessionExit(panelTitle(session), msg.exitCode);
       renderSwitcher();
     }
   };
-  ws.onopen = () => requestAnimationFrame(fitAll);
-  ws.onclose = () => setTimeout(() => reconnect(id), 1000);
+  ws.onopen = () => {
+    setConnectionStatus(id, 'live');
+    requestAnimationFrame(fitAll);
+  };
+  ws.onerror = () => setConnectionStatus(id, 'offline');
+  ws.onclose = () => {
+    const entry = state.sessions.get(id);
+    if (!entry?.el.classList.contains('exited')) setConnectionStatus(id, 'reconnecting');
+    setTimeout(() => reconnect(id), 1000);
+  };
   return ws;
 }
 

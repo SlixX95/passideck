@@ -57,6 +57,11 @@ assertNotIncludes(app, '<span class="term-id">', 'session codename/id must not r
 assertNotIncludes(app, 'title="focus"', 'focus pane button must be removed');
 assertNotIncludes(app, 'title="half"', 'half pane button must be removed');
 assertIncludes(app, 'title="Schließen" aria-label="Schließen">×</button>', 'close X must remain and be labeled');
+assertIncludes(app, 'function setConnectionStatus', 'pane connection dot must have a single status helper');
+assertIncludes(app, 'class="connection-dot"', 'pane header must show a connection dot');
+assertIncludes(app, "el.dataset.connectionStatus = 'reconnecting'", 'new panes start orange while connecting');
+assertIncludes(app, "setConnectionStatus(id, 'live')", 'open websocket must mark pane green/live');
+assertIncludes(app, "setConnectionStatus(id, 'offline')", 'error/exit must mark pane red/offline');
 assertIncludes(app, 'class="minimize"', 'minimize button must exist in pane header');
 assertIncludes(app, 'document.addEventListener(\'paste\', handleTerminalPaste, true)', 'Ctrl+V must route paste events into active terminal before xterm/browser handlers');
 assertIncludes(app, 'document.addEventListener(\'keydown\', letBrowserOwnTerminalPasteShortcut, true)', 'Ctrl+V keydown must bypass xterm raw ^V handling');
@@ -156,6 +161,10 @@ assertIncludes(css, '.xterm-viewport::-webkit-scrollbar', 'terminal scrollbar mu
 assertIncludes(css, 'scrollbar-width: thin', 'terminal scrollbar must be thin');
 assertIncludes(css, 'scrollbar-color:', 'terminal scrollbar must use dark colors');
 assertIncludes(css, '.term-title[contenteditable="true"]', 'editable title styling required');
+assertIncludes(css, '.connection-dot', 'connection dot styling required');
+assertIncludes(css, 'data-connection-status="live"', 'green live status required');
+assertIncludes(css, 'data-connection-status="reconnecting"', 'orange reconnecting status required');
+assertIncludes(css, 'data-connection-status="offline"', 'red offline status required');
 assertIncludes(css, 'height: 18px;', 'pane header must be ultra compact');
 assertIncludes(css, '--tg-radius: 0;', 'shell panels must be square, not rounded');
 assertIncludes(css, 'gap: 2px;', 'terminal grid must use very small gaps');
