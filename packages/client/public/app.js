@@ -195,7 +195,7 @@ function setLayout(layout, opts = {}) {
   if (!layout || !LAYOUTS.includes(layout)) return;
   state.layout = layout;
   applyLayoutVisibility();
-  autoRestoreToFillSlots();
+  // Grid changes must not un-minimize user-hidden panes.
   autoMinimizeExcess();
   updateGridPickerActive();
   // Two-pass fit: immediate + delayed to let browser finish reflow
@@ -207,58 +207,41 @@ function setLayout(layout, opts = {}) {
 }
 
 /* ── Grid Picker ── */
-function gridSvg(rows, cols, w = 14, h = 14) {
-  const gap = 1.5;
-  const cw = (w - gap * (cols - 1)) / cols;
-  const ch = (h - gap * (rows - 1)) / rows;
-  let rects = '';
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const x = c * (cw + gap);
-      const y = r * (ch + gap);
-      rects += `<rect x="${x}" y="${y}" width="${cw}" height="${ch}" rx="1"/>`;
-    }
-  }
-  return `<svg viewBox="0 0 ${w} ${h}" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1" aria-hidden="true">${rects}</svg>`;
-}
-
 function layoutLabel(layout) {
-  if (layout === 'auto') return 'auto';
+  if (layout === 'auto') return 'Auto';
   const { rows, cols } = parseLayout(layout);
-  if (rows > cols) return `V${rows}`;
-  if (cols > rows) return `H${cols}`;
+  if (rows > cols) return `${rows} rows`;
+  if (cols > rows) return `${cols} columns`;
   return `${rows}×${cols}`;
 }
 
 function layoutTitle(layout) {
-  if (layout === 'auto') return 'Auto grid';
+  if (layout === 'auto') return 'Auto layout';
   const { rows, cols } = parseLayout(layout);
-  if (rows > cols) return `${rows} rows, grows columns`;
-  if (cols > rows) return `${cols} columns, grows rows`;
-  return `${rows}×${cols}, grows balanced`;
+  if (rows > cols) return `${rows} rows; new panes add columns`;
+  if (cols > rows) return `${cols} columns; new panes add rows`;
+  return `${rows}×${cols}; grows balanced`;
 }
 
 function buildGridPicker() {
   const container = document.getElementById('gridPickerInline');
   if (!container) return;
-  container.innerHTML = '';
+  container.innerHTML = '<label class="layout-select-label" for="layoutSelect">Layout</label><select id="layoutSelect" class="layout-select" aria-label="Layout"></select>';
+  const select = container.querySelector('select');
   for (const layout of LAYOUTS) {
-    const item = document.createElement('button');
-    item.className = 'grid-picker-item';
-    item.dataset.layout = layout;
-    item.title = layoutTitle(layout);
-    item.setAttribute('aria-label', layoutTitle(layout));
-    item.innerHTML = layout === 'auto' ? '<span>auto</span>' : gridSvg(...layout.split('x').map(Number));
-    item.onclick = () => { setLayout(layout); updateGridPickerActive(); showToast(layoutTitle(layout)); };
-    container.appendChild(item);
+    const option = document.createElement('option');
+    option.value = layout;
+    option.textContent = layoutLabel(layout);
+    option.title = layoutTitle(layout);
+    select.appendChild(option);
   }
+  select.onchange = () => { setLayout(select.value); showToast(layoutTitle(select.value)); };
   updateGridPickerActive();
 }
 
 function updateGridPickerActive() {
-  document.querySelectorAll('.grid-picker-item').forEach(el => {
-    el.classList.toggle('active', el.dataset.layout === state.activeLayout);
-  });
+  const select = document.getElementById('layoutSelect');
+  if (select) select.value = state.layout;
 }
 
 /* ── Font Size ── */

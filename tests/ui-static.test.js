@@ -126,6 +126,7 @@ assertIncludes(app, "const LAYOUTS = ['auto', '1x1', '2x1', '3x1', '1x2', '1x3',
 assertIncludes(app, 'if (rows > cols) cols = Math.max(cols, Math.ceil(count / rows));', 'vertical presets keep row count and grow columns: 3x1 -> 3x2');
 assertIncludes(app, 'else if (cols > rows) rows = Math.max(rows, Math.ceil(count / cols));', 'horizontal presets keep column count and grow rows: 1x3 -> 2x3');
 assertIncludes(app, 'const replaceId = null;', 'new launch must grow layout instead of replacing active pane');
+assertIncludes(app, 'Grid changes must not un-minimize user-hidden panes.', 'grid changes must leave minimized panes minimized');
 assertIncludes(app, 'function movePanel', 'drag reorder must support logical before/after placement');
 assertIncludes(app, 'savePanePrefs();', 'reordered windows must persist across reload');
 
@@ -187,11 +188,12 @@ assertIncludes(html, '⚙ settings', 'settings button must be clearly labeled');
 assertIncludes(html, '⇧ upload', 'upload button must remain and be clearly labeled');
 assertIncludes(html, '▧ clip img', 'clipboard image button must remain and be clearly labeled');
 
-/* Grid Picker */
-assertIncludes(html, 'id="gridPickerInline"', 'inline grid picker container required in topbar');
-assertIncludes(app, 'function buildGridPicker', 'grid picker must build visual layout options');
-assertIncludes(app, 'function gridSvg', 'grid picker must generate SVG grid icons');
-assertIncludes(app, 'function layoutTitle', 'grid picker must explain auto-growth behavior');
+/* Layout Picker */
+assertIncludes(html, 'id="gridPickerInline"', 'layout picker container required in topbar');
+assertIncludes(app, 'function buildGridPicker', 'layout picker must build WebTerm-style text options');
+assertNotIncludes(app, 'function gridSvg', 'layout control must not use misleading grid icons');
+assertIncludes(app, 'id="layoutSelect"', 'layout control should match WebTerm-style text select');
+assertIncludes(app, 'function layoutTitle', 'layout picker must explain auto-growth behavior');
 assertIncludes(html, 'id="saveState"', 'topbar must show UI state sync status');
 assertIncludes(html, 'id="toast" class="toast" role="status" aria-live="polite"', 'non-blocking toast status required');
 assertIncludes(app, 'function showToast', 'toast helper required instead of alert');
