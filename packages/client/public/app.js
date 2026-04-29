@@ -874,6 +874,7 @@ function createPanel(session, opts = {}) {
     fontSize: state.fontSize,
     lineHeight: 1.2,
     cursorBlink: true,
+    scrollOnUserInput: false,
     scrollback: 20000,
     theme: THEMES[state.theme]
   });
