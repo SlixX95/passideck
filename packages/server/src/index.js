@@ -238,11 +238,11 @@ function createServer(config = loadConfig()) {
 
   app.get('/api/health', (_req, res) => {
     const mem = process.memoryUsage();
-    const sessions = sessions.getAll();
-    const activePids = sessions.filter(s => s.pid).length;
+    const list = sessions.getAll();
+    const activePids = list.filter(s => s.pid).length;
     res.json({
       ok: true,
-      sessions: sessions.length,
+      sessions: list.length,
       activePids,
       memory: { rss: Math.round(mem.rss / 1024 / 1024), heapUsed: Math.round(mem.heapUsed / 1024 / 1024) },
       uptime: process.uptime(),
