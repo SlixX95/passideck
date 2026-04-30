@@ -36,8 +36,18 @@ assertIncludes(app, 'function applyLayoutVisibility', 'layout visibility must be
 assertIncludes(css, '.term-panel.layout-hidden', 'hidden overflow panes must not consume grid slots');
 assertIncludes(css, 'grid-column: 1 / -1', 'empty state must span all layout columns');
 assertIncludes(css, 'grid-row: 1 / -1', 'empty state must span all layout rows');
-assertIncludes(app, 'requestAnimationFrame(fitAll);', 'newly visible hidden panes must be refit after selection');
-assertIncludes(app, 'function customTitle', 'pane names must prefer editable custom titles');
+assertIncludes(app, 'function scheduleTerminalFit', 'resize-sensitive paths must use one debounced fit scheduler');
+assertIncludes(app, 'cancelAnimationFrame(state.fitFrame)', 'rapid resize storms must collapse into the latest terminal fit');
+assertIncludes(app, 'if (state.fitTimer) clearTimeout(state.fitTimer);', 'delayed second-pass fits must be debounced');
+assertIncludes(app, 'scheduleTerminalFit();', 'newly visible hidden panes must be refit after selection');
+assertIncludes(app, 'fitAll({ allowHeight: true, scrollBottom: true })', 'layout height changes must shrink xterm rows and keep prompt visible');
+assertIncludes(app, 'const targetRows = heightOnly && !opts.allowHeight ? oldRows : rows;', 'height-only fits must be explicitly allowed instead of accidentally blocking pane shrink');
+assertIncludes(app, 'if (entry.el.classList.contains(\'layout-hidden\') || entry.el.offsetParent === null) return;', 'hidden/minimized xterms must not be resized to zero dimensions');
+assertIncludes(app, 'if (changed) entry.term.resize(cols, targetRows);', 'no-op fits must not resize xterm or trigger PTY churn');
+assertIncludes(app, 'entry.term.scrollToBottom?.()', 'after shrinking panes the active prompt must stay reachable at the bottom');
+assertIncludes(app, 'new ResizeObserver(() => scheduleTerminalFit())', 'terminal container resizes must refit height through the debounced scheduler');
+assertIncludes(html, 'app.js?v=20260430-resize-safe', 'resize-safety hotfix must cache-bust app.js');
+assertNotIncludes(app, 'function customTitle', 'unused title wrapper must stay removed');
 assertIncludes(app, 'function savePanePrefs', 'pane names/order must persist without backend restart');
 assertIncludes(app, 'minimized: [...state.minimized]', 'ui-state payload must include minimized panes');
 assertIncludes(app, 'state.panePrefs.minimized = [...state.minimized];', 'minimized pane ids must persist in pane prefs');
@@ -48,7 +58,7 @@ assertIncludes(app, 'savePanePrefs(); saveAllTerminalSnapshots();', 'beforeunloa
 assertIncludes(server, 'minimized: []', 'server ui-state schema must allow minimized panes after restart');
 assertIncludes(server, 'Array.isArray(src.minimized)', 'server must sanitize minimized pane ids');
 
-assertIncludes(app, 'function movePanelBefore', 'drag-sort must reorder panes');
+assertNotIncludes(app, 'function movePanelBefore', 'dead before/after drag helper must stay removed');
 assertIncludes(app, 'dragstart', 'panes must be draggable');
 assertIncludes(app, 'drop', 'panes must accept drops');
 assertIncludes(app, 'contenteditable="true"', 'pane title must be editable inline');
@@ -108,8 +118,8 @@ assertIncludes(app, 'sanitizeTerminalOutput(data)', 'replayed output must strip 
 assertIncludes(server, "type: 'replay'", 'server must send reload snapshots as replay messages, not raw output');
 assertIncludes(server, "output replay disabled", 'server must not replay old pane output on browser reload');
 assertNotIncludes(server, 'session.replaySnapshot()', 'server must not replay old snapshots on reload');
-assertIncludes(session, 'stripAnsiForReplay', 'server replay sanitizer kept for future safe snapshots');
-assertIncludes(session, 'plain snapshot', 'reload snapshot sanitizer must be explicitly plain text');
+assertNotIncludes(session, 'stripAnsiForReplay', 'unused server replay sanitizer must stay removed');
+assertNotIncludes(session, 'plain snapshot', 'server must not keep stale plain replay snapshot code');
 assertIncludes(app, 'OSC color reports', 'RGB color-query replies must be documented/filtered');
 assertIncludes(app, 'CSI cursor reports', 'CPR cursor reports must be documented/filtered');
 assertIncludes(app, 'bare leaked OSC color report fragments', 'old visible rgb junk must be documented/filtered');
@@ -143,7 +153,7 @@ assertIncludes(app, "'1x4'", 'four columns preset required');
 assertNotIncludes(app, "'2x2'", '2x2 preset must be removed because 2 columns auto-grows there');
 assertIncludes(app, 'const replaceId = null;', 'new launch must grow layout instead of replacing active pane');
 assertIncludes(app, 'Grid changes must not un-minimize user-hidden panes.', 'grid changes must leave minimized panes minimized');
-assertIncludes(app, 'function movePanel', 'drag reorder must support logical before/after placement');
+assertNotIncludes(app, 'function movePanel(', 'dead before/after drag helper must stay removed');
 assertIncludes(app, 'savePanePrefs();', 'reordered windows must persist across reload');
 
 assertIncludes(css, '.term-panel.dragging', 'dragging visual state required');
@@ -250,6 +260,7 @@ assertIncludes(app, 'if (enabled) startSystemMonitorPolling();', 'enabling monit
 assertIncludes(app, 'else stopSystemMonitorPolling();', 'disabling monitor must stop polling');
 assertIncludes(app, 'const SYSTEM_MONITOR_KEY', 'system monitor visibility must persist client-side');
 assertIncludes(app, 'function setSystemMonitorVisible', 'system monitor toggle helper required');
+assertIncludes(app, 'scheduleTerminalFit();', 'system monitor resize must use debounced double-fit after flex reflow');
 assertIncludes(app, "localStorage.getItem(SYSTEM_MONITOR_KEY) === '1'", 'system monitor must default off unless user opted in');
 assertIncludes(css, '.system-monitor[hidden] { display: none !important; }', 'system monitor must be hideable');
 
@@ -263,7 +274,7 @@ assertIncludes(css, '.minimized-tab', 'minimized tab CSS required');
 assertIncludes(css, '.term-panel.minimized', 'minimized panel CSS required');
 
 /* Close Confirmation */
-assertIncludes(app, 'function isSessionExited', 'exit detection for close confirmation');
+assertNotIncludes(app, 'function isSessionExited', 'unused close helper must stay removed');
 assertIncludes(app, 'function requestClosePanel', 'close must route through a single requestClosePanel helper');
 assertIncludes(app, 'function installCloseHitLayer', 'close must have coordinate-based hit layer for full-grid clicks');
 assertIncludes(app, 'showCloseConfirm', 'close must show confirmation modal for running sessions');

@@ -25,6 +25,9 @@ try {
 const UI_LAYOUTS = new Set(['auto', '1x1', '1x2', '2x1', '1x3', '3x1', '1x4', '4x1', '2x2', '3x2', '2x3', '2x4', '4x2', '3x3', 'focus', 'half']);
 const UI_THEMES = new Set(['blue', 'green', 'amber', 'purple', 'red', 'mono']);
 const UPLOAD_RETENTION_DAYS = 7;
+const TMUX_CMD = process.env.PASSIDECK_TMUX_CMD || 'tmux';
+const TMUX_ARGS = (process.env.PASSIDECK_TMUX_ARGS || '-L passideck').split(/\s+/).filter(Boolean);
+const tmuxArgs = (args) => [...TMUX_ARGS, ...args];
 
 let lastCpuSample = null;
 let lastNetSample = null;
@@ -233,23 +236,23 @@ function tmuxName(id) {
 }
 
 function tmuxHas(name) {
-  try { execFileSync('tmux', ['has-session', '-t', name], { stdio: 'ignore' }); return true; }
+  try { execFileSync(TMUX_CMD, tmuxArgs(['has-session', '-t', name]), { stdio: 'ignore' }); return true; }
   catch { return false; }
 }
 
 function tmuxNew(name, cwd, launch) {
   if (tmuxHas(name)) return;
-  execFileSync('tmux', ['new-session', '-d', '-s', name, '-c', cwd, launch.file, ...launch.args], { stdio: 'ignore' });
+  execFileSync(TMUX_CMD, tmuxArgs(['new-session', '-d', '-s', name, '-c', cwd, launch.file, ...launch.args]), { stdio: 'ignore' });
 }
 
 function tmuxKill(name) {
-  try { execFileSync('tmux', ['kill-session', '-t', name], { stdio: 'ignore' }); } catch {}
+  try { execFileSync(TMUX_CMD, tmuxArgs(['kill-session', '-t', name]), { stdio: 'ignore' }); } catch {}
 }
 
 function attachTmux(session) {
   if (!pty) throw new Error('PTY support not available');
   const name = tmuxName(session.id);
-  const term = pty.spawn('tmux', ['attach-session', '-t', name], {
+  const term = pty.spawn(TMUX_CMD, tmuxArgs(['attach-session', '-t', name]), {
     name: 'xterm-256color',
     cols: Number(session.meta.cols) || 120,
     rows: Number(session.meta.rows) || 30,

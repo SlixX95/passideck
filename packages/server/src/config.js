@@ -33,4 +33,4 @@ function loadConfig() {
   return { ...defaultConfig(), ...parsed };
 }
 
-module.exports = { loadConfig, CONFIG_DIR, CONFIG_PATH };
+module.exports = { loadConfig };

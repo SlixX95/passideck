@@ -30,6 +30,9 @@ const state = {
   clipboardPasteArmed: false,
   clipboardPasteTimer: null,
   systemMonitorTimer: null,
+  fitFrame: null,
+  fitTimer: null,
+  fitTimerLate: null,
   pointerDrag: null,
   panePrefs: { titles: {}, order: [] },
   saveState: 'saved'
@@ -212,11 +215,8 @@ function setLayout(layout, opts = {}) {
   // Grid changes must not un-minimize user-hidden panes.
   autoMinimizeExcess();
   updateGridPickerActive();
-  // Two-pass fit: immediate + delayed to let browser finish reflow
-  requestAnimationFrame(() => {
-    fitAll();
-    setTimeout(fitAll, 50);
-  });
+  // Two-pass, debounced fit: let CSS/grid settle before resizing PTYs.
+  scheduleTerminalFit();
   if (opts.persist !== false) saveUiState();
 }
 
@@ -265,7 +265,7 @@ function setFontSize(size, opts = {}) {
   for (const [, entry] of state.sessions) {
     try { entry.term.setOption('fontSize', size); } catch {}
   }
-  requestAnimationFrame(fitAll);
+  scheduleTerminalFit();
   const slider = document.getElementById('fontSizeSlider');
   const label = document.getElementById('fontSizeLabel');
   if (slider) slider.value = size;
@@ -322,7 +322,7 @@ function smartRestorePanel(id) {
     savePanePrefs();
     updateMinimizedBar();
     selectPanel(id, { persist: false });
-    requestAnimationFrame(() => { fitAll(); setTimeout(fitAll, 50); });
+    scheduleTerminalFit();
   } else {
     // Fallback: erstes sichtbares Pane minimieren
     const firstVisible = state.order.find(oid => state.sessions.has(oid) && !state.minimized.has(oid));
@@ -343,7 +343,7 @@ function minimizePanel(id) {
   updateMinimizedBar();
   applyLayoutVisibility();
   savePanePrefs();
-  requestAnimationFrame(fitAll);
+  scheduleTerminalFit();
 }
 
 function restorePanel(id) {
@@ -355,11 +355,8 @@ function restorePanel(id) {
   applyLayoutVisibility();
   savePanePrefs();
   selectPanel(id, { persist: false });
-  // Fit after restore — panel was display:none, needs full resize cycle
-  requestAnimationFrame(() => {
-    fitAll();
-    setTimeout(fitAll, 50);
-  });
+  // Fit after restore — panel was display:none, needs full resize cycle.
+  scheduleTerminalFit();
 }
 
 function updateMinimizedBar() {
@@ -395,10 +392,6 @@ function updateMinimizedBar() {
 }
 
 /* ── Close Confirmation ── */
-function isSessionExited(session) {
-  return session?.meta?.status === 'exited';
-}
-
 function setTheme(theme, opts = {}) {
   if (!THEMES[theme]) theme = 'blue';
   state.theme = theme;
@@ -414,7 +407,7 @@ function setTheme(theme, opts = {}) {
 function setChromeHidden(hidden) {
   document.body.classList.toggle('chrome-hidden', Boolean(hidden));
   try { localStorage.setItem(CHROME_PREF_KEY, hidden ? '1' : '0'); } catch {}
-  requestAnimationFrame(fitAll);
+  scheduleTerminalFit();
 }
 
 function updateSystemMonitor(metrics) {
@@ -462,7 +455,7 @@ function setSystemMonitorVisible(visible, opts = {}) {
   if (opts.persist !== false) {
     try { localStorage.setItem(SYSTEM_MONITOR_KEY, enabled ? '1' : '0'); } catch {}
   }
-  requestAnimationFrame(fitAll);
+  scheduleTerminalFit();
 }
 
 function toggleChrome() {
@@ -481,15 +474,21 @@ function sendResize(id, entry, force = false) {
 }
 
 function fitEntry(id, entry, opts = {}) {
+  if (entry.el.classList.contains('layout-hidden') || entry.el.offsetParent === null) return;
   const next = entry.fit.proposeDimensions?.();
   if (!next) { entry.fit.fit(); sendResize(id, entry, opts.force); return; }
   const oldCols = entry.term.cols;
   const oldRows = entry.term.rows;
+  const buffer = entry.term.buffer?.active;
+  const atBottom = !buffer || buffer.viewportY >= buffer.baseY;
   const cols = Math.max(2, next.cols || oldCols || 80);
   const rows = Math.max(2, next.rows || oldRows || 24);
   const heightOnly = oldCols === cols && oldRows && oldRows !== rows;
-  entry.term.resize(cols, heightOnly && !opts.allowHeight ? oldRows : rows);
-  sendResize(id, entry, opts.force || oldCols !== cols || opts.allowHeight);
+  const targetRows = heightOnly && !opts.allowHeight ? oldRows : rows;
+  const changed = oldCols !== cols || oldRows !== targetRows;
+  if (changed) entry.term.resize(cols, targetRows);
+  if ((opts.scrollBottom || atBottom) && changed) entry.term.scrollToBottom?.();
+  sendResize(id, entry, opts.force || changed);
 }
 
 function fitAll(opts = {}) {
@@ -498,14 +497,31 @@ function fitAll(opts = {}) {
   }
 }
 
+function scheduleTerminalFit(opts = {}) {
+  const options = { allowHeight: true, scrollBottom: true, ...opts };
+  if (state.fitFrame) cancelAnimationFrame(state.fitFrame);
+  if (state.fitTimer) clearTimeout(state.fitTimer);
+  if (state.fitTimerLate) clearTimeout(state.fitTimerLate);
+  state.fitFrame = requestAnimationFrame(() => {
+    state.fitFrame = null;
+    fitAll(options);
+    if (options.secondPass === false) return;
+    state.fitTimer = setTimeout(() => {
+      state.fitTimer = null;
+      fitAll(options);
+    }, options.delay ?? 50);
+    if (options.latePass !== false) {
+      state.fitTimerLate = setTimeout(() => {
+        state.fitTimerLate = null;
+        fitAll(options);
+      }, options.lateDelay ?? 250);
+    }
+  });
+}
+
 function updateEmpty() {
   document.getElementById('emptyState').style.display = state.sessions.size ? 'none' : 'grid';
   document.getElementById('stat-active').textContent = String(state.sessions.size);
-}
-
-function isPlainShellCommand(command) {
-  const cmd = String(command || '').trim();
-  return !cmd || /^(zsh|bash|fish|sh|dash|tcsh|ksh|csh|pwsh|powershell|\/bin\/bash|\/bin\/sh)$/i.test(cmd);
 }
 
 function stripTerminalReplyJunk(data) {
@@ -565,8 +581,6 @@ function writeTerminalOutput(term, data, done) {
 }
 
 function writeTerminalReplay(term, data) {
-  // Browser reload gets a fresh xterm. Do not replay old cursor/TUI state into it.
-  // Reset first, then write plain snapshot. Live output after reconnect stays raw.
   try { term.reset(); } catch {}
   writeTerminalOutput(term, normalizeReplayText(data));
 }
@@ -679,11 +693,6 @@ function defaultTitle(session) {
   const peers = state.order.filter(id => state.sessions.has(id) && sessionKind(state.sessions.get(id).session) === kind);
   const n = Math.max(1, peers.indexOf(session.id) + 1 || peers.length + 1);
   return `${kind} ${n}`;
-}
-
-function customTitle(session) {
-  const title = state.panePrefs.titles?.[session.id];
-  return title || defaultTitle(session);
 }
 
 function panelTitle(session) {
@@ -938,7 +947,7 @@ function createPanel(session, opts = {}) {
     }
   });
 
-  const ro = new ResizeObserver(() => fitAll());
+  const ro = new ResizeObserver(() => scheduleTerminalFit());
   ro.observe(el.querySelector('.terminal'));
   term.onData(data => {
     const entry = state.sessions.get(id);
@@ -969,7 +978,7 @@ function createPanel(session, opts = {}) {
   renderSwitcher();
   selectPanel(id, { persist: false });
   requestAnimationFrame(() => {
-    fitAll();
+    fitAll({ allowHeight: true, scrollBottom: true });
     const entry = state.sessions.get(id);
     if (entry && hasSnapshot) {
       entry.restored = restoreTerminalSnapshot(id, term);
@@ -990,7 +999,7 @@ function applyPanelOrder() {
   }
   applyLayoutVisibility();
   renderSwitcher();
-  requestAnimationFrame(fitAll);
+  scheduleTerminalFit();
 }
 
 function restorePanelOrder() {
@@ -1010,23 +1019,6 @@ function swapPanels(sourceId, targetId) {
   applyPanelOrder();
   selectPanel(sourceId, { persist: false });
   savePanePrefs();
-}
-
-function movePanel(sourceId, targetId, side = 'before') {
-  if (!sourceId || !targetId || sourceId === targetId) return;
-  if (!state.sessions.has(sourceId) || !state.sessions.has(targetId)) return;
-  const next = state.order.filter(id => id !== sourceId);
-  const targetIndex = next.indexOf(targetId);
-  const insertAt = side === 'after' ? targetIndex + 1 : targetIndex;
-  next.splice(insertAt, 0, sourceId);
-  state.order = next;
-  applyPanelOrder();
-  selectPanel(sourceId, { persist: false });
-  savePanePrefs();
-}
-
-function movePanelBefore(sourceId, targetId) {
-  movePanel(sourceId, targetId, 'before');
 }
 
 function flashPaneExit(el) {
@@ -1082,13 +1074,13 @@ function attachSocket(id, term, el) {
       setConnectionStatus(id, 'offline');
       flashPaneExit(el);
       playBell();
-      notifySessionExit(panelTitle(session), msg.exitCode);
+      notifySessionExit(panelTitle(entry?.session || { id, meta: {} }), msg.exitCode);
       renderSwitcher();
     }
   };
   ws.onopen = () => {
     setConnectionStatus(id, 'live');
-    requestAnimationFrame(fitAll);
+    scheduleTerminalFit();
   };
   ws.onerror = () => setConnectionStatus(id, 'offline');
   ws.onclose = () => {
@@ -1130,7 +1122,7 @@ function selectPanel(id, opts = {}) {
   entry.el.classList.add('active');
   applyLayoutVisibility();
   entry.term.focus();
-  requestAnimationFrame(fitAll);
+  scheduleTerminalFit();
   renderSwitcher();
   if (opts.persist !== false) saveUiState();
 }
@@ -1580,10 +1572,7 @@ document.getElementById('closeModal').addEventListener('click', e => {
 
 document.addEventListener('paste', handleTerminalPaste, true);
 document.addEventListener('keydown', letBrowserOwnTerminalPasteShortcut, true);
-window.addEventListener('resize', () => {
-    fitAll();
-    setTimeout(fitAll, 50);
-  });
+window.addEventListener('resize', () => scheduleTerminalFit());
 window.addEventListener('beforeunload', () => { savePanePrefs(); saveAllTerminalSnapshots(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveAllTerminalSnapshots(); });
 document.addEventListener('keydown', e => {

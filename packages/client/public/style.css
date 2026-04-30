@@ -175,8 +175,6 @@ button, select { font: inherit; }
 
 @media (max-width: 760px) {
   .grid-container[class*="layout-"] { grid-template-columns: 1fr; grid-auto-rows: minmax(240px, 1fr); grid-template-rows: none; overflow-y: auto; }
-  .topbar-row { padding: 0 6px; }
-  .topbar-row-1, .topbar-row-2 { overflow-x: auto; }
   .switcher-btn { max-width: 84px; }
 }
 
@@ -434,10 +432,7 @@ body.pane-dragging { cursor: grabbing; user-select: none; }
 .ql-desc { color: var(--tg-text-dim); font-size: 11px; }
 
 @media (max-width: 900px) {
-  .topbar-row-1, .topbar-row-2 { height: auto; min-height: 28px; flex-wrap: wrap; padding: 3px 4px; }
-  .topbar-center { order: 3; width: 100%; }
   .switcher-grid { max-width: 100%; overflow-x: auto; }
-  .layout-2x1, .layout-1x2, .layout-1x3, .layout-3x1, .layout-2x2, .layout-3x2, .layout-2x3, .layout-2x4, .layout-4x2, .layout-3x3 { grid-template-columns: 1fr; }
 }
 
 .chrome-peek {
