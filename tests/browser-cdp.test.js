@@ -142,6 +142,21 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const session = await requestJson(base, 'POST', '/api/sessions', { command: '/bin/bash', label: `smoke-${i}`, cols: 120, rows: 30 });
       madeSessions.push(session.id);
     }
+    await requestJson(base, 'PUT', '/api/ui-state', {
+      baseLayout: 'auto',
+      layout: 'auto',
+      activeId: madeSessions[0],
+      panePrefs: {
+        order: madeSessions,
+        minimized: [],
+        viewport: { w: 3200, h: 1800 },
+        windows: {
+          desktop: {
+            [madeSessions[0]]: { x: 99999, y: 99999, w: 1600, h: 900, z: 11 }
+          }
+        }
+      }
+    });
 
     chrome = launchChrome();
     const wsUrl = await chrome.wsUrlPromise;
@@ -158,6 +173,23 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await cdp.send('Page.navigate', { url: base }, sid);
     await waitEval(cdp, sid, 'document.readyState === "complete"');
     await waitEval(cdp, sid, 'document.querySelectorAll(".term-panel").length >= 11');
+    const clampedWindow = await evalExpr(cdp, sid, `(() => {
+      const panel = document.querySelector('[data-pane-id="${madeSessions[0]}"]');
+      const grid = document.getElementById('termGrid');
+      const pr = panel.getBoundingClientRect();
+      const gr = grid.getBoundingClientRect();
+      const eps = 1;
+      return {
+        inside: pr.left >= gr.left - eps && pr.top >= gr.top - eps && pr.right <= gr.right + eps && pr.bottom <= gr.bottom + eps,
+        panel: { left: pr.left, top: pr.top, right: pr.right, bottom: pr.bottom, width: pr.width, height: pr.height },
+        grid: { left: gr.left, top: gr.top, right: gr.right, bottom: gr.bottom, width: gr.width, height: gr.height }
+      };
+    })()`);
+    assert.strictEqual(clampedWindow.inside, true, `persisted offscreen window must clamp inside termGrid: ${JSON.stringify(clampedWindow)}`);
+    await sleep(250);
+    const savedUi = await requestJson(base, 'GET', '/api/ui-state');
+    const savedRect = savedUi.panePrefs?.windows?.desktop?.[madeSessions[0]];
+    assert.ok(savedRect && savedRect.x + savedRect.w <= clampedWindow.grid.width + 1 && savedRect.y + savedRect.h <= clampedWindow.grid.height + 1, `clamped window rect must persist server-side: ${JSON.stringify(savedRect)}`);
 
     const counts = await evalExpr(cdp, sid, `(() => ({
       panels: document.querySelectorAll('.term-panel').length,
@@ -183,6 +215,26 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       return { ok: true };
     })()`);
     assert.deepStrictEqual(clickAll, { ok: true }, 'every switcher tab should be clickable/selectable');
+
+    const minimizeProbe = await evalExpr(cdp, sid, `(() => {
+      const panel = document.querySelector('.term-panel.active');
+      const actionRects = [...panel.querySelectorAll('.term-actions button')].map(btn => {
+        const r = btn.getBoundingClientRect();
+        return { cls: btn.className, w: r.width, h: r.height };
+      });
+      const r = panel.querySelector('button.minimize').getBoundingClientRect();
+      return { id: panel.dataset.paneId, x: r.left + r.width / 2, y: r.top + r.height / 2, actionRects };
+    })()`);
+    assert.deepStrictEqual(minimizeProbe.actionRects.map(r => r.w), [24, 24, 24], 'pane action buttons should be wider');
+    assert.deepStrictEqual(minimizeProbe.actionRects.map(r => r.h), [18, 18, 18], 'pane action buttons should not be taller');
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: minimizeProbe.x, y: minimizeProbe.y }, sid);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: minimizeProbe.x, y: minimizeProbe.y, button: 'left', clickCount: 1 }, sid);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: minimizeProbe.x, y: minimizeProbe.y, button: 'left', clickCount: 1 }, sid);
+    await waitEval(cdp, sid, `document.getElementById('panel-${minimizeProbe.id}')?.classList.contains('minimized')`);
+    const minimizeOpenedClose = await evalExpr(cdp, sid, `document.querySelector('#closeModal.open') && !document.querySelector('#closeModal').hidden`);
+    assert.strictEqual(Boolean(minimizeOpenedClose), false, 'minimize button must not trigger close modal');
+    await evalExpr(cdp, sid, `[...document.querySelectorAll('.switcher-btn')].find(btn => btn.textContent.includes(document.querySelector('#panel-${minimizeProbe.id} .term-title')?.textContent || ''))?.click()`);
+    await waitEval(cdp, sid, `!document.getElementById('panel-${minimizeProbe.id}')?.classList.contains('minimized')`);
 
     await evalExpr(cdp, sid, `document.querySelector('.term-panel.active button.danger').focus()`);
     const beforeFocus = await evalExpr(cdp, sid, 'document.activeElement?.className || document.activeElement?.id || document.activeElement?.tagName');

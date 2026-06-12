@@ -205,16 +205,14 @@ function installCloseHitLayer() {
     const topEl = document.elementFromPoint(e.clientX, e.clientY);
     if (topEl?.closest?.('#chromePeek')) return;
 
+    const closeButton = topEl?.closest?.('button.danger');
+    if (!closeButton) return;
+
     const panel = topEl?.closest?.('#termGrid .term-panel:not(.layout-hidden)');
     if (!panel || panel.classList.contains('minimized')) return;
 
     const btn = panel.querySelector('button.danger');
-    if (!btn) return;
-
-    const rect = btn.getBoundingClientRect();
-    const pad = 8;
-    const inside = e.clientX >= rect.left - pad && e.clientX <= rect.right + pad && e.clientY >= rect.top - pad && e.clientY <= rect.bottom + pad;
-    if (!inside) return;
+    if (!btn || closeButton !== btn) return;
 
     const id = btn.dataset.paneId || panel.dataset.paneId;
     if (!id) return;
@@ -286,6 +284,7 @@ function scaleWindowPrefsToViewport() {
       p.x *= sx; p.y *= sy; p.w *= sx; p.h *= sy;
     }
   }
+  clampWindowPrefs(prefs);
   state.panePrefs.viewport = now;
 }
 
@@ -406,18 +405,37 @@ function ensureFreeWindow(id) {
   return makeFreeWindow(id);
 }
 
-function clampWindowRect(rect) {
+function clampWindowRect(rect = {}) {
   const grid = document.getElementById('termGrid');
   const gr = grid?.getBoundingClientRect?.() || { width: 1280, height: 720 };
-  const w = Math.max(300, Math.min(rect.w, Math.max(320, gr.width)));
-  const h = Math.max(190, Math.min(rect.h, Math.max(220, gr.height)));
+  const desktopW = Math.max(1, Number(gr.width) || 1280);
+  const desktopH = Math.max(1, Number(gr.height) || 720);
+  const minW = Math.min(300, desktopW);
+  const minH = Math.min(190, desktopH);
+  const fallbackW = Math.min(640, desktopW);
+  const fallbackH = Math.min(400, desktopH);
+  const rawW = Number.isFinite(Number(rect.w)) ? Number(rect.w) : fallbackW;
+  const rawH = Number.isFinite(Number(rect.h)) ? Number(rect.h) : fallbackH;
+  const w = Math.max(minW, Math.min(rawW, desktopW));
+  const h = Math.max(minH, Math.min(rawH, desktopH));
+  const maxX = Math.max(0, desktopW - w);
+  const maxY = Math.max(0, desktopH - h);
+  const rawX = Number.isFinite(Number(rect.x)) ? Number(rect.x) : 0;
+  const rawY = Number.isFinite(Number(rect.y)) ? Number(rect.y) : 0;
   return {
-    x: Math.max(0, Math.min(gr.width - 80, rect.x)),
-    y: Math.max(0, Math.min(gr.height - 36, rect.y)),
+    x: Math.max(0, Math.min(maxX, rawX)),
+    y: Math.max(0, Math.min(maxY, rawY)),
     w,
     h,
     z: Number(rect.z) > 0 && Number(rect.z) < 10000 ? Number(rect.z) : nextWindowZ()
   };
+}
+
+function clampWindowPrefs(prefs = windowPrefs()) {
+  for (const [id, rect] of Object.entries(prefs)) {
+    prefs[id] = clampWindowRect(rect);
+  }
+  return prefs;
 }
 
 function applyFreeWindow(id) {
@@ -1398,6 +1416,7 @@ function savePanePrefs() {
   for (const id of Object.keys(prefs)) {
     if (!state.sessions.has(id)) delete prefs[id];
   }
+  clampWindowPrefs(prefs);
   saveUiState();
 }
 
@@ -2318,6 +2337,7 @@ async function init() {
   updateEmpty();
   renderSwitcher();
   state.hydrating = false;
+  savePanePrefs();
 }
 
 function escapeHtml(str) {

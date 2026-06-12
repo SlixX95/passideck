@@ -422,7 +422,7 @@ body.window-resizing { cursor: nwse-resize; user-select: none; }
   display: flex;
   align-items: center;
   gap: 3px;
-  padding: 0 59px 0 3px;
+  padding: 0 74px 0 3px;
   background: var(--tg-bg);
   border-bottom: 1px solid var(--tg-border);
   flex-shrink: 0;
@@ -461,7 +461,7 @@ body.window-resizing { cursor: nwse-resize; user-select: none; }
   z-index: var(--z-actions);
   display: flex;
   gap: 0;
-  width: 57px;
+  width: 72px;
   height: 18px;
   pointer-events: auto;
 }
@@ -471,8 +471,8 @@ body.window-resizing { cursor: nwse-resize; user-select: none; }
   color: var(--tg-text-dim);
   border-radius: 0;
   padding: 0;
-  min-width: 19px;
-  width: 19px;
+  min-width: 24px;
+  width: 24px;
   height: 18px;
   display: inline-flex;
   align-items: center;

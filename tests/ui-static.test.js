@@ -47,6 +47,11 @@ assertIncludes(app, 'function layoutProposals', 'third window button must genera
 assertIncludes(app, 'function showLayoutAssist', 'third window button hover must show layout suggestions');
 assertIncludes(app, 'function makeFreeWindow', 'panes must become free absolute desktop windows');
 assertIncludes(app, 'function applyFreeWindow', 'free windows must restore pixel position and size');
+assertIncludes(app, 'function clampWindowPrefs', 'persisted free-window rects must be centrally clamped to the desktop viewport');
+assertIncludes(app, 'const maxX = Math.max(0, desktopW - w);', 'free-window x clamp must account for actual window width, not leave panes outside the browser');
+assertIncludes(app, 'const maxY = Math.max(0, desktopH - h);', 'free-window y clamp must account for actual window height, not leave panes outside the browser');
+assertIncludes(app, 'clampWindowPrefs(prefs);\n  state.panePrefs.viewport = now;', 'viewport scaling must clamp restored window prefs before applying them');
+assertIncludes(app, 'clampWindowPrefs(prefs);\n  saveUiState();', 'saving pane prefs must persist clamped in-bounds window rects');
 assertIncludes(app, 'state.panePrefs.windows', 'free desktop window positions must persist per layout');
 assertNotIncludes(app, 'state.currentSlots', 'stale fixed-slot state must stay removed from desktop mode');
 assertNotIncludes(app, 'function ensureEmptySlot', 'desktop mode must not render magnetic empty grid slots');
@@ -79,8 +84,14 @@ assertIncludes(app, 'if (changed) entry.term.resize(cols, targetRows);', 'no-op 
 assertIncludes(app, 'entry.term.scrollToBottom?.()', 'after shrinking panes the active prompt must stay reachable at the bottom');
 assertIncludes(app, 'const ro = new ResizeObserver(() => {', 'terminal container resizes must refit height through the debounced scheduler');
 assertIncludes(css, '#saveState { display: inline-block; min-width: 7ch;', 'save status text must reserve width so launch buttons do not jump');
-assertIncludes(html, 'app.js?v=20260611-enter-confirm', 'Enter-confirm fix must cache-bust app.js asset');
-assertIncludes(html, 'style.css?v=20260525-free-gap-snap', 'free-gap snap change must cache-bust style.css asset');
+assertIncludes(html, 'app.js?v=20260612-close-hit-isolation', 'close hit-layer isolation fix must cache-bust app.js asset');
+assertIncludes(html, 'style.css?v=20260612-wide-actions', 'wider header action buttons must cache-bust style.css asset');
+assertIncludes(app, "const closeButton = topEl?.closest?.('button.danger');", 'close hit-layer must only react to the actual close button under the pointer');
+assertIncludes(app, 'if (!btn || closeButton !== btn) return;', 'close hit-layer must not let padded close rect overlap minimize/arrange buttons');
+assertNotIncludes(app, 'const pad = 8;', 'close hit-layer must not use padded close hitboxes that overlap neighboring buttons');
+assertIncludes(css, 'padding: 0 74px 0 3px;', 'pane header must reserve wider action-button area without increasing height');
+assertIncludes(css, 'width: 72px;\n  height: 18px;', 'three action buttons should be wider while keeping 18px header height');
+assertIncludes(css, 'min-width: 24px;\n  width: 24px;\n  height: 18px;', 'individual action buttons should be wider but not taller');
 assertIncludes(html, 'vendor/xterm.js', 'standalone build must load local xterm asset');
 assertNotIncludes(html, 'cdn.jsdelivr.net', 'standalone build must not depend on CDN assets');
 assertIncludes(html, 'data-command="hermes --tui"', 'PassiDeck must expose a Hermes TUI quick-launch command');
@@ -436,7 +447,7 @@ assertIncludes(server, 'PASSIDECK_AUTH_TOKEN', 'server must support optional tok
 assertIncludes(server, 'function requestGuard', 'HTTP API must enforce origin/token guard');
 assertIncludes(server, "req.path === '/health'", 'health endpoint must remain usable for readiness checks when auth token is enabled');
 assertIncludes(server, 'function websocketAllowed', 'WebSocket must enforce origin/token guard');
-assertIncludes(html, 'app.js?v=20260611-enter-confirm', 'served app cache-bust must remain current for browser smoke');
+assertIncludes(html, 'app.js?v=20260612-close-hit-isolation', 'served app cache-bust must remain current for browser smoke');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 assertIncludes(pkg.scripts.test, 'tests/browser-cdp.test.js', 'npm test must include real CDP browser smoke');
 assert.strictEqual(pkg.scripts['test:browser'], 'node tests/browser-cdp.test.js', 'browser smoke script should be callable directly');
