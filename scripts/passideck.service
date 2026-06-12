@@ -1,0 +1,15 @@
+[Unit]
+Description=PassiDeck standalone terminal wall
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/passideck-dev
+EnvironmentFile=%h/.passideck/passideck.env
+ExecStart=/usr/bin/env npm start -- --no-open
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

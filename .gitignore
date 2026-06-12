@@ -1,4 +1,6 @@
 node_modules/
+.dev-home/
+packages/client/public/vendor/
 *.db
 *.db-journal
 *.db-wal
@@ -6,14 +8,3 @@ node_modules/
 secrets.env
 dist/
 .DS_Store
-*.gif
-*.mp4
-!assets/demo.gif
-!docs/screenshots/*.gif
-!docs/screenshots/*.mp4
-
-# Supabase local state (project-ref, pooler-url, versions — from `supabase link`)
-supabase/.temp/
-
-# Claude Code workspace state (hooks, plugin settings, skill cache)
-.claude/

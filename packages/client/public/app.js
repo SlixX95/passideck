@@ -1,9 +1,23 @@
 const API = window.location.origin;
 const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const WS_BASE = `${WS_PROTOCOL}//${window.location.host}/ws`;
+const AUTH_TOKEN_KEY = 'passideck:auth-token';
 
-const LAYOUTS = ['auto', '1x1', '2x1', '3x1', '4x1', '1x2', '1x3', '1x4'];
-const LAYOUT_SLOTS = new Proxy({}, { get: (_, key) => layoutSize(String(key)).slots });
+function authToken() {
+  const urlToken = new URLSearchParams(window.location.search).get('token') || '';
+  if (urlToken) {
+    try { sessionStorage.setItem(AUTH_TOKEN_KEY, urlToken); } catch {}
+    return urlToken;
+  }
+  try { return sessionStorage.getItem(AUTH_TOKEN_KEY) || ''; } catch { return ''; }
+}
+
+function authQuery() {
+  const token = authToken();
+  return token ? `token=${encodeURIComponent(token)}` : '';
+}
+
+const LEGACY_LAYOUTS = new Set(['auto', '1x1', '2x1', '3x1', '4x1', '1x2', '1x3', '1x4']);
 const THEMES = {
   blue:   { background: '#0f1117', foreground: '#c8ccd8', cursor: '#7aa2f7', selectionBackground: '#3d5a9e' },
   green:  { background: '#0f1117', foreground: '#d5e8d0', cursor: '#9ece6a', selectionBackground: '#4c6f38' },
@@ -22,6 +36,7 @@ const state = {
   activeLayout: 'auto',
   activeId: null,
   theme: 'blue',
+  skin: 'neon',
   fontSize: 13,
   minimized: new Set(),
   saveTimer: null,
@@ -30,21 +45,134 @@ const state = {
   clipboardPasteArmed: false,
   clipboardPasteTimer: null,
   systemMonitorTimer: null,
+  codexLimitsTimer: null,
   fitFrame: null,
   fitTimer: null,
   fitTimerLate: null,
   pointerDrag: null,
-  panePrefs: { titles: {}, order: [] },
+  resizeDrag: null,
+  sharedResizeDrag: null,
+  zCounter: 10,
+  hydrating: false,
+  panePrefs: { titles: {}, order: [], windows: {} },
   saveState: 'saved'
 };
 
-const PANE_PREFS_KEY = 'passideck:pane-prefs:v1';
-const CHROME_PREF_KEY = 'passideck:chrome-hidden:v1';
-const FONT_SIZE_KEY = 'passideck:font-size:v1';
-const SYSTEM_MONITOR_KEY = 'passideck:system-monitor:v1';
+const SERVER_STATE_ONLY = true;
 const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v1:';
 const TERM_SNAPSHOT_MAX_LINES = 20000;
 const TERM_SNAPSHOT_MAX_CHARS = 1024 * 1024;
+
+const TOOLTIP_MARGIN = 8;
+const TOOLTIP_DELAY_MS = 300;
+let tooltipDelayTimer = null;
+let tooltipDelayTarget = null;
+
+function tooltipText(el) {
+  return el?.dataset?.tooltip || '';
+}
+
+function setTooltip(el, text) {
+  if (!el) return;
+  const v = String(text || '').trim();
+  el.removeAttribute('title');
+  if (!v) {
+    delete el.dataset.tooltip;
+    return;
+  }
+  el.dataset.tooltip = v;
+  if (!el.hasAttribute('aria-label') && !el.hasAttribute('aria-hidden')) el.setAttribute('aria-label', v);
+}
+
+function appTooltip() {
+  let tip = document.getElementById('appTooltip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.id = 'appTooltip';
+    tip.className = 'app-tooltip';
+    tip.setAttribute('role', 'tooltip');
+    tip.hidden = true;
+    document.body.appendChild(tip);
+  }
+  return tip;
+}
+
+function placeTooltip(target) {
+  const text = tooltipText(target);
+  const tip = appTooltip();
+  if (!text) return hideTooltip();
+  tip.textContent = text;
+  tip.hidden = false;
+  tip.classList.add('visible');
+  const tr = target.getBoundingClientRect();
+  const r = tip.getBoundingClientRect();
+  const below = tr.bottom + 8 + r.height <= window.innerHeight - TOOLTIP_MARGIN;
+  const top = below ? tr.bottom + 8 : Math.max(TOOLTIP_MARGIN, tr.top - r.height - 8);
+  let left = tr.left + (tr.width - r.width) / 2;
+  left = Math.max(TOOLTIP_MARGIN, Math.min(left, window.innerWidth - r.width - TOOLTIP_MARGIN));
+  tip.style.left = `${Math.round(left)}px`;
+  tip.style.top = `${Math.round(top)}px`;
+}
+
+function hideTooltip() {
+  clearTooltipDelay();
+  const tip = document.getElementById('appTooltip');
+  if (!tip) return;
+  tip.hidden = true;
+  tip.classList.remove('visible');
+}
+
+function clearTooltipDelay() {
+  if (tooltipDelayTimer) clearTimeout(tooltipDelayTimer);
+  tooltipDelayTimer = null;
+  tooltipDelayTarget = null;
+}
+
+function scheduleTooltip(target) {
+  if (!target || !tooltipText(target)) return hideTooltip();
+  if (tooltipDelayTarget === target && tooltipDelayTimer) return;
+  clearTooltipDelay();
+  const tip = document.getElementById('appTooltip');
+  if (tip && !tip.hidden) {
+    tip.hidden = true;
+    tip.classList.remove('visible');
+  }
+  tooltipDelayTarget = target;
+  tooltipDelayTimer = setTimeout(() => {
+    const current = tooltipDelayTarget;
+    clearTooltipDelay();
+    if (!current?.isConnected || !current.matches?.(':hover')) return;
+    placeTooltip(current);
+  }, TOOLTIP_DELAY_MS);
+}
+
+function normalizeNativeTooltips(root = document) {
+  root.querySelectorAll('[title]').forEach(el => setTooltip(el, el.getAttribute('title')));
+}
+
+function installTooltips() {
+  normalizeNativeTooltips();
+  document.addEventListener('pointerover', e => {
+    const target = e.target.closest?.('[data-tooltip]');
+    if (target) scheduleTooltip(target);
+  }, true);
+  document.addEventListener('pointermove', e => {
+    const target = e.target.closest?.('[data-tooltip]');
+    if (target && !document.getElementById('appTooltip')?.hidden) placeTooltip(target);
+  }, true);
+  document.addEventListener('pointerout', e => {
+    if (e.target.closest?.('[data-tooltip]') && !e.relatedTarget?.closest?.('[data-tooltip]')) hideTooltip();
+  }, true);
+  document.addEventListener('focusin', e => {
+    const target = e.target.closest?.('[data-tooltip]');
+    if (target) placeTooltip(target);
+  }, true);
+  document.addEventListener('focusout', e => {
+    if (e.target.closest?.('[data-tooltip]')) hideTooltip();
+  }, true);
+  window.addEventListener('scroll', hideTooltip, true);
+  window.addEventListener('resize', hideTooltip);
+}
 
 function requestClosePanel(id) {
   const entry = state.sessions.get(id);
@@ -60,8 +188,9 @@ function setConnectionStatus(id, status) {
   const dot = el.querySelector('.connection-dot');
   if (dot) {
     const labels = { live: 'Verbunden', reconnecting: 'Verbinde neu', offline: 'Offline' };
-    dot.title = labels[status] || status;
-    dot.setAttribute('aria-label', dot.title);
+    const label = labels[status] || status;
+    setTooltip(dot, label);
+    dot.setAttribute('aria-label', label);
   }
 }
 
@@ -72,24 +201,34 @@ function installCloseHitLayer() {
   document.addEventListener('pointerdown', e => {
     if (document.getElementById('closeModal')?.classList.contains('open')) return;
     if (e.target?.closest?.('#chromePeek')) return;
-    if (document.elementFromPoint(e.clientX, e.clientY)?.closest?.('#chromePeek')) return;
-    for (const btn of document.querySelectorAll('#termGrid .term-panel:not(.layout-hidden) button.danger')) {
-      const rect = btn.getBoundingClientRect();
-      const pad = 8;
-      const inside = e.clientX >= rect.left - pad && e.clientX <= rect.right + pad && e.clientY >= rect.top - pad && e.clientY <= rect.bottom + pad;
-      if (!inside) continue;
-      const id = btn.dataset.paneId;
-      if (!id) return;
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      requestClosePanel(id);
-      return;
-    }
+
+    const topEl = document.elementFromPoint(e.clientX, e.clientY);
+    if (topEl?.closest?.('#chromePeek')) return;
+
+    const panel = topEl?.closest?.('#termGrid .term-panel:not(.layout-hidden)');
+    if (!panel || panel.classList.contains('minimized')) return;
+
+    const btn = panel.querySelector('button.danger');
+    if (!btn) return;
+
+    const rect = btn.getBoundingClientRect();
+    const pad = 8;
+    const inside = e.clientX >= rect.left - pad && e.clientX <= rect.right + pad && e.clientY >= rect.top - pad && e.clientY <= rect.bottom + pad;
+    if (!inside) return;
+
+    const id = btn.dataset.paneId || panel.dataset.paneId;
+    if (!id) return;
+
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    requestClosePanel(id);
   }, true);
 }
 
 async function api(method, path, body) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  const token = authToken();
+  if (token) opts.headers['X-PassiDeck-Token'] = token;
   if (body !== undefined) opts.body = JSON.stringify(body);
   const res = await fetch(`${API}${path}`, opts);
   if (!res.ok) throw new Error(`${method} ${path} -> ${res.status}`);
@@ -120,24 +259,641 @@ function layoutSize(layout, count = visibleLayoutCount()) {
   return { rows, cols, slots: rows * cols };
 }
 
-function layoutName(size) {
-  return `${size.rows}x${size.cols}`;
+
+function slotKey(layout = state.layout) {
+  return 'desktop';
 }
 
-function visibleLayoutCount() {
-  return state.order.filter(id => state.sessions.has(id) && !state.minimized.has(id)).length || 1;
+function windowPrefs() {
+  state.panePrefs.windows = state.panePrefs.windows && typeof state.panePrefs.windows === 'object' ? state.panePrefs.windows : {};
+  state.panePrefs.windows[slotKey()] = state.panePrefs.windows[slotKey()] || {};
+  return state.panePrefs.windows[slotKey()];
 }
 
-function applyGridSize() {
+function desktopSize() {
+  const r = document.getElementById('termGrid')?.getBoundingClientRect?.() || { width: window.innerWidth || 1280, height: window.innerHeight || 720 };
+  return { w: Math.max(1, Math.round(r.width)), h: Math.max(1, Math.round(r.height)) };
+}
+
+function scaleWindowPrefsToViewport() {
+  const old = state.panePrefs.viewport;
+  const now = desktopSize();
+  const prefs = windowPrefs();
+  if (old?.w > 0 && old?.h > 0 && (Math.abs(old.w - now.w) > 2 || Math.abs(old.h - now.h) > 2)) {
+    const sx = now.w / old.w;
+    const sy = now.h / old.h;
+    for (const p of Object.values(prefs)) {
+      p.x *= sx; p.y *= sy; p.w *= sx; p.h *= sy;
+    }
+  }
+  state.panePrefs.viewport = now;
+}
+
+function responsiveMinimizeForViewport() {
+  const { w, h } = desktopSize();
+  if (w >= 720 && h >= 420) return;
+  const keep = state.activeId && state.sessions.has(state.activeId) ? state.activeId : state.order.find(id => state.sessions.has(id));
+  for (const id of state.order) {
+    if (id !== keep && state.sessions.has(id)) {
+      state.minimized.add(id);
+      state.sessions.get(id)?.el.classList.add('minimized');
+    }
+  }
+}
+
+function desktopWindowIds() {
+  return new Set(Object.keys(windowPrefs()).filter(id => state.sessions.has(id) && !state.minimized.has(id)));
+}
+
+function rectOverlap(a, b) {
+  const x = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
+  const y = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
+  return x * y;
+}
+
+function occupiedWindowRects(excludeId = null) {
+  const prefs = windowPrefs();
+  return Object.entries(prefs)
+    .filter(([id]) => id !== excludeId && state.sessions.has(id) && !state.minimized.has(id))
+    .map(([, r]) => r);
+}
+
+function desktopCandidates() {
+  const grid = document.getElementById('termGrid');
+  const r = grid?.getBoundingClientRect?.() || { width: 1280, height: 720 };
+  const W = r.width, H = r.height;
+  const q = [
+    { x: W / 2, y: 0, w: W / 2, h: H },
+    { x: 0, y: 0, w: W / 2, h: H },
+    { x: 0, y: H / 2, w: W, h: H / 2 },
+    { x: 0, y: 0, w: W, h: H / 2 },
+    { x: W / 2, y: 0, w: W / 2, h: H / 2 },
+    { x: 0, y: H / 2, w: W / 2, h: H / 2 },
+    { x: W / 2, y: H / 2, w: W / 2, h: H / 2 },
+    { x: 0, y: 0, w: W / 2, h: H / 2 }
+  ];
+  return q;
+}
+
+function freeSpaceWindowRect(id = null) {
+  const occupied = occupiedWindowRects(id);
+  for (const c of desktopCandidates()) {
+    const area = c.w * c.h;
+    const overlap = occupied.reduce((sum, r) => sum + rectOverlap(c, r), 0);
+    if (overlap / Math.max(1, area) < 0.08) return { ...c, z: nextWindowZ() };
+  }
+  return null;
+}
+
+
+function nextWindowZ() {
+  const vals = Object.values(windowPrefs()).map(r => Number(r.z) || 0).filter(v => v > 0 && v < 10000);
+  state.zCounter = Math.max(state.zCounter || 10, ...vals, 10) + 1;
+  return state.zCounter;
+}
+
+function defaultWindowRect(index = 0) {
+  const grid = document.getElementById('termGrid');
+  const r = grid?.getBoundingClientRect?.() || { width: 1280, height: 720 };
+  const free = freeSpaceWindowRect();
+  if (free) return free;
+  const { w, h } = defaultWindowSize();
+  const offset = (index % 8) * 34;
+  return {
+    x: Math.max(0, Math.min(r.width - 120, 24 + offset)),
+    y: Math.max(0, Math.min(r.height - 80, 24 + offset)),
+    w,
+    h,
+    z: nextWindowZ()
+  };
+}
+
+function defaultWindowSize() {
+  const grid = document.getElementById('termGrid');
+  const r = grid?.getBoundingClientRect?.() || { width: 1280, height: 720 };
+  return {
+    w: Math.max(420, Math.min(900, r.width * 0.46)),
+    h: Math.max(280, Math.min(620, r.height * 0.46))
+  };
+}
+
+function makeFreeWindow(id, rect) {
+  const entry = state.sessions.get(id);
+  if (!entry) return null;
+  const prefs = windowPrefs();
+  const grid = document.getElementById('termGrid');
+  const gr = grid?.getBoundingClientRect?.() || { left: 0, top: 0, width: 1280, height: 720 };
+  const r = rect || entry.el.getBoundingClientRect();
+  const currentRect = {
+    x: Math.max(0, Math.min(gr.width - 120, r.left - gr.left + (grid?.scrollLeft || 0))),
+    y: Math.max(0, Math.min(gr.height - 80, r.top - gr.top + (grid?.scrollTop || 0))),
+    w: Math.max(360, r.width || 640),
+    h: Math.max(220, r.height || 400)
+  };
+  if (!prefs[id]) {
+    prefs[id] = { ...currentRect, z: nextWindowZ() };
+  } else if (rect) {
+    Object.assign(prefs[id], currentRect);
+  }
+  entry.el.classList.add('free-window');
+  applyFreeWindow(id);
+  return prefs[id];
+}
+
+function ensureFreeWindow(id) {
+  const prefs = windowPrefs();
+  if (!prefs[id]) prefs[id] = defaultWindowRect(Object.keys(prefs).length);
+  return makeFreeWindow(id);
+}
+
+function clampWindowRect(rect) {
+  const grid = document.getElementById('termGrid');
+  const gr = grid?.getBoundingClientRect?.() || { width: 1280, height: 720 };
+  const w = Math.max(300, Math.min(rect.w, Math.max(320, gr.width)));
+  const h = Math.max(190, Math.min(rect.h, Math.max(220, gr.height)));
+  return {
+    x: Math.max(0, Math.min(gr.width - 80, rect.x)),
+    y: Math.max(0, Math.min(gr.height - 36, rect.y)),
+    w,
+    h,
+    z: Number(rect.z) > 0 && Number(rect.z) < 10000 ? Number(rect.z) : nextWindowZ()
+  };
+}
+
+function applyFreeWindow(id) {
+  const entry = state.sessions.get(id);
+  const p = windowPrefs()[id];
+  if (!entry || !p) return;
+  const rect = clampWindowRect(p);
+  Object.assign(p, rect);
+  entry.el.classList.add('free-window');
+  entry.el.classList.remove('layout-hidden');
+  entry.el.style.gridColumn = '';
+  entry.el.style.gridRow = '';
+  entry.el.style.left = `${rect.x}px`;
+  entry.el.style.top = `${rect.y}px`;
+  entry.el.style.width = `${rect.w}px`;
+  entry.el.style.height = `${rect.h}px`;
+  entry.el.style.zIndex = String(rect.z || 10);
+}
+
+function bringWindowToFront(id) {
+  const p = ensureFreeWindow(id);
+  if (!p) return;
+  p.z = nextWindowZ();
+  applyFreeWindow(id);
+  savePanePrefs();
+}
+
+function clearSnapSuggestions() {
+  document.getElementById('snapSuggestions')?.remove();
+}
+
+function clearDesktopSlotSuggestions() {
+  document.getElementById('desktopSlotSuggestions')?.remove();
+  document.querySelectorAll('.term-panel.slot-swap-target').forEach(el => el.classList.remove('slot-swap-target'));
+}
+
+function clearSharedResizeHandles() {
+  document.getElementById('sharedResizeHandles')?.remove();
+}
+
+function visibleWindowRects() {
+  const prefs = windowPrefs();
+  return state.order
+    .filter(id => state.sessions.has(id) && !state.minimized.has(id) && prefs[id])
+    .map(id => ({ id, rect: clampWindowRect(prefs[id]) }));
+}
+
+function intervalOverlap(a1, a2, b1, b2) {
+  return Math.max(0, Math.min(a2, b2) - Math.max(a1, b1));
+}
+
+function mergeSharedResizeGroup(map, key, seed) {
+  const current = map.get(key) || { ...seed, beforeIds: new Set(), afterIds: new Set(), start: seed.start, end: seed.end };
+  current.pos = (current.pos + seed.pos) / 2;
+  current.start = Math.min(current.start, seed.start);
+  current.end = Math.max(current.end, seed.end);
+  seed.beforeIds.forEach(id => current.beforeIds.add(id));
+  seed.afterIds.forEach(id => current.afterIds.add(id));
+  map.set(key, current);
+}
+
+function sharedResizeGroups() {
+  const rects = visibleWindowRects();
+  const vertical = new Map();
+  const horizontal = new Map();
+  const edgeTol = 8;
+  const minSegment = 56;
+  for (let i = 0; i < rects.length; i += 1) {
+    for (let j = i + 1; j < rects.length; j += 1) {
+      const a = rects[i], b = rects[j];
+      const ar = a.rect.x + a.rect.w;
+      const br = b.rect.x + b.rect.w;
+      const abVertical = intervalOverlap(a.rect.y, a.rect.y + a.rect.h, b.rect.y, b.rect.y + b.rect.h);
+      if (abVertical >= minSegment && Math.abs(ar - b.rect.x) <= edgeTol) {
+        mergeSharedResizeGroup(vertical, Math.round(((ar + b.rect.x) / 2) / edgeTol) * edgeTol, {
+          axis: 'vertical', pos: (ar + b.rect.x) / 2, start: Math.max(a.rect.y, b.rect.y), end: Math.min(a.rect.y + a.rect.h, b.rect.y + b.rect.h), beforeIds: new Set([a.id]), afterIds: new Set([b.id])
+        });
+      }
+      if (abVertical >= minSegment && Math.abs(br - a.rect.x) <= edgeTol) {
+        mergeSharedResizeGroup(vertical, Math.round(((br + a.rect.x) / 2) / edgeTol) * edgeTol, {
+          axis: 'vertical', pos: (br + a.rect.x) / 2, start: Math.max(a.rect.y, b.rect.y), end: Math.min(a.rect.y + a.rect.h, b.rect.y + b.rect.h), beforeIds: new Set([b.id]), afterIds: new Set([a.id])
+        });
+      }
+      const abHorizontal = intervalOverlap(a.rect.x, a.rect.x + a.rect.w, b.rect.x, b.rect.x + b.rect.w);
+      const ab = a.rect.y + a.rect.h;
+      const bb = b.rect.y + b.rect.h;
+      if (abHorizontal >= minSegment && Math.abs(ab - b.rect.y) <= edgeTol) {
+        mergeSharedResizeGroup(horizontal, Math.round(((ab + b.rect.y) / 2) / edgeTol) * edgeTol, {
+          axis: 'horizontal', pos: (ab + b.rect.y) / 2, start: Math.max(a.rect.x, b.rect.x), end: Math.min(a.rect.x + a.rect.w, b.rect.x + b.rect.w), beforeIds: new Set([a.id]), afterIds: new Set([b.id])
+        });
+      }
+      if (abHorizontal >= minSegment && Math.abs(bb - a.rect.y) <= edgeTol) {
+        mergeSharedResizeGroup(horizontal, Math.round(((bb + a.rect.y) / 2) / edgeTol) * edgeTol, {
+          axis: 'horizontal', pos: (bb + a.rect.y) / 2, start: Math.max(a.rect.x, b.rect.x), end: Math.min(a.rect.x + a.rect.w, b.rect.x + b.rect.w), beforeIds: new Set([b.id]), afterIds: new Set([a.id])
+        });
+      }
+    }
+  }
+  return [...vertical.values(), ...horizontal.values()].filter(g => g.beforeIds.size && g.afterIds.size && g.end - g.start >= minSegment);
+}
+
+function renderSharedResizeHandles() {
+  const grid = document.getElementById('termGrid');
+  if (!grid || state.pointerDrag || state.resizeDrag || state.sharedResizeDrag) return;
+  clearSharedResizeHandles();
+  const groups = sharedResizeGroups();
+  if (!groups.length) return;
+  const wrap = document.createElement('section');
+  wrap.id = 'sharedResizeHandles';
+  wrap.className = 'shared-resize-handles';
+  for (const group of groups) {
+    const handle = document.createElement('div');
+    handle.className = `shared-resize-handle ${group.axis}`;
+    handle.setAttribute('aria-hidden', 'true');
+    if (group.axis === 'vertical') {
+      handle.style.left = `${group.pos - 5}px`;
+      handle.style.top = `${group.start}px`;
+      handle.style.width = '10px';
+      handle.style.height = `${group.end - group.start}px`;
+    } else {
+      handle.style.left = `${group.start}px`;
+      handle.style.top = `${group.pos - 5}px`;
+      handle.style.width = `${group.end - group.start}px`;
+      handle.style.height = '10px';
+    }
+    handle.addEventListener('pointerdown', e => startSharedResize(group, e));
+    wrap.appendChild(handle);
+  }
+  grid.appendChild(wrap);
+}
+
+function desktopGridSlotRects(count = visibleWindowIds().length + 1) {
+  const grid = document.getElementById('termGrid');
+  const r = grid?.getBoundingClientRect?.() || { width: 1280, height: 720 };
+  const size = layoutSize('auto', Math.max(4, count));
+  const rects = [];
+  for (let row = 0; row < size.rows; row += 1) {
+    for (let col = 0; col < size.cols; col += 1) {
+      rects.push({ x: col * r.width / size.cols, y: row * r.height / size.rows, w: r.width / size.cols, h: r.height / size.rows });
+    }
+  }
+  return rects;
+}
+
+function similarRect(a, b) {
+  return Math.abs(a.x - b.x) < 8 && Math.abs(a.y - b.y) < 8 && Math.abs(a.w - b.w) < 8 && Math.abs(a.h - b.h) < 8;
+}
+
+function slotRectsForDrag(sourceId) {
+  const prefs = windowPrefs();
+  const occupied = state.order
+    .filter(id => id !== sourceId && state.sessions.has(id) && !state.minimized.has(id) && prefs[id])
+    .map(id => ({ id, rect: { x: prefs[id].x, y: prefs[id].y, w: prefs[id].w, h: prefs[id].h } }));
+  const candidates = [...desktopGapSlotRects(occupied), ...desktopGridSlotRects(visibleWindowIds().length + 1), ...desktopCandidates()];
+  const free = [];
+  for (const c of candidates) {
+    const area = c.w * c.h;
+    if (area < 300 * 190) continue;
+    const overlap = occupied.reduce((sum, o) => sum + rectOverlap(c, o.rect), 0);
+    if (overlap / Math.max(1, area) > 0.12) continue;
+    const rect = { ...c };
+    if (!free.some(existing => similarRect(existing.rect, rect))) free.push({ id: `free-${free.length}`, rect });
+  }
+  return { free, occupied };
+}
+
+function desktopGapSlotRects(occupied) {
+  const grid = document.getElementById('termGrid');
+  const r = grid?.getBoundingClientRect?.() || { width: 1280, height: 720 };
+  const xs = [0, r.width];
+  const ys = [0, r.height];
+  for (const o of occupied) {
+    const a = o.rect;
+    xs.push(Math.max(0, Math.min(r.width, a.x)), Math.max(0, Math.min(r.width, a.x + a.w)));
+    ys.push(Math.max(0, Math.min(r.height, a.y)), Math.max(0, Math.min(r.height, a.y + a.h)));
+  }
+  const ux = [...new Set(xs.map(v => Math.round(v)))].sort((a, b) => a - b);
+  const uy = [...new Set(ys.map(v => Math.round(v)))].sort((a, b) => a - b);
+  const rects = [];
+  for (let yi = 0; yi < uy.length - 1; yi += 1) {
+    for (let xi = 0; xi < ux.length - 1; xi += 1) {
+      const c = { x: ux[xi], y: uy[yi], w: ux[xi + 1] - ux[xi], h: uy[yi + 1] - uy[yi] };
+      if (c.w < 300 || c.h < 190) continue;
+      const overlap = occupied.reduce((sum, o) => sum + rectOverlap(c, o.rect), 0);
+      if (overlap / Math.max(1, c.w * c.h) <= 0.02) rects.push(c);
+    }
+  }
+  return rects.sort((a, b) => (b.w * b.h) - (a.w * a.h));
+}
+
+function pointInRect(px, py, rect) {
+  return px >= rect.x && px <= rect.x + rect.w && py >= rect.y && py <= rect.y + rect.h;
+}
+
+function pointInCenter(px, py, rect) {
+  return px >= rect.x + rect.w * 0.25 && px <= rect.x + rect.w * 0.75 && py >= rect.y + rect.h * 0.25 && py <= rect.y + rect.h * 0.75;
+}
+
+function chooseDesktopSlotAt(x, y, sourceId) {
+  const grid = document.getElementById('termGrid');
+  const gr = grid?.getBoundingClientRect?.();
+  if (!gr) return null;
+  const px = x - gr.left;
+  const py = y - gr.top;
+  const slots = slotRectsForDrag(sourceId);
+  const swap = slots.occupied.find(slot => pointInCenter(px, py, slot.rect));
+  if (swap) return { type: 'swap', targetId: swap.id, rect: swap.rect, slots };
+  const free = slots.free.find(slot => pointInRect(px, py, slot.rect));
+  if (free) return { type: 'free', rect: free.rect, slots };
+  return { type: 'none', slots };
+}
+
+function showDesktopSlotSuggestions(result) {
+  const grid = document.getElementById('termGrid');
+  const slots = result?.slots;
+  if (!grid || !slots) { clearDesktopSlotSuggestions(); return; }
+  let wrap = document.getElementById('desktopSlotSuggestions');
+  if (!wrap) {
+    wrap = document.createElement('section');
+    wrap.id = 'desktopSlotSuggestions';
+    wrap.className = 'desktop-slot-suggestions';
+    grid.appendChild(wrap);
+  }
+  wrap.innerHTML = '';
+  const activeFree = result.type === 'free' ? result.rect : null;
+  for (const slot of slots.free) {
+    const el = document.createElement('div');
+    el.className = `desktop-slot free${activeFree && similarRect(activeFree, slot.rect) ? ' active' : ''}`;
+    el.style.left = `${slot.rect.x}px`;
+    el.style.top = `${slot.rect.y}px`;
+    el.style.width = `${slot.rect.w}px`;
+    el.style.height = `${slot.rect.h}px`;
+    el.innerHTML = '<span>Frei</span>';
+    wrap.appendChild(el);
+  }
+  document.querySelectorAll('.term-panel.slot-swap-target').forEach(el => el.classList.remove('slot-swap-target'));
+  if (result.type === 'swap') document.getElementById(`panel-${result.targetId}`)?.classList.add('slot-swap-target');
+}
+
+function applyFreeSlotSnap(id, rect) {
+  const prefs = windowPrefs();
+  const p = ensureFreeWindow(id);
+  if (!p) return;
+  Object.assign(prefs[id], { x: rect.x, y: rect.y, w: rect.w, h: rect.h, z: p.z || nextWindowZ() });
+  applyFreeWindow(id);
+}
+
+function swapWindowSlots(sourceId, targetId, sourceSlotRect = null) {
+  if (!sourceId || !targetId || sourceId === targetId) return;
+  const prefs = windowPrefs();
+  const source = ensureFreeWindow(sourceId);
+  const target = ensureFreeWindow(targetId);
+  if (!source || !target) return;
+  const sourceRect = sourceSlotRect || { x: source.x, y: source.y, w: source.w, h: source.h };
+  const targetRect = { x: target.x, y: target.y, w: target.w, h: target.h };
+  Object.assign(prefs[sourceId], { ...targetRect, z: nextWindowZ() });
+  Object.assign(prefs[targetId], { ...sourceRect, z: Math.max(1, (prefs[sourceId].z || 10) - 1) });
+  const si = state.order.indexOf(sourceId);
+  const ti = state.order.indexOf(targetId);
+  if (si >= 0 && ti >= 0) [state.order[si], state.order[ti]] = [state.order[ti], state.order[si]];
+  applyFreeWindow(targetId);
+  applyFreeWindow(sourceId);
+  renderSwitcher();
+  renderSharedResizeHandles();
+}
+
+function snapSuggestionsAt(x, y) {
+  const grid = document.getElementById('termGrid');
+  if (!grid) return [];
+  const r = grid.getBoundingClientRect();
+  if (x < r.left || x > r.right || y < r.top || y > r.bottom) return [];
+  const edge = Math.min(42, Math.max(24, Math.min(r.width, r.height) * 0.045));
+  const nearLeft = x - r.left <= edge;
+  const nearRight = r.right - x <= edge;
+  const nearTop = y - r.top <= edge;
+  const nearBottom = r.bottom - y <= edge;
+  const W = r.width;
+  const H = r.height;
+  const suggestions = [];
+  const add = (key, label, rect) => suggestions.push({ key, label, rect });
+  if (nearLeft && nearTop) {
+    add('top-left-quarter', 'Viertel oben links', { x: 0, y: 0, w: W / 2, h: H / 2 });
+    add('left-half', 'Linke Hälfte', { x: 0, y: 0, w: W / 2, h: H });
+    add('top-half', 'Obere Hälfte', { x: 0, y: 0, w: W, h: H / 2 });
+  } else if (nearRight && nearTop) {
+    add('top-right-quarter', 'Viertel oben rechts', { x: W / 2, y: 0, w: W / 2, h: H / 2 });
+    add('right-half', 'Rechte Hälfte', { x: W / 2, y: 0, w: W / 2, h: H });
+    add('top-half', 'Obere Hälfte', { x: 0, y: 0, w: W, h: H / 2 });
+  } else if (nearLeft && nearBottom) {
+    add('bottom-left-quarter', 'Viertel unten links', { x: 0, y: H / 2, w: W / 2, h: H / 2 });
+    add('left-half', 'Linke Hälfte', { x: 0, y: 0, w: W / 2, h: H });
+    add('bottom-half', 'Untere Hälfte', { x: 0, y: H / 2, w: W, h: H / 2 });
+  } else if (nearRight && nearBottom) {
+    add('bottom-right-quarter', 'Viertel unten rechts', { x: W / 2, y: H / 2, w: W / 2, h: H / 2 });
+    add('right-half', 'Rechte Hälfte', { x: W / 2, y: 0, w: W / 2, h: H });
+    add('bottom-half', 'Untere Hälfte', { x: 0, y: H / 2, w: W, h: H / 2 });
+  } else if (nearLeft) add('left-half', 'Linke Hälfte', { x: 0, y: 0, w: W / 2, h: H });
+  else if (nearRight) add('right-half', 'Rechte Hälfte', { x: W / 2, y: 0, w: W / 2, h: H });
+  else if (nearTop) add('top-half', 'Obere Hälfte', { x: 0, y: 0, w: W, h: H / 2 });
+  else if (nearBottom) add('bottom-half', 'Untere Hälfte', { x: 0, y: H / 2, w: W, h: H / 2 });
+  return suggestions;
+}
+
+function showSnapSuggestions(suggestions, activeKey = null) {
+  const grid = document.getElementById('termGrid');
+  if (!grid || !suggestions.length) { clearSnapSuggestions(); return; }
+  let wrap = document.getElementById('snapSuggestions');
+  if (!wrap) {
+    wrap = document.createElement('section');
+    wrap.id = 'snapSuggestions';
+    wrap.className = 'snap-suggestions';
+    grid.appendChild(wrap);
+  }
+  wrap.innerHTML = '';
+  for (const s of suggestions) {
+    const el = document.createElement('div');
+    el.className = `snap-choice${s.key === activeKey ? ' active' : ''}`;
+    el.dataset.snapKey = s.key;
+    el.style.left = `${s.rect.x}px`;
+    el.style.top = `${s.rect.y}px`;
+    el.style.width = `${s.rect.w}px`;
+    el.style.height = `${s.rect.h}px`;
+    el.innerHTML = `<span>${s.label}</span>`;
+    wrap.appendChild(el);
+  }
+}
+
+function chooseSnapSuggestionAt(x, y, suggestions) {
+  if (!suggestions.length) return null;
+  const grid = document.getElementById('termGrid');
+  const r = grid.getBoundingClientRect();
+  const px = x - r.left;
+  const py = y - r.top;
+  const containing = suggestions.filter(s => px >= s.rect.x && px <= s.rect.x + s.rect.w && py >= s.rect.y && py <= s.rect.y + s.rect.h);
+  if (containing.length) return containing.sort((a, b) => (a.rect.w * a.rect.h) - (b.rect.w * b.rect.h))[0];
+  return suggestions[0];
+}
+
+function visibleWindowIds(firstId = null) {
+  const ids = state.order.filter(id => state.sessions.has(id) && !state.minimized.has(id));
+  if (!firstId || !ids.includes(firstId)) return ids;
+  return [firstId, ...ids.filter(id => id !== firstId)];
+}
+
+function tileRects(rect, count) {
+  if (count <= 0) return [];
+  if (count === 1) return [rect];
+  const cols = rect.w >= rect.h ? Math.ceil(Math.sqrt(count)) : Math.floor(Math.sqrt(count));
+  const c = Math.max(1, cols);
+  const rows = Math.ceil(count / c);
+  return Array.from({ length: count }, (_, i) => {
+    const x = i % c, y = Math.floor(i / c);
+    const w = rect.w / c, h = rect.h / rows;
+    return { x: rect.x + x * w, y: rect.y + y * h, w, h };
+  });
+}
+
+function leftoverRects(used) {
+  const grid = document.getElementById('termGrid');
+  const r = grid?.getBoundingClientRect?.() || { width: 1280, height: 720 };
+  const W = r.width, H = r.height;
+  return [
+    { x: 0, y: 0, w: used.x, h: H },
+    { x: used.x + used.w, y: 0, w: W - used.x - used.w, h: H },
+    { x: 0, y: 0, w: W, h: used.y },
+    { x: 0, y: used.y + used.h, w: W, h: H - used.y - used.h }
+  ].filter(a => a.w >= 180 && a.h >= 120).sort((a, b) => b.w * b.h - a.w * a.h);
+}
+
+function applyRectsToWindows(ids, rects) {
+  const prefs = windowPrefs();
+  ids.forEach((id, i) => {
+    const p = ensureFreeWindow(id);
+    if (!p || !rects[i]) return;
+    Object.assign(prefs[id], { ...rects[i], z: nextWindowZ() });
+    applyFreeWindow(id);
+  });
+  savePanePrefs();
+  scheduleTerminalFit();
+  renderSharedResizeHandles();
+}
+
+function applySnapSuggestion(id, suggestion) {
+  if (!id || !suggestion) return;
+  const ids = visibleWindowIds(id);
+  const rem = ids.slice(1);
+  const rects = [suggestion.rect];
+  const left = leftoverRects(suggestion.rect)[0];
+  if (left) rects.push(...tileRects(left, rem.length));
+  applyRectsToWindows(ids, rects);
+}
+
+function layoutProposalRects(key, ids) {
+  const grid = document.getElementById('termGrid');
+  const r = grid?.getBoundingClientRect?.() || { width: 1280, height: 720 };
+  const W = r.width, H = r.height, n = ids.length;
+  if (key === 'columns') return tileRects({ x: 0, y: 0, w: W, h: H }, n).map((a, i) => n > 1 ? { ...a, x: i * W / n, y: 0, w: W / n, h: H } : a);
+  if (key === 'rows') return Array.from({ length: n }, (_, i) => ({ x: 0, y: i * H / n, w: W, h: H / n }));
+  if (key === 'focus-left') return [{ x: 0, y: 0, w: W / 2, h: H }, ...tileRects({ x: W / 2, y: 0, w: W / 2, h: H }, n - 1)];
+  if (key === 'focus-top') return [{ x: 0, y: 0, w: W, h: H / 2 }, ...tileRects({ x: 0, y: H / 2, w: W, h: H / 2 }, n - 1)];
+  return tileRects({ x: 0, y: 0, w: W, h: H }, n);
+}
+
+function layoutProposals(id) {
+  const ids = visibleWindowIds(id);
+  const base = [
+    { key: 'grid', label: 'Grid', ids },
+    { key: 'columns', label: 'Spalten', ids },
+    { key: 'rows', label: 'Zeilen', ids }
+  ];
+  if (ids.length > 1) base.push({ key: 'focus-left', label: 'Links + Rest', ids }, { key: 'focus-top', label: 'Oben + Rest', ids });
+  return base.map(p => ({ ...p, rects: layoutProposalRects(p.key, p.ids) }));
+}
+
+function clearLayoutAssist() {
+  document.getElementById('layoutAssist')?.remove();
+}
+
+function showLayoutAssist(id, anchor) {
   const grid = document.getElementById('termGrid');
   if (!grid) return;
-  const size = layoutSize(state.layout);
-  state.activeLayout = layoutName(size);
-  grid.className = 'grid-container layout-auto';
-  grid.dataset.layout = state.layout;
-  grid.dataset.activeLayout = state.activeLayout;
-  grid.style.setProperty('--grid-rows', size.rows);
-  grid.style.setProperty('--grid-cols', size.cols);
+  clearLayoutAssist();
+  const gr = grid.getBoundingClientRect();
+  const ar = anchor.getBoundingClientRect();
+  const box = document.createElement('section');
+  box.id = 'layoutAssist';
+  box.className = 'layout-assist';
+  box.style.left = `${Math.max(4, Math.min(gr.width - 260, ar.right - gr.left - 244))}px`;
+  box.style.top = `${Math.max(4, ar.bottom - gr.top + 4)}px`;
+  for (const p of layoutProposals(id)) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'layout-card';
+    btn.innerHTML = `<span class="layout-mini"></span><b>${p.label}</b>`;
+    const mini = btn.querySelector('.layout-mini');
+    p.rects.forEach(r => {
+      const c = document.createElement('i');
+      const W = gr.width, H = gr.height;
+      c.style.left = `${r.x / W * 100}%`; c.style.top = `${r.y / H * 100}%`;
+      c.style.width = `${r.w / W * 100}%`; c.style.height = `${r.h / H * 100}%`;
+      mini.appendChild(c);
+    });
+    btn.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); applyRectsToWindows(p.ids, p.rects); clearLayoutAssist(); });
+    box.appendChild(btn);
+  }
+  box.addEventListener('mouseleave', () => setTimeout(clearLayoutAssist, 120));
+  grid.appendChild(box);
+}
+
+function applyLayoutVisibility() {
+  const grid = document.getElementById('termGrid');
+  const hidden = document.getElementById('hiddenPanes');
+  if (!grid || !hidden) return;
+  grid.className = 'grid-container layout-desktop';
+  grid.dataset.layout = 'desktop';
+  grid.dataset.activeLayout = 'desktop';
+  grid.style.gridTemplateColumns = '';
+  grid.style.gridTemplateRows = '';
+  grid.querySelectorAll('.empty-slot, .resize-gutter, .drop-placeholder').forEach(el => el.remove());
+  clearSnapSuggestions();
+  clearDesktopSlotSuggestions();
+  clearSharedResizeHandles();
+  clearLayoutAssist();
+  for (const id of state.order) {
+    const entry = state.sessions.get(id);
+    if (!entry) continue;
+    if (state.minimized.has(id)) {
+      if (entry.el.parentElement !== hidden) hidden.appendChild(entry.el);
+      entry.el.classList.add('layout-hidden');
+      continue;
+    }
+    if (entry.el.parentElement !== grid) grid.appendChild(entry.el);
+    entry.el.classList.remove('layout-hidden');
+    ensureFreeWindow(id);
+  }
+  renderSharedResizeHandles();
 }
 
 function setSaveState(value) {
@@ -152,111 +908,44 @@ function uiPayload() {
     baseLayout: state.layout,
     activeId: state.activeId,
     minimized: [...state.minimized],
-    theme: state.theme
+    theme: state.theme,
+    skin: state.skin,
+    fontSize: state.fontSize,
+    chromeHidden: document.body.classList.contains('chrome-hidden'),
+    systemMonitor: document.body.classList.contains('system-monitor-on'),
+    panePrefs: state.panePrefs
   };
 }
 
 function saveUiState() {
+  if (state.hydrating) return;
   setSaveState('saving');
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(() => api('PUT', '/api/ui-state', uiPayload()).then(() => setSaveState('saved')).catch(() => setSaveState('offline')), 150);
 }
 
-function visiblePaneIds(layout = state.activeLayout) {
-  const ids = state.order.filter(id => state.sessions.has(id) && !state.minimized.has(id));
-  const cap = layoutSize(layout, ids.length).slots;
-  return new Set(ids.slice(0, cap));
+function flushUiState() {
+  clearTimeout(state.saveTimer);
+  const body = JSON.stringify(uiPayload());
+  try {
+    navigator.sendBeacon?.('/api/ui-state', new Blob([body], { type: 'application/json' })) || fetch('/api/ui-state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body, keepalive: true });
+  } catch {}
 }
-
-function autoMinimizeExcess() {
-  const visible = visiblePaneIds();
-  for (const [id, entry] of state.sessions) {
-    if (!visible.has(id) && !state.minimized.has(id)) {
-      minimizePanel(id);
-    }
-  }
-}
-
-function autoRestoreToFillSlots() {
-  const slotCount = getCurrentSlotCount();
-  const visible = getVisibleCount();
-  if (visible >= slotCount) return;
-  // Restore minimized panels in order until slots full
-  for (const id of state.order) {
-    if (!state.minimized.has(id)) continue;
-    if (getVisibleCount() >= slotCount) break;
-    restorePanel(id);
-  }
-}
-
-function applyLayoutVisibility() {
-  applyGridSize();
-  const grid = document.getElementById('termGrid');
-  const hidden = document.getElementById('hiddenPanes');
-  const visible = visiblePaneIds();
-  for (const id of state.order) {
-    const entry = state.sessions.get(id);
-    if (!entry) continue;
-    const shouldHide = !visible.has(id) || state.minimized.has(id);
-    if (shouldHide) {
-      if (entry.el.parentElement !== hidden) hidden.appendChild(entry.el);
-      entry.el.classList.add('layout-hidden');
-    } else {
-      if (entry.el.parentElement !== grid) grid.appendChild(entry.el);
-      entry.el.classList.remove('layout-hidden');
-    }
-  }
-}
-
 function setLayout(layout, opts = {}) {
-  if (!layout || !LAYOUTS.includes(layout)) return;
-  state.layout = layout;
+  state.layout = 'auto';
   applyLayoutVisibility();
-  // Grid changes must not un-minimize user-hidden panes.
-  autoMinimizeExcess();
   updateGridPickerActive();
-  // Two-pass, debounced fit: let CSS/grid settle before resizing PTYs.
   scheduleTerminalFit();
   if (opts.persist !== false) saveUiState();
-}
-
-/* ── Grid Picker ── */
-function layoutLabel(layout) {
-  if (layout === 'auto') return 'Auto';
-  const { rows, cols } = parseLayout(layout);
-  if (rows > cols) return `${rows} rows`;
-  if (cols > rows) return `${cols} columns`;
-  return `${rows}×${cols}`;
-}
-
-function layoutTitle(layout) {
-  if (layout === 'auto') return 'Auto layout';
-  const { rows, cols } = parseLayout(layout);
-  if (rows > cols) return `${rows} rows; new panes add columns`;
-  if (cols > rows) return `${cols} columns; new panes add rows`;
-  return `${rows}×${cols}; grows balanced`;
 }
 
 function buildGridPicker() {
   const container = document.getElementById('gridPickerInline');
   if (!container) return;
-  container.innerHTML = '<label class="layout-select-label" for="layoutSelect">Layout</label><select id="layoutSelect" class="layout-select" aria-label="Layout"></select>';
-  const select = container.querySelector('select');
-  for (const layout of LAYOUTS) {
-    const option = document.createElement('option');
-    option.value = layout;
-    option.textContent = layoutLabel(layout);
-    option.title = layoutTitle(layout);
-    select.appendChild(option);
-  }
-  select.onchange = () => { setLayout(select.value); showToast(layoutTitle(select.value)); };
-  updateGridPickerActive();
+  container.innerHTML = '<span class="layout-select-label">Desktop</span>';
 }
 
-function updateGridPickerActive() {
-  const select = document.getElementById('layoutSelect');
-  if (select) select.value = state.layout;
-}
+function updateGridPickerActive() {}
 
 /* ── Font Size ── */
 function setFontSize(size, opts = {}) {
@@ -270,9 +959,7 @@ function setFontSize(size, opts = {}) {
   const label = document.getElementById('fontSizeLabel');
   if (slider) slider.value = size;
   if (label) label.textContent = `${size}px`;
-  if (opts.persist !== false) {
-    try { localStorage.setItem(FONT_SIZE_KEY, String(size)); } catch {}
-  }
+  if (opts.persist !== false) saveUiState();
 }
 
 /* ── Minimize / Restore ── */
@@ -280,59 +967,9 @@ function getVisibleCount() {
   return state.order.filter(id => state.sessions.has(id) && !state.minimized.has(id) && !state.sessions.get(id).el.classList.contains('layout-hidden')).length;
 }
 
-function getCurrentSlotCount() {
-  return layoutSize(state.activeLayout).slots;
-}
-
 function smartRestorePanel(id) {
-  const slotCount = getCurrentSlotCount();
-  const visible = getVisibleCount();
-  if (visible < slotCount) {
-    // Platz da → einfach restore
-    restorePanel(id);
-  } else if (state.activeId && state.activeId !== id) {
-    // Kein Platz → aktives Pane minimieren, dieses an dessen Position öffnen
-    const activeEntry = state.sessions.get(state.activeId);
-    const restoreEntry = state.sessions.get(id);
-    if (activeEntry && restoreEntry) {
-      const activeIndex = state.order.indexOf(state.activeId);
-      const restoreIndex = state.order.indexOf(id);
-      if (activeIndex >= 0 && restoreIndex >= 0) {
-        [state.order[activeIndex], state.order[restoreIndex]] = [state.order[restoreIndex], state.order[activeIndex]];
-        savePanePrefs();
-      }
-      // Swap DOM positions in grid
-      const grid = document.getElementById('termGrid');
-      const hidden = document.getElementById('hiddenPanes');
-      // Move active to hidden, restore to active's position
-      const activeNext = activeEntry.el.nextSibling;
-      if (activeNext && activeNext.parentElement === grid) {
-        grid.insertBefore(restoreEntry.el, activeNext);
-      } else {
-        grid.appendChild(restoreEntry.el);
-      }
-      hidden.appendChild(activeEntry.el);
-    }
-    state.minimized.add(state.activeId);
-    activeEntry.el.classList.add('minimized');
-    activeEntry.el.classList.add('layout-hidden');
-    state.minimized.delete(id);
-    restoreEntry.el.classList.remove('minimized');
-    restoreEntry.el.classList.remove('layout-hidden');
-    savePanePrefs();
-    updateMinimizedBar();
-    selectPanel(id, { persist: false });
-    scheduleTerminalFit();
-  } else {
-    // Fallback: erstes sichtbares Pane minimieren
-    const firstVisible = state.order.find(oid => state.sessions.has(oid) && !state.minimized.has(oid));
-    if (firstVisible) {
-      minimizePanel(firstVisible);
-      restorePanel(id);
-    } else {
-      restorePanel(id);
-    }
-  }
+  restorePanel(id);
+  bringWindowToFront(id);
 }
 
 function minimizePanel(id) {
@@ -351,6 +988,7 @@ function restorePanel(id) {
   if (!entry) return;
   entry.el.classList.remove('minimized');
   state.minimized.delete(id);
+  ensureFreeWindow(id);
   updateMinimizedBar();
   applyLayoutVisibility();
   savePanePrefs();
@@ -367,28 +1005,12 @@ function updateMinimizedBar() {
   if (state.minimized.size === 0) {
     bar.hidden = true;
     tabs.innerHTML = '';
+    renderSwitcher();
     return;
   }
-  bar.hidden = false;
+  bar.hidden = true;
   tabs.innerHTML = '';
-  for (const id of state.order) {
-    if (!state.minimized.has(id)) continue;
-    const entry = state.sessions.get(id);
-    if (!entry) continue;
-    const tab = document.createElement('div');
-    tab.className = 'minimized-tab';
-    // Tooltip: zeigt was passiert wenn kein Platz
-    const willReplace = getVisibleCount() >= getCurrentSlotCount();
-    const replaceTarget = state.activeId && state.activeId !== id ? panelTitle(state.sessions.get(state.activeId)?.session) : null;
-    const tip = willReplace
-      ? `Ersetzt: ${replaceTarget || 'aktives Fenster'}`
-      : 'Wiederherstellen';
-    tab.innerHTML = `<span class="min-title">${escapeHtml(panelTitle(entry.session))}</span><button class="restore-btn" title="${tip}">□</button>`;
-
-    tab.querySelector('.min-title').onclick = (e) => { e.stopPropagation(); smartRestorePanel(id); };
-    tab.querySelector('.restore-btn').onclick = (e) => { e.stopPropagation(); smartRestorePanel(id); };
-    tabs.appendChild(tab);
-  }
+  renderSwitcher();
 }
 
 /* ── Close Confirmation ── */
@@ -404,22 +1026,58 @@ function setTheme(theme, opts = {}) {
   if (opts.persist !== false) saveUiState();
 }
 
-function setChromeHidden(hidden) {
+function setSkin(skin, opts = {}) {
+  if (!['neon', 'stealth', 'prism'].includes(skin)) skin = 'neon';
+  state.skin = skin;
+  document.body.dataset.skin = skin;
+  const select = document.getElementById('skinSelect');
+  if (select) select.value = skin;
+  if (opts.persist !== false) saveUiState();
+}
+
+function setChromeHidden(hidden, opts = {}) {
   document.body.classList.toggle('chrome-hidden', Boolean(hidden));
-  try { localStorage.setItem(CHROME_PREF_KEY, hidden ? '1' : '0'); } catch {}
   scheduleTerminalFit();
+  if (opts.persist !== false) saveUiState();
 }
 
 function updateSystemMonitor(metrics) {
   const monitor = document.getElementById('systemMonitor');
   if (!monitor || !metrics) return;
-  for (const key of ['cpu', 'ram', 'net']) {
+  for (const key of ['cpu', 'ram', 'disk']) {
     const cell = monitor.querySelector(`[data-metric="${key}"]`);
+    if (!cell) continue;
+    const label = cell.querySelector('b');
+    if (key === 'disk' && (!Number.isFinite(Number(metrics.disk)) || !metrics.diskInfo)) {
+      cell.classList.add('unavailable');
+      cell.style.setProperty('--v', '0%');
+      if (label) label.textContent = '--%';
+      setTooltip(cell, 'Disk unavailable · backend restart needed');
+      cell.setAttribute('aria-label', 'Disk unavailable');
+      continue;
+    }
     const value = Math.max(0, Math.min(100, Math.round(Number(metrics[key]) || 0)));
-    cell?.style.setProperty('--v', `${value}%`);
-    const label = cell?.querySelector('b');
+    cell.classList.remove('unavailable');
+    cell.style.setProperty('--v', `${value}%`);
     if (label) label.textContent = `${value}%`;
+    if (key === 'disk') {
+      const info = metrics.diskInfo || {};
+      const details = info.error
+        ? `Disk ${info.path || '/'}: ${info.error}`
+        : `Disk ${info.path || '/'}: ${formatBytes(info.used)} used of ${formatBytes(info.total)} · ${formatBytes(info.free)} free`;
+      setTooltip(cell, details);
+      cell.setAttribute('aria-label', details);
+    }
   }
+}
+
+function formatBytes(bytes) {
+  const value = Number(bytes) || 0;
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let n = Math.max(0, value);
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n >= 10 || i === 0 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
 }
 
 async function pollSystemMonitor() {
@@ -443,6 +1101,49 @@ function stopSystemMonitorPolling() {
   state.systemMonitorTimer = null;
 }
 
+function formatReset(ts) {
+  if (!ts) return 'reset unknown';
+  return `reset ${new Date(Number(ts) * 1000).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}`;
+}
+
+function setCodexLimitCell(kind, limit) {
+  const cell = document.querySelector(`#codexLimits [data-limit="${kind}"]`);
+  if (!cell) return;
+  if (!limit) {
+    cell.classList.add('unavailable');
+    cell.querySelector('b').textContent = '--%';
+    setTooltip(cell, `${kind === 'primary' ? 'Codex 5h' : 'Codex weekly'} unavailable`);
+    return;
+  }
+  const used = Math.max(0, Math.min(100, Math.round(Number(limit.usedPercent) || 0)));
+  const left = Math.max(0, 100 - used);
+  cell.classList.remove('unavailable');
+  cell.style.setProperty('--v', `${left}%`);
+  cell.querySelector('b').textContent = `${left}%`;
+  setTooltip(cell, `${kind === 'primary' ? 'Codex 5h' : 'Codex weekly'}: ${left}% left (${used}% used) · ${formatReset(limit.resetsAt)}`);
+}
+
+function updateCodexLimits(data) {
+  setCodexLimitCell('primary', data?.primary);
+  setCodexLimitCell('secondary', data?.secondary);
+  document.getElementById('codexLimits')?.classList.toggle('limit-reached', Boolean(data?.rateLimitReachedType));
+}
+
+async function pollCodexLimits() {
+  try {
+    updateCodexLimits(await api('GET', '/api/codex-limits'));
+  } catch (err) {
+    console.warn('codex limits unavailable', err);
+    updateCodexLimits(null);
+  }
+}
+
+function startCodexLimitsPolling() {
+  if (state.codexLimitsTimer) return;
+  pollCodexLimits();
+  state.codexLimitsTimer = setInterval(pollCodexLimits, 60000);
+}
+
 function setSystemMonitorVisible(visible, opts = {}) {
   const enabled = Boolean(visible);
   document.body.classList.toggle('system-monitor-on', enabled);
@@ -452,10 +1153,7 @@ function setSystemMonitorVisible(visible, opts = {}) {
   if (toggle) toggle.checked = enabled;
   if (enabled) startSystemMonitorPolling();
   else stopSystemMonitorPolling();
-  if (opts.persist !== false) {
-    try { localStorage.setItem(SYSTEM_MONITOR_KEY, enabled ? '1' : '0'); } catch {}
-  }
-  scheduleTerminalFit();
+  if (opts.persist !== false) saveUiState();
 }
 
 function toggleChrome() {
@@ -517,6 +1215,24 @@ function scheduleTerminalFit(opts = {}) {
       }, options.lateDelay ?? 250);
     }
   });
+}
+
+function installTerminalTouchScroll(termEl, term) {
+  let lastY = 0;
+  termEl.addEventListener('touchstart', e => {
+    if (e.touches.length !== 1) return;
+    lastY = e.touches[0].clientY;
+  }, { passive: true });
+  termEl.addEventListener('touchmove', e => {
+    if (e.touches.length !== 1 || state.pointerDrag) return;
+    const y = e.touches[0].clientY;
+    const dy = y - lastY;
+    lastY = y;
+    const lines = Math.trunc(-dy / Math.max(8, state.fontSize * 1.2));
+    if (!lines) return;
+    term.scrollLines(lines);
+    e.preventDefault();
+  }, { passive: false });
 }
 
 function updateEmpty() {
@@ -661,23 +1377,28 @@ function saveAllTerminalSnapshots() {
   for (const id of state.sessions.keys()) saveTerminalSnapshot(id);
 }
 
-function loadPanePrefs() {
-  try {
-    const prefs = JSON.parse(localStorage.getItem(PANE_PREFS_KEY) || '{}');
-    state.panePrefs = {
-      titles: prefs.titles && typeof prefs.titles === 'object' ? prefs.titles : {},
-      order: Array.isArray(prefs.order) ? prefs.order.filter(id => typeof id === 'string') : [],
-      minimized: Array.isArray(prefs.minimized) ? prefs.minimized.filter(id => typeof id === 'string') : []
-    };
-  } catch {
-    state.panePrefs = { titles: {}, order: [], minimized: [] };
-  }
+function loadPanePrefs(prefs = {}) {
+  state.panePrefs = {
+    titles: prefs.titles && typeof prefs.titles === 'object' ? prefs.titles : {},
+    order: Array.isArray(prefs.order) ? prefs.order.filter(id => typeof id === 'string') : [],
+    minimized: Array.isArray(prefs.minimized) ? prefs.minimized.filter(id => typeof id === 'string') : [],
+    windows: prefs.windows && typeof prefs.windows === 'object' ? prefs.windows : {},
+    viewport: prefs.viewport && typeof prefs.viewport === 'object' ? prefs.viewport : null
+  };
 }
 
 function savePanePrefs() {
+  if (state.hydrating) return;
+  state.order = state.order.filter(id => state.sessions.has(id));
   state.panePrefs.order = state.order.slice();
-  state.panePrefs.minimized = [...state.minimized];
-  localStorage.setItem(PANE_PREFS_KEY, JSON.stringify(state.panePrefs));
+  state.panePrefs.minimized = [...state.minimized].filter(id => state.sessions.has(id));
+  state.panePrefs.windows = state.panePrefs.windows && typeof state.panePrefs.windows === 'object' ? state.panePrefs.windows : {};
+  state.panePrefs.viewport = desktopSize();
+  const prefs = windowPrefs();
+  for (const id of Object.keys(prefs)) {
+    if (!state.sessions.has(id)) delete prefs[id];
+  }
+  saveUiState();
 }
 
 function sessionKind(session) {
@@ -703,118 +1424,232 @@ function panelTitle(session) {
   return defaultTitle(session);
 }
 
-function clearDropTargets() {
-  document.querySelectorAll('.term-panel.drop-target')
-    .forEach(panel => panel.classList.remove('drop-target'));
-  document.getElementById('dropPlaceholder')?.remove();
-}
-
-function dropPlaceholder() {
-  let el = document.getElementById('dropPlaceholder');
-  if (!el) {
-    el = document.createElement('section');
-    el.id = 'dropPlaceholder';
-    el.className = 'drop-placeholder';
-    el.innerHTML = '<span>Hier ablegen</span>';
-  }
-  return el;
-}
-
-function placeDropPlaceholder(target) {
-  const grid = document.getElementById('termGrid');
-  const ph = dropPlaceholder();
-  const gridRect = grid.getBoundingClientRect();
-  const rect = target.getBoundingClientRect();
-  const left = rect.left - gridRect.left + grid.scrollLeft;
-  const top = rect.top - gridRect.top + grid.scrollTop;
-  ph.querySelector('span').textContent = 'Hier tauschen';
-  ph.style.left = `${left}px`;
-  ph.style.top = `${top}px`;
-  ph.style.width = `${rect.width}px`;
-  ph.style.height = `${rect.height}px`;
-  if (ph.parentElement !== grid) grid.appendChild(ph);
-  return ph;
-}
-
-function visibleDropPanels(sourceId) {
-  return [...document.querySelectorAll('#termGrid .term-panel:not(.layout-hidden)')]
-    .filter(panel => panel.dataset.paneId && panel.dataset.paneId !== sourceId);
-}
-
-function nearestDropPanel(x, y, sourceId) {
-  const panels = visibleDropPanels(sourceId);
-  let best = null;
-  let bestDistance = Infinity;
-  for (const panel of panels) {
-    const rect = panel.getBoundingClientRect();
-    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return panel;
-    const dx = Math.max(rect.left - x, 0, x - rect.right);
-    const dy = Math.max(rect.top - y, 0, y - rect.bottom);
-    const distance = dx * dx + dy * dy;
-    if (distance < bestDistance) {
-      best = panel;
-      bestDistance = distance;
-    }
-  }
-  return best;
-}
-
-function markDropTargetAt(x, y, sourceId) {
-  const target = nearestDropPanel(x, y, sourceId);
-  if (!target) {
-    clearDropTargets();
-    return null;
-  }
-  clearDropTargets();
-  target.classList.add('drop-target');
-  placeDropPlaceholder(target);
-  return { targetId: target.dataset.paneId };
-}
-
-function markDropTarget(event, el) {
-  const next = markDropTargetAt(event.clientX, event.clientY, state.draggingId);
-  return next?.targetId ? 'swap' : 'none';
-}
-
 function endPointerDrag(event) {
-  const drag = state.pointerDrag;
-  if (!drag) return;
+  const d = state.pointerDrag;
+  if (!d) return;
   event?.preventDefault?.();
-  const { sourceId, targetId, handle } = drag;
+  const suggestion = d.activeSuggestion;
+  const slot = d.activeDesktopSlot;
   state.pointerDrag = null;
-  state.draggingId = null;
   document.removeEventListener('pointermove', updatePointerDrag, true);
   document.removeEventListener('pointerup', endPointerDrag, true);
   document.removeEventListener('pointercancel', endPointerDrag, true);
-  try { handle?.releasePointerCapture?.(event?.pointerId); } catch {}
-  document.getElementById(`panel-${sourceId}`)?.classList.remove('dragging');
+  document.removeEventListener('mousemove', updatePointerDrag, true);
+  document.removeEventListener('mouseup', endPointerDrag, true);
+  document.getElementById(`panel-${d.sourceId}`)?.classList.remove('dragging');
   document.body.classList.remove('pane-dragging');
-  clearDropTargets();
-  if (targetId && targetId !== sourceId) swapPanels(sourceId, targetId);
+  clearSnapSuggestions();
+  clearDesktopSlotSuggestions();
+  if (suggestion) applySnapSuggestion(d.sourceId, suggestion);
+  else if (slot?.type === 'swap') swapWindowSlots(d.sourceId, slot.targetId, d.swapOriginRect);
+  else if (slot?.type === 'free') applyFreeSlotSnap(d.sourceId, slot.rect);
+  savePanePrefs();
+  saveUiState();
+  scheduleTerminalFit();
+  renderSharedResizeHandles();
+}
+
+function dragClientPoint(event, gridRect, d) {
+  d.x = event.clientX;
+  d.y = event.clientY;
+  return { x: d.x, y: d.y };
 }
 
 function updatePointerDrag(event) {
-  const drag = state.pointerDrag;
-  if (!drag) return;
+  const d = state.pointerDrag;
+  if (!d) return;
   event.preventDefault();
-  const next = markDropTargetAt(event.clientX, event.clientY, drag.sourceId);
-  drag.targetId = next?.targetId || null;
-  drag.side = null;
+  const p = windowPrefs()[d.sourceId];
+  if (!p) return;
+  const grid = document.getElementById('termGrid');
+  const gr = grid.getBoundingClientRect();
+  const pt = dragClientPoint(event, gr, d);
+  p.x = Math.max(-p.w + 80, Math.min(gr.width - 80, pt.x - gr.left - d.dx));
+  p.y = Math.max(0, Math.min(gr.height - 32, pt.y - gr.top - d.dy));
+  p.z = d.z;
+  const suggestions = snapSuggestionsAt(pt.x, pt.y);
+  const active = chooseSnapSuggestionAt(pt.x, pt.y, suggestions);
+  d.activeSuggestion = active;
+  if (active) {
+    d.activeDesktopSlot = null;
+    showSnapSuggestions(suggestions, active.key);
+    clearDesktopSlotSuggestions();
+    applyFreeWindow(d.sourceId);
+    scheduleTerminalFit({ secondPass: false, latePass: false });
+    return;
+  }
+  clearSnapSuggestions();
+  const slot = chooseDesktopSlotAt(pt.x, pt.y, d.sourceId);
+  d.activeDesktopSlot = slot?.type === 'none' ? null : slot;
+  showDesktopSlotSuggestions(slot);
+  d.lastSwapTarget = slot?.type === 'swap' ? slot.targetId : null;
+  applyFreeWindow(d.sourceId);
+  scheduleTerminalFit({ secondPass: false, latePass: false });
+}
+
+function endWindowResize(event) {
+  const d = state.resizeDrag;
+  if (!d) return;
+  event?.preventDefault?.();
+  state.resizeDrag = null;
+  document.removeEventListener('pointermove', updateWindowResize, true);
+  document.removeEventListener('pointerup', endWindowResize, true);
+  document.removeEventListener('pointercancel', endWindowResize, true);
+  document.removeEventListener('mousemove', updateWindowResize, true);
+  document.removeEventListener('mouseup', endWindowResize, true);
+  document.body.classList.remove('window-resizing');
+  document.getElementById(`panel-${d.sourceId}`)?.classList.remove('resizing');
+  savePanePrefs();
+  saveUiState();
+  scheduleTerminalFit();
+  renderSharedResizeHandles();
+}
+
+function updateWindowResize(event) {
+  const d = state.resizeDrag;
+  if (!d) return;
+  event.preventDefault();
+  const p = windowPrefs()[d.sourceId];
+  if (!p) return;
+  const grid = document.getElementById('termGrid');
+  const gr = grid.getBoundingClientRect();
+  const pt = dragClientPoint(event, gr, d);
+  p.w = Math.max(300, Math.min(gr.width - p.x, d.startW + (pt.x - d.startX)));
+  p.h = Math.max(190, Math.min(gr.height - p.y, d.startH + (pt.y - d.startY)));
+  p.z = d.z;
+  applyFreeWindow(d.sourceId);
+  scheduleTerminalFit({ secondPass: false, latePass: false });
+}
+
+function startSharedResize(group, event) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const ids = [...group.beforeIds, ...group.afterIds];
+  const prefs = windowPrefs();
+  const rects = {};
+  ids.forEach(id => { if (prefs[id]) rects[id] = { ...prefs[id] }; });
+  state.sharedResizeDrag = {
+    axis: group.axis,
+    beforeIds: [...group.beforeIds],
+    afterIds: [...group.afterIds],
+    startX: event.clientX,
+    startY: event.clientY,
+    rects
+  };
+  clearSharedResizeHandles();
+  document.body.classList.add(group.axis === 'vertical' ? 'shared-resizing-x' : 'shared-resizing-y');
+  document.addEventListener('pointermove', updateSharedResize, true);
+  document.addEventListener('pointerup', endSharedResize, true);
+  document.addEventListener('pointercancel', endSharedResize, true);
+  document.addEventListener('mousemove', updateSharedResize, true);
+  document.addEventListener('mouseup', endSharedResize, true);
+  event.currentTarget?.setPointerCapture?.(event.pointerId);
+}
+
+function sharedResizeDelta(d, rawDelta) {
+  const minW = 300;
+  const minH = 190;
+  let min = -Infinity;
+  let max = Infinity;
+  if (d.axis === 'vertical') {
+    d.beforeIds.forEach(id => { const r = d.rects[id]; if (r) min = Math.max(min, minW - r.w); });
+    d.afterIds.forEach(id => { const r = d.rects[id]; if (r) max = Math.min(max, r.w - minW); });
+  } else {
+    d.beforeIds.forEach(id => { const r = d.rects[id]; if (r) min = Math.max(min, minH - r.h); });
+    d.afterIds.forEach(id => { const r = d.rects[id]; if (r) max = Math.min(max, r.h - minH); });
+  }
+  return Math.max(min, Math.min(max, rawDelta));
+}
+
+function updateSharedResize(event) {
+  const d = state.sharedResizeDrag;
+  if (!d) return;
+  event.preventDefault();
+  const prefs = windowPrefs();
+  const delta = sharedResizeDelta(d, d.axis === 'vertical' ? event.clientX - d.startX : event.clientY - d.startY);
+  if (d.axis === 'vertical') {
+    d.beforeIds.forEach(id => { const r = d.rects[id]; if (r && prefs[id]) { prefs[id].w = r.w + delta; applyFreeWindow(id); } });
+    d.afterIds.forEach(id => { const r = d.rects[id]; if (r && prefs[id]) { prefs[id].x = r.x + delta; prefs[id].w = r.w - delta; applyFreeWindow(id); } });
+  } else {
+    d.beforeIds.forEach(id => { const r = d.rects[id]; if (r && prefs[id]) { prefs[id].h = r.h + delta; applyFreeWindow(id); } });
+    d.afterIds.forEach(id => { const r = d.rects[id]; if (r && prefs[id]) { prefs[id].y = r.y + delta; prefs[id].h = r.h - delta; applyFreeWindow(id); } });
+  }
+  scheduleTerminalFit({ secondPass: false, latePass: false });
+}
+
+function endSharedResize(event) {
+  if (!state.sharedResizeDrag) return;
+  event?.preventDefault?.();
+  document.removeEventListener('pointermove', updateSharedResize, true);
+  document.removeEventListener('pointerup', endSharedResize, true);
+  document.removeEventListener('pointercancel', endSharedResize, true);
+  document.removeEventListener('mousemove', updateSharedResize, true);
+  document.removeEventListener('mouseup', endSharedResize, true);
+  document.body.classList.remove('shared-resizing-x', 'shared-resizing-y');
+  state.sharedResizeDrag = null;
+  savePanePrefs();
+  saveUiState();
+  scheduleTerminalFit();
+  renderSharedResizeHandles();
+}
+
+function startWindowResize(id, event) {
+  if (event.button !== 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const entry = state.sessions.get(id);
+  if (!entry) return;
+  const p = makeFreeWindow(id, entry.el.getBoundingClientRect());
+  const grid = document.getElementById('termGrid');
+  p.z = nextWindowZ();
+  state.resizeDrag = { sourceId: id, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, startW: p.w, startH: p.h, z: p.z };
+  clearSharedResizeHandles();
+  entry.el.classList.add('resizing');
+  document.body.classList.add('window-resizing');
+  document.addEventListener('pointermove', updateWindowResize, true);
+  document.addEventListener('pointerup', endWindowResize, true);
+  document.addEventListener('pointercancel', endWindowResize, true);
+  document.addEventListener('mousemove', updateWindowResize, true);
+  document.addEventListener('mouseup', endWindowResize, true);
+  event.currentTarget?.setPointerCapture?.(event.pointerId);
+  bringWindowToFront(id);
 }
 
 function startPointerDrag(id, handle, event) {
   if (event.button !== 0) return;
   event.preventDefault();
   event.stopPropagation();
-  state.pointerDrag = { sourceId: id, targetId: null, side: null, handle };
+  const entry = state.sessions.get(id);
+  if (!entry) return;
+  const r = entry.el.getBoundingClientRect();
+  const p = makeFreeWindow(id, r);
+  const swapOriginRect = { x: p.x, y: p.y, w: p.w, h: p.h };
+  const grid = document.getElementById('termGrid');
+  const gr = grid.getBoundingClientRect();
+  const normal = defaultWindowSize();
+  const restore = r.width > normal.w + 24 || r.height > normal.h + 24;
+  const rx = Math.max(0.12, Math.min(0.88, (event.clientX - r.left) / Math.max(1, r.width)));
+  if (restore) {
+    p.w = normal.w;
+    p.h = normal.h;
+    p.x = Math.max(0, Math.min(gr.width - 80, event.clientX - gr.left - p.w * rx));
+    p.y = Math.max(0, Math.min(gr.height - 36, event.clientY - gr.top - Math.min(18, event.clientY - r.top)));
+    applyFreeWindow(id);
+  }
+  p.z = nextWindowZ();
+  state.pointerDrag = { sourceId: id, dx: event.clientX - gr.left - p.x, dy: event.clientY - gr.top - p.y, x: event.clientX, y: event.clientY, z: p.z, activeSuggestion: null, activeDesktopSlot: null, lastSwapTarget: null, swapOriginRect };
   state.draggingId = id;
-  try { handle.setPointerCapture?.(event.pointerId); } catch {}
-  document.getElementById(`panel-${id}`)?.classList.add('dragging');
+  clearSharedResizeHandles();
+  entry.el.classList.add('dragging');
   document.body.classList.add('pane-dragging');
   document.addEventListener('pointermove', updatePointerDrag, true);
   document.addEventListener('pointerup', endPointerDrag, true);
   document.addEventListener('pointercancel', endPointerDrag, true);
-  updatePointerDrag(event);
+  document.addEventListener('mousemove', updatePointerDrag, true);
+  document.addEventListener('mouseup', endPointerDrag, true);
+  handle.setPointerCapture?.(event.pointerId);
+  bringWindowToFront(id);
 }
 
 function createPanel(session, opts = {}) {
@@ -828,21 +1663,23 @@ function createPanel(session, opts = {}) {
   el.dataset.connectionStatus = 'reconnecting';
   el.innerHTML = `
     <div class="term-header">
-      <span class="connection-dot" title="Verbinde neu" aria-label="Verbinde neu"></span>
+      <span class="connection-dot" data-tooltip="Verbinde neu" aria-label="Verbinde neu"></span>
       <span class="term-title" contenteditable="true" spellcheck="false" aria-label="Fenstername">${escapeHtml(panelTitle(session))}</span>
-      <span class="term-drag-handle" role="button" tabindex="0" title="Fenster verschieben" aria-label="Fenster verschieben">✥</span>
       <div class="term-actions">
-        <button class="minimize" title="Minimieren" aria-label="Minimieren">−</button>
-        <button class="danger" title="Schließen" aria-label="Schließen">×</button>
+        <button class="arrange" data-tooltip="Anordnen" aria-label="Anordnen">▦</button>
+        <button class="minimize" data-tooltip="Minimieren" aria-label="Minimieren">−</button>
+        <button class="danger" data-tooltip="Schließen" aria-label="Schließen">×</button>
       </div>
     </div>
     <div class="terminal" id="term-${id}"></div>
+    <div class="window-resize-handle" data-tooltip="Größe ändern" aria-hidden="true"></div>
   `;
   grid.appendChild(el);
 
   const titleEl = el.querySelector('.term-title');
-  const dragHandle = el.querySelector('.term-drag-handle');
-  const [minBtn, closeBtn] = el.querySelectorAll('button');
+  const headerEl = el.querySelector('.term-header');
+  const [arrangeBtn, minBtn, closeBtn] = el.querySelectorAll('button');
+  arrangeBtn.dataset.paneId = id;
   minBtn.dataset.paneId = id;
   closeBtn.dataset.paneId = id;
   titleEl.addEventListener('keydown', e => {
@@ -859,6 +1696,10 @@ function createPanel(session, opts = {}) {
     updateMinimizedBar();
   });
   titleEl.addEventListener('mousedown', e => e.stopPropagation());
+  arrangeBtn.addEventListener('mouseenter', () => showLayoutAssist(id, arrangeBtn));
+  arrangeBtn.onclick = e => { e.stopPropagation(); showLayoutAssist(id, arrangeBtn); };
+  arrangeBtn.addEventListener('pointerdown', e => e.stopPropagation());
+  arrangeBtn.addEventListener('mousedown', e => e.stopPropagation());
   minBtn.onclick = e => { e.stopPropagation(); minimizePanel(id); };
   minBtn.addEventListener('pointerdown', e => e.stopPropagation());
   minBtn.addEventListener('mousedown', e => e.stopPropagation());
@@ -872,44 +1713,11 @@ function createPanel(session, opts = {}) {
   closeBtn.addEventListener('mouseup', e => e.stopPropagation());
   // Only select panel when clicking on terminal area, not header (buttons/title/drag)
   el.querySelector('.terminal').addEventListener('mousedown', () => selectPanel(id));
-  dragHandle.addEventListener('pointerdown', e => startPointerDrag(id, dragHandle, e));
-  dragHandle.addEventListener('keydown', e => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      dragHandle.title = 'Zum Verschieben gedrückt halten und ziehen';
-    }
+  headerEl.addEventListener('pointerdown', e => {
+    if (e.target.closest('.term-title, .term-actions, button')) return;
+    startPointerDrag(id, headerEl, e);
   });
-  // Native HTML5 drag remains as a fallback for synthetic tests/older browsers.
-  dragHandle.draggable = true;
-  dragHandle.addEventListener('dragstart', e => {
-    if (state.pointerDrag) return;
-    e.dataTransfer.setData('text/plain', id);
-    e.dataTransfer.effectAllowed = 'move';
-    state.draggingId = id;
-    el.classList.add('dragging');
-    document.body.classList.add('pane-dragging');
-  });
-  dragHandle.addEventListener('dragend', () => {
-    state.draggingId = null;
-    el.classList.remove('dragging');
-    document.body.classList.remove('pane-dragging');
-    clearDropTargets();
-  });
-  el.addEventListener('dragover', e => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    markDropTarget(e, el);
-  });
-  el.addEventListener('dragleave', e => {
-    if (!el.contains(e.relatedTarget)) el.classList.remove('drop-target');
-  });
-  el.addEventListener('drop', e => {
-    e.preventDefault();
-    const sourceId = e.dataTransfer.getData('text/plain');
-    markDropTarget(e, el);
-    clearDropTargets();
-    swapPanels(sourceId, id);
-  });
+  el.querySelector('.window-resize-handle')?.addEventListener('pointerdown', e => startWindowResize(id, e));
 
   const term = new Terminal({
     fontFamily: "'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, monospace",
@@ -928,6 +1736,7 @@ function createPanel(session, opts = {}) {
   const termEl = el.querySelector('.terminal');
   term.open(termEl);
   termEl.addEventListener('contextmenu', e => handleTerminalContextMenu(e, id));
+  installTerminalTouchScroll(termEl, term);
 
   // Auto-detect terminal title (vim, Codex, Hermes TUI, etc.)
   term.onTitleChange(title => {
@@ -947,7 +1756,14 @@ function createPanel(session, opts = {}) {
     }
   });
 
-  const ro = new ResizeObserver(() => scheduleTerminalFit());
+  const ro = new ResizeObserver(() => {
+    const p = windowPrefs()[id];
+    if (!state.hydrating && p && el.classList.contains('free-window') && !state.minimized.has(id) && !el.classList.contains('layout-hidden') && el.offsetParent) {
+      const r = el.getBoundingClientRect();
+      if (r.width >= 300 && r.height >= 190) { p.w = r.width; p.h = r.height; savePanePrefs(); }
+    }
+    scheduleTerminalFit();
+  });
   ro.observe(el.querySelector('.terminal'));
   term.onData(data => {
     const entry = state.sessions.get(id);
@@ -970,6 +1786,7 @@ function createPanel(session, opts = {}) {
   } else {
     state.order.push(id);
   }
+  if (opts.autoPlace) windowPrefs()[id] = defaultWindowRect(Object.keys(windowPrefs()).length);
 
   const ws = attachSocket(id, term, el);
   state.sessions.get(id).ws = ws;
@@ -1009,18 +1826,6 @@ function restorePanelOrder() {
   applyPanelOrder();
 }
 
-function swapPanels(sourceId, targetId) {
-  if (!sourceId || !targetId || sourceId === targetId) return;
-  if (!state.sessions.has(sourceId) || !state.sessions.has(targetId)) return;
-  const sourceIndex = state.order.indexOf(sourceId);
-  const targetIndex = state.order.indexOf(targetId);
-  if (sourceIndex < 0 || targetIndex < 0) return;
-  [state.order[sourceIndex], state.order[targetIndex]] = [state.order[targetIndex], state.order[sourceIndex]];
-  applyPanelOrder();
-  selectPanel(sourceId, { persist: false });
-  savePanePrefs();
-}
-
 function flashPaneExit(el) {
   el.classList.add('flash-exit');
   setTimeout(() => el.classList.remove('flash-exit'), 2000);
@@ -1056,7 +1861,10 @@ function notifySessionExit(title, exitCode) {
 }
 
 function attachSocket(id, term, el) {
-  const ws = new WebSocket(`${WS_BASE}?session=${encodeURIComponent(id)}`);
+  const qs = new URLSearchParams({ session: id });
+  const token = authToken();
+  if (token) qs.set('token', token);
+  const ws = new WebSocket(`${WS_BASE}?${qs.toString()}`);
   ws.onmessage = (event) => {
     let msg;
     try { msg = JSON.parse(event.data); } catch { return; }
@@ -1101,15 +1909,34 @@ function renderSwitcher() {
   const root = document.getElementById('switcherGrid');
   root.innerHTML = '';
   state.order = state.order.filter(id => state.sessions.has(id));
-  state.order.slice(0, 9).forEach((id, idx) => {
+  state.order.forEach((id, idx) => {
     const entry = state.sessions.get(id);
-    const btn = document.createElement('button');
+    const btn = document.createElement('div');
     btn.className = 'switcher-btn';
+    btn.setAttribute('role', 'button');
+    btn.tabIndex = 0;
     if (id === state.activeId) btn.classList.add('active');
+    if (state.minimized.has(id)) btn.classList.add('minimized');
     if (entry.el.classList.contains('exited')) btn.classList.add('exited');
-    btn.title = `Alt+${idx + 1} · ${panelTitle(entry.session)}`;
-    btn.innerHTML = `<span class="switcher-title">${escapeHtml(panelTitle(entry.session))}</span>`;
-    btn.onclick = () => selectPanel(id);
+    setTooltip(btn, state.minimized.has(id) ? `Minimized · ${panelTitle(entry.session)}` : (idx < 9 ? `Alt+${idx + 1} · ${panelTitle(entry.session)}` : panelTitle(entry.session)));
+    const title = document.createElement('span');
+    title.className = 'switcher-title';
+    title.textContent = panelTitle(entry.session);
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'switcher-close';
+    close.setAttribute('aria-label', `Schließen: ${panelTitle(entry.session)}`);
+    setTooltip(close, 'Schließen');
+    close.textContent = '×';
+    close.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); requestClosePanel(id); });
+    close.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); });
+    btn.append(title, close);
+    btn.onclick = () => state.minimized.has(id) ? smartRestorePanel(id) : selectPanel(id);
+    btn.addEventListener('keydown', e => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      state.minimized.has(id) ? smartRestorePanel(id) : selectPanel(id);
+    });
     root.appendChild(btn);
   });
 }
@@ -1121,6 +1948,7 @@ function selectPanel(id, opts = {}) {
   document.querySelectorAll('.term-panel').forEach(p => p.classList.remove('active'));
   entry.el.classList.add('active');
   applyLayoutVisibility();
+  if (!state.minimized.has(id)) bringWindowToFront(id);
   entry.term.focus();
   scheduleTerminalFit();
   renderSwitcher();
@@ -1146,8 +1974,6 @@ async function closePanel(id) {
   renderSwitcher();
   updateMinimizedBar();
   if (state.activeId) selectPanel(state.activeId, { persist: false });
-  // Auto-restore minimized panels that now fit
-  autoRestoreToFillSlots();
   savePanePrefs();
   saveUiState();
 }
@@ -1160,7 +1986,7 @@ async function launch(command) {
     const wasActive = state.activeId;
     const replaceId = null;
     const session = await api('POST', '/api/sessions', { command: cmd, label: cmd });
-    createPanel(session, { replaceId });
+    createPanel(session, { replaceId, autoPlace: true });
     applyLayoutVisibility();
     savePanePrefs();
   } finally {
@@ -1457,32 +2283,33 @@ function showToast(text, type = 'ok') {
 }
 
 async function init() {
-  loadPanePrefs();
-  try { document.body.classList.toggle('chrome-hidden', localStorage.getItem(CHROME_PREF_KEY) === '1'); } catch {}
-
-  // Load saved font size
-  const savedFontSize = localStorage.getItem(FONT_SIZE_KEY);
-  if (savedFontSize && !isNaN(Number(savedFontSize))) state.fontSize = Number(savedFontSize);
-
+  installTooltips();
+  state.hydrating = true;
   const [sessions, ui] = await Promise.all([
     api('GET', '/api/sessions').catch(() => []),
     api('GET', '/api/ui-state').catch(() => null)
   ]);
 
+  loadPanePrefs(ui?.panePrefs || {});
+  scaleWindowPrefsToViewport();
   setTheme(ui?.theme || 'green', { persist: false });
-  setFontSize(state.fontSize, { persist: false });
-  setSystemMonitorVisible(localStorage.getItem(SYSTEM_MONITOR_KEY) === '1', { persist: false });
+  setSkin(ui?.skin || 'neon', { persist: false });
+  setFontSize(ui?.fontSize || state.fontSize, { persist: false });
+  setChromeHidden(Boolean(ui?.chromeHidden), { persist: false });
+  setSystemMonitorVisible(Boolean(ui?.systemMonitor), { persist: false });
+  startCodexLimitsPolling();
   installCloseHitLayer();
   buildGridPicker();
   sessions.forEach(createPanel);
   restorePanelOrder();
 
   const base = ui?.baseLayout || ui?.layout || 'auto';
-  state.layout = LAYOUTS.includes(base) ? base : 'auto';
+  state.layout = LEGACY_LAYOUTS.has(base) ? base : 'auto';
   setLayout(state.layout, { persist: false });
 
   state.minimized = new Set((state.panePrefs.minimized || []).filter(id => state.sessions.has(id)));
   state.minimized.forEach(id => state.sessions.get(id)?.el.classList.add('minimized'));
+  responsiveMinimizeForViewport();
   applyLayoutVisibility();
   updateMinimizedBar();
 
@@ -1490,6 +2317,7 @@ async function init() {
   else if (state.order[0]) selectPanel(state.order[0], { persist: false });
   updateEmpty();
   renderSwitcher();
+  state.hydrating = false;
 }
 
 function escapeHtml(str) {
@@ -1500,6 +2328,7 @@ document.querySelectorAll('[data-command]').forEach(btn => btn.onclick = () => l
 document.getElementById('settingsToggle').onclick = () => {
   const panel = document.getElementById('settingsPanel');
   panel.hidden = !panel.hidden;
+  panel.classList.toggle('open', !panel.hidden);
   document.getElementById('settingsToggle').setAttribute('aria-expanded', String(!panel.hidden));
 };
 document.getElementById('chromeToggle').onclick = toggleChrome;
@@ -1512,14 +2341,17 @@ document.getElementById('fileInput').onchange = e => {
 };
 document.getElementById('clipboardImageBtn').onclick = () => uploadClipboardImage();
 document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
+document.getElementById('skinSelect').onchange = e => setSkin(e.target.value);
 document.getElementById('fontSizeSlider').oninput = e => setFontSize(Number(e.target.value));
 document.getElementById('systemMonitorToggle').onchange = e => setSystemMonitorVisible(e.target.checked);
 
 // ── Close Confirmation Modal ──
 let closeConfirmSessionId = null;
 let closeModalOpenedAt = 0;
+let closeModalReturnFocus = null;
 function showCloseConfirm(sessionId, title) {
   const modal = document.getElementById('closeModal');
+  closeModalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   document.getElementById('closeModalTitle').textContent = `${title} — wirklich schließen?`;
 
   // Do not rely on the native hidden repaint path here.
@@ -1542,6 +2374,39 @@ function hideCloseConfirm() {
   modal.style.display = 'none';
   modal.hidden = true;
   closeConfirmSessionId = null;
+  const returnFocus = closeModalReturnFocus;
+  closeModalReturnFocus = null;
+  if (returnFocus?.isConnected) setTimeout(() => returnFocus.focus?.(), 0);
+}
+
+function handleCloseModalKeydown(e) {
+  const modal = document.getElementById('closeModal');
+  if (!modal?.classList.contains('open')) return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    hideCloseConfirm();
+    return;
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    runCloseConfirm();
+    return;
+  }
+  if (e.key !== 'Tab') return;
+  const focusables = [...modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+    .filter(el => !el.disabled && el.offsetParent !== null);
+  if (!focusables.length) return;
+  const first = focusables[0];
+  const last = focusables[focusables.length - 1];
+  if (e.shiftKey && document.activeElement === first) {
+    e.preventDefault();
+    last.focus();
+  } else if (!e.shiftKey && document.activeElement === last) {
+    e.preventDefault();
+    first.focus();
+  }
 }
 function runCloseConfirm() {
   const id = closeConfirmSessionId;
@@ -1571,14 +2436,20 @@ document.getElementById('closeModal').addEventListener('click', e => {
 });
 
 document.addEventListener('paste', handleTerminalPaste, true);
+document.addEventListener('keydown', handleCloseModalKeydown, true);
 document.addEventListener('keydown', letBrowserOwnTerminalPasteShortcut, true);
-window.addEventListener('resize', () => scheduleTerminalFit());
-window.addEventListener('beforeunload', () => { savePanePrefs(); saveAllTerminalSnapshots(); });
+window.addEventListener('resize', () => { scaleWindowPrefsToViewport(); responsiveMinimizeForViewport(); applyLayoutVisibility(); savePanePrefs(); scheduleTerminalFit(); });
+window.addEventListener('beforeunload', () => { savePanePrefs(); flushUiState(); saveAllTerminalSnapshots(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveAllTerminalSnapshots(); });
 document.addEventListener('keydown', e => {
   const key = e.key.toLowerCase();
   if (e.key === 'Escape') {
-    if (!document.getElementById('settingsPanel').hidden) document.getElementById('settingsPanel').hidden = true;
+    const settingsPanel = document.getElementById('settingsPanel');
+    if (!settingsPanel.hidden) {
+      settingsPanel.hidden = true;
+      settingsPanel.classList.remove('open');
+      document.getElementById('settingsToggle').setAttribute('aria-expanded', 'false');
+    }
   }
   if (e.altKey && /^[1-9]$/.test(e.key)) {
     e.preventDefault();
@@ -1605,7 +2476,7 @@ document.addEventListener('keydown', e => {
 
 async function ensureSerializeAddon() {
   if (window.SerializeAddon) return;
-  const res = await fetch('addon-serialize.min.js?v=20260426');
+  const res = await fetch('vendor/addon-serialize.js');
   const code = await res.text();
   Function(code).call(window);
 }

@@ -4,13 +4,13 @@ const { WebSocketServer } = require('ws');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 
 let pty = null;
 try { pty = require('@homebridge/node-pty-prebuilt-multiarch'); } catch {}
 
 const { SessionManager } = require('./session');
-const { loadConfig } = require('./config');
+const { loadConfig, configDir } = require('./config');
 
 let db = null;
 let dbModule = null;
@@ -22,20 +22,70 @@ try {
   console.warn('[db] SQLite not available:', err.message);
 }
 
-const UI_LAYOUTS = new Set(['auto', '1x1', '1x2', '2x1', '1x3', '3x1', '1x4', '4x1', '2x2', '3x2', '2x3', '2x4', '4x2', '3x3', 'focus', 'half']);
-const UI_THEMES = new Set(['blue', 'green', 'amber', 'purple', 'red', 'mono']);
+const UI_LAYOUTS = new Set(['auto', '1x1', '1x2', '2x1', '1x3', '3x1', '1x4', '4x1']);
+const UI_THEMES = new Set(['blue', 'green', 'emerald', 'cyan', 'amber', 'purple', 'red', 'mono']);
+const UI_SKINS = new Set(['neon', 'stealth', 'prism']);
 const UPLOAD_RETENTION_DAYS = 7;
+const UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
+const UPLOAD_JSON_LIMIT = '72mb';
+const UPLOAD_MIME_ALLOWLIST = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/bmp',
+  'text/plain',
+  'application/pdf'
+]);
 const TMUX_CMD = process.env.PASSIDECK_TMUX_CMD || 'tmux';
-const TMUX_ARGS = (process.env.PASSIDECK_TMUX_ARGS || '-L passideck').split(/\s+/).filter(Boolean);
+const TMUX_ARGS = process.env.PASSIDECK_TMUX_SOCKET
+  ? ['-L', process.env.PASSIDECK_TMUX_SOCKET]
+  : (process.env.PASSIDECK_TMUX_ARGS || '-L passideck').split(/\s+/).filter(Boolean);
 const tmuxArgs = (args) => [...TMUX_ARGS, ...args];
 
 let lastCpuSample = null;
 let lastNetSample = null;
+let codexLimitsCache = { at: 0, data: null };
+const CODEX_LIMITS_CACHE_MS = 60000;
 
-const UI_STATE_DEFAULT = { layout: 'auto', baseLayout: 'auto', focusedId: null, primaryId: null, activeId: null, minimized: [], theme: 'blue', updatedAt: null };
+const UI_STATE_DEFAULT = { layout: 'auto', baseLayout: 'auto', focusedId: null, primaryId: null, activeId: null, minimized: [], theme: 'blue', skin: 'neon', fontSize: 13, chromeHidden: false, systemMonitor: false, panePrefs: { titles: {}, order: [], minimized: [], windows: {}, viewport: null }, updatedAt: null };
 
 function uiStatePath() {
-  return path.join(os.homedir(), '.passideck', 'ui-state.json');
+  return path.join(configDir(), 'ui-state.json');
+}
+
+
+function cleanIdList(v) {
+  return Array.isArray(v) ? v.filter(id => typeof id === 'string' && id.length <= 100).slice(0, 100) : [];
+}
+
+function sanitizePanePrefs(input) {
+  const src = input && typeof input === 'object' ? input : {};
+  const titles = {};
+  if (src.titles && typeof src.titles === 'object') {
+    for (const [k, v] of Object.entries(src.titles)) {
+      if (typeof k === 'string' && k.length <= 100 && typeof v === 'string') titles[k] = v.slice(0, 160);
+    }
+  }
+  const windows = {};
+  if (src.windows && typeof src.windows === 'object') {
+    for (const [layout, items] of Object.entries(src.windows)) {
+      if (typeof layout !== 'string' || layout.length > 40 || !items || typeof items !== 'object') continue;
+      windows[layout] = {};
+      for (const [id, r] of Object.entries(items)) {
+        if (typeof id !== 'string' || id.length > 100 || !r || typeof r !== 'object') continue;
+        windows[layout][id] = {
+          x: Math.max(-20000, Math.min(20000, Number(r.x) || 0)),
+          y: Math.max(-20000, Math.min(20000, Number(r.y) || 0)),
+          w: Math.max(120, Math.min(20000, Number(r.w) || 640)),
+          h: Math.max(120, Math.min(20000, Number(r.h) || 400)),
+          z: Math.max(1, Math.min(9999, Number(r.z) || 10))
+        };
+      }
+    }
+  }
+  const vp = src.viewport && typeof src.viewport === 'object' ? { w: Math.max(1, Math.min(20000, Number(src.viewport.w) || 0)), h: Math.max(1, Math.min(20000, Number(src.viewport.h) || 0)) } : null;
+  return { titles, order: cleanIdList(src.order), minimized: cleanIdList(src.minimized), windows, viewport: vp };
 }
 
 function sanitizeUiState(input) {
@@ -49,6 +99,11 @@ function sanitizeUiState(input) {
   if (typeof src.activeId === 'string' && src.activeId.length <= 100) out.activeId = src.activeId;
   if (Array.isArray(src.minimized)) out.minimized = src.minimized.filter(id => typeof id === 'string' && id.length <= 100).slice(0, 100);
   if (UI_THEMES.has(src.theme)) out.theme = src.theme;
+  if (UI_SKINS.has(src.skin)) out.skin = src.skin;
+  out.fontSize = Math.max(10, Math.min(24, Number(src.fontSize) || UI_STATE_DEFAULT.fontSize));
+  out.chromeHidden = Boolean(src.chromeHidden);
+  out.systemMonitor = Boolean(src.systemMonitor);
+  out.panePrefs = sanitizePanePrefs(src.panePrefs);
   if (typeof src.updatedAt === 'string') out.updatedAt = src.updatedAt;
   return out;
 }
@@ -70,7 +125,7 @@ function writeUiState(input) {
 }
 
 function uploadsRoot() {
-  return path.join(os.homedir(), '.passideck', 'uploads');
+  return path.join(configDir(), 'uploads');
 }
 
 function safeFileName(name) {
@@ -78,15 +133,65 @@ function safeFileName(name) {
   return base.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 120) || 'upload.bin';
 }
 
+function normalizeMime(type) {
+  return String(type || 'application/octet-stream').split(';')[0].trim().toLowerCase() || 'application/octet-stream';
+}
+
+function requireAllowedUploadMime(mime) {
+  if (!UPLOAD_MIME_ALLOWLIST.has(mime)) throw new Error(`Upload type not allowed: ${mime}`);
+}
+
+function setUploadHeaders(res, filePath) {
+  const name = safeFileName(path.basename(filePath));
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Disposition', `attachment; filename="${name.replace(/"/g, '')}"`);
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+}
+
+function sameOrigin(req) {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try {
+    const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+    const protocol = forwardedProto || req.protocol || (req.socket?.encrypted ? 'https' : 'http');
+    const expected = `${String(protocol).replace(/:$/, '')}://${req.headers.host}`;
+    return new URL(origin).origin === expected;
+  } catch { return false; }
+}
+
+function tokenFromRequest(req, urlObj = null) {
+  return req.headers['x-passideck-token'] || urlObj?.searchParams?.get('token') || '';
+}
+
+function authTokenRequired() {
+  return String(process.env.PASSIDECK_AUTH_TOKEN || '');
+}
+
+function requestGuard(req, res, next) {
+  if (!sameOrigin(req)) return res.status(403).json({ error: 'Origin rejected' });
+  const required = authTokenRequired();
+  if (!required || req.path === '/health' || req.originalUrl?.startsWith('/api/health')) return next();
+  if (tokenFromRequest(req) !== required) return res.status(401).json({ error: 'Unauthorized' });
+  next();
+}
+
+function websocketAllowed(req, urlObj) {
+  if (!sameOrigin(req)) return false;
+  const required = authTokenRequired();
+  return !required || tokenFromRequest(req, urlObj) === required;
+}
+
 function saveUploadedBlob(input) {
   const src = input && typeof input === 'object' ? input : {};
   const raw = String(src.data || src.base64 || '');
   const match = raw.match(/^data:([^;,]+)?;base64,(.*)$/);
-  const mime = String(src.type || (match && match[1]) || 'application/octet-stream');
+  const mime = normalizeMime(src.type || (match && match[1]) || 'application/octet-stream');
+  requireAllowedUploadMime(mime);
   const b64 = match ? match[2] : raw;
   const buffer = Buffer.from(b64, 'base64');
   if (!buffer.length) throw new Error('Empty upload');
-  if (buffer.length > 50 * 1024 * 1024) throw new Error('Upload too large');
+  if (buffer.length > UPLOAD_MAX_BYTES) throw new Error('Upload too large');
 
   const day = new Date().toISOString().slice(0, 10);
   const dir = path.join(uploadsRoot(), day);
@@ -111,7 +216,8 @@ function saveUploadedBlob(input) {
 function cleanupOldUploads(maxDays = UPLOAD_RETENTION_DAYS) {
   const root = uploadsRoot();
   if (!fs.existsSync(root)) return { removed: 0, bytes: 0 };
-  const cutoff = Date.now() - maxDays * 86400000;
+  const days = Math.max(1, Math.min(365, Number(maxDays) || UPLOAD_RETENTION_DAYS));
+  const cutoff = Date.now() - days * 86400000;
   let removed = 0;
   let bytes = 0;
   for (const dayDir of fs.readdirSync(root)) {
@@ -145,9 +251,7 @@ function isPlainShellCommand(command) {
 }
 
 function normalizeTerminalOutput(data) {
-  // Keep TUI output in xterm's main buffer. Alternate-screen mode kills
-  // browser scrollback and makes reload reconstruction look empty/broken.
-  return String(data).replace(/\x1b\[\?(?:47|1047|1048|1049)[hl]/g, '');
+  return String(data);
 }
 
 function cpuSample() {
@@ -181,6 +285,61 @@ function percent(value) {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
+function parseCodexLimits(body, cached) {
+  if (body.error) throw new Error(body.error.message || 'Codex rate limit error');
+  const rl = body.result?.rateLimits || {};
+  return {
+    ok: true,
+    at: new Date().toISOString(),
+    cached,
+    planType: rl.planType || null,
+    rateLimitReachedType: rl.rateLimitReachedType || null,
+    primary: rl.primary || null,
+    secondary: rl.secondary || null,
+    credits: rl.credits || null
+  };
+}
+
+function readCodexLimits() {
+  const now = Date.now();
+  if (codexLimitsCache.data && now - codexLimitsCache.at < CODEX_LIMITS_CACHE_MS) return Promise.resolve({ ...codexLimitsCache.data, cached: true });
+  return new Promise((resolve, reject) => {
+    const child = spawn('codex', ['app-server', '--listen', 'stdio://'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => { child.kill('SIGTERM'); reject(new Error('Codex rate limit timeout')); }, 12000);
+    const finish = (body) => {
+      clearTimeout(timer);
+      child.kill('SIGTERM');
+      try {
+        const data = parseCodexLimits(body, false);
+        codexLimitsCache = { at: now, data: { ...data, cached: undefined } };
+        resolve(data);
+      } catch (err) { reject(err); }
+    };
+    child.stdout.on('data', chunk => {
+      stdout += chunk.toString();
+      for (const line of stdout.split(/\r?\n/)) {
+        if (!line.trim()) continue;
+        try {
+          const msg = JSON.parse(line);
+          if (msg.id === 2) return finish(msg);
+        } catch {}
+      }
+    });
+    child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+    child.on('error', err => { clearTimeout(timer); reject(err); });
+    child.on('exit', code => {
+      if (code === null || codexLimitsCache.data) return;
+      clearTimeout(timer);
+      reject(new Error((stderr || `codex exited ${code}`).trim()));
+    });
+    const req = (x) => `${JSON.stringify(x)}\n`;
+    child.stdin.write(req({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'passideck', version: '0' }, capabilities: {} } }));
+    setTimeout(() => child.stdin.write(req({ jsonrpc: '2.0', id: 2, method: 'account/rateLimits/read', params: {} })), 100);
+  });
+}
+
 function readSystemMetrics() {
   const nowCpu = cpuSample();
   const nowNet = networkSample();
@@ -206,17 +365,33 @@ function readSystemMetrics() {
   lastNetSample = nowNet;
   const netBytes = rxPerSec + txPerSec;
   const net = percent(Math.min(100, Math.log10(netBytes + 1) * 12));
+  const disk = readDiskMetrics();
 
   return {
     ok: true,
     at: new Date().toISOString(),
     cpu: percent(cpu),
     ram: percent(ram),
+    disk: disk.percent,
     net,
     load: os.loadavg()[0],
     memory: { used: totalMem - freeMem, total: totalMem, free: freeMem },
+    diskInfo: disk,
     network: { rxPerSec: Math.round(rxPerSec), txPerSec: Math.round(txPerSec) }
   };
+}
+
+function readDiskMetrics(target = '/') {
+  try {
+    const stats = fs.statfsSync(target);
+    const blockSize = Number(stats.bsize || stats.frsize || 0);
+    const total = Number(stats.blocks || 0) * blockSize;
+    const free = Number(stats.bavail || stats.bfree || 0) * blockSize;
+    const used = Math.max(0, total - free);
+    return { path: target, used, total, free, percent: total > 0 ? percent((used / total) * 100) : 0 };
+  } catch (err) {
+    return { path: target, used: 0, total: 0, free: 0, percent: 0, error: err.message };
+  }
 }
 
 function splitCommand(command, shell) {
@@ -240,9 +415,17 @@ function tmuxHas(name) {
   catch { return false; }
 }
 
+function tmuxSetDefaults(name = '') {
+  try { execFileSync(TMUX_CMD, tmuxArgs(['set-option', '-g', 'status', 'off']), { stdio: 'ignore' }); } catch {}
+  if (name) {
+    try { execFileSync(TMUX_CMD, tmuxArgs(['set-option', '-t', name, 'status', 'off']), { stdio: 'ignore' }); } catch {}
+  }
+}
+
 function tmuxNew(name, cwd, launch) {
-  if (tmuxHas(name)) return;
+  if (tmuxHas(name)) { tmuxSetDefaults(name); return; }
   execFileSync(TMUX_CMD, tmuxArgs(['new-session', '-d', '-s', name, '-c', cwd, launch.file, ...launch.args]), { stdio: 'ignore' });
+  tmuxSetDefaults(name);
 }
 
 function tmuxKill(name) {
@@ -252,6 +435,7 @@ function tmuxKill(name) {
 function attachTmux(session) {
   if (!pty) throw new Error('PTY support not available');
   const name = tmuxName(session.id);
+  tmuxSetDefaults(name);
   const term = pty.spawn(TMUX_CMD, tmuxArgs(['attach-session', '-t', name]), {
     name: 'xterm-256color',
     cols: Number(session.meta.cols) || 120,
@@ -304,8 +488,10 @@ function createServer(config = loadConfig()) {
   const sessions = new SessionManager();
   restoreTmuxSessions(sessions);
 
-  app.use(express.json({ limit: '64mb' }));
-  app.use('/uploads', express.static(uploadsRoot()));
+  app.set('trust proxy', 'loopback');
+  app.use(express.json({ limit: UPLOAD_JSON_LIMIT }));
+  app.use('/api', requestGuard);
+  app.use('/uploads', express.static(uploadsRoot(), { setHeaders: setUploadHeaders }));
   app.use(express.static(path.join(__dirname, '..', '..', 'client', 'public')));
 
   app.get('/api/health', (_req, res) => {
@@ -322,9 +508,17 @@ function createServer(config = loadConfig()) {
     });
   });
   app.get('/api/system-metrics', (_req, res) => res.json(readSystemMetrics()));
+  app.get('/api/codex-limits', async (_req, res) => {
+    try { res.json(await readCodexLimits()); }
+    catch (err) { res.status(503).json({ ok: false, error: err.message }); }
+  });
   app.get('/api/config', (_req, res) => res.json({ projects: config.projects || {}, defaultTheme: config.defaultTheme || 'tokyo-night' }));
   app.get('/api/ui-state', (_req, res) => res.json(readUiState()));
   app.put('/api/ui-state', (req, res) => {
+    try { res.json(writeUiState(req.body || {})); }
+    catch (err) { res.status(500).json({ error: err.message }); }
+  });
+  app.post('/api/ui-state', (req, res) => {
     try { res.json(writeUiState(req.body || {})); }
     catch (err) { res.status(500).json({ error: err.message }); }
   });
@@ -337,9 +531,9 @@ function createServer(config = loadConfig()) {
   });
 
   app.post('/api/uploads/cleanup', (req, res) => {
-    const maxDays = Number(req.body?.maxDays) || UPLOAD_RETENTION_DAYS;
+    const maxDays = Math.max(1, Math.min(365, Number(req.body?.maxDays) || UPLOAD_RETENTION_DAYS));
     const result = cleanupOldUploads(maxDays);
-    res.json({ ok: true, ...result });
+    res.json({ ok: true, maxDays, ...result });
   });
 
   app.post('/api/sessions', (req, res) => {
@@ -392,6 +586,7 @@ function createServer(config = loadConfig()) {
 
   wss.on('connection', (ws, req) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
+    if (!websocketAllowed(req, url)) return ws.close(4003, 'Unauthorized');
     const session = sessions.get(url.searchParams.get('session'));
     if (!session) return ws.close(4001, 'Session not found');
     session.ws = ws;
@@ -419,7 +614,7 @@ function createServer(config = loadConfig()) {
   return { app, server, wss, sessions };
 }
 
-module.exports = { createServer, loadConfig };
+module.exports = { createServer, loadConfig, readCodexLimits, saveUploadedBlob, normalizeMime, UPLOAD_MIME_ALLOWLIST };
 
 if (require.main === module) {
   const config = loadConfig();
