@@ -1121,7 +1121,12 @@ function stopSystemMonitorPolling() {
 
 function formatReset(ts) {
   if (!ts) return 'reset unknown';
-  return `reset ${new Date(Number(ts) * 1000).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}`;
+  const value = typeof ts === 'number' || /^\d+(\.\d+)?$/.test(String(ts))
+    ? Number(ts) * 1000
+    : ts;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'reset unknown';
+  return `reset ${date.toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}`;
 }
 
 function setCodexLimitCell(kind, limit) {

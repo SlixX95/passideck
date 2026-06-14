@@ -84,7 +84,7 @@ assertIncludes(app, 'if (changed) entry.term.resize(cols, targetRows);', 'no-op 
 assertIncludes(app, 'entry.term.scrollToBottom?.()', 'after shrinking panes the active prompt must stay reachable at the bottom');
 assertIncludes(app, 'const ro = new ResizeObserver(() => {', 'terminal container resizes must refit height through the debounced scheduler');
 assertIncludes(css, '#saveState { display: inline-block; min-width: 7ch;', 'save status text must reserve width so launch buttons do not jump');
-assertIncludes(html, 'app.js?v=20260612-close-hit-isolation', 'close hit-layer isolation fix must cache-bust app.js asset');
+assertIncludes(html, 'app.js?v=20260614-reset-date', 'reset date formatter fix must cache-bust app.js asset');
 assertIncludes(html, 'style.css?v=20260612-wide-actions', 'wider header action buttons must cache-bust style.css asset');
 assertIncludes(app, "const closeButton = topEl?.closest?.('button.danger');", 'close hit-layer must only react to the actual close button under the pointer');
 assertIncludes(app, 'if (!btn || closeButton !== btn) return;', 'close hit-layer must not let padded close rect overlap minimize/arrange buttons');
@@ -327,6 +327,9 @@ assertIncludes(html, 'id="saveState"', 'topbar must show UI state sync status');
 assertIncludes(html, 'id="toast" class="toast" role="status" aria-live="polite"', 'non-blocking toast status required');
 assertIncludes(app, 'function showToast', 'toast helper required instead of alert');
 assertNotIncludes(app, 'alert(`Upload failed:', 'upload errors must not use blocking alert');
+assertIncludes(app, "const date = new Date(value);", 'codex reset formatter must parse ISO reset timestamps');
+assertNotIncludes(app, 'new Date(Number(ts) * 1000)', 'codex reset formatter must not treat ISO timestamps as Unix seconds only');
+assertIncludes(html, 'app.js?v=20260614-reset-date', 'app.js must be cache-busted after reset date formatter fix');
 
 /* Font Size */
 assertIncludes(html, 'id="fontSizeSlider"', 'font size slider required in settings');
@@ -447,7 +450,7 @@ assertIncludes(server, 'PASSIDECK_AUTH_TOKEN', 'server must support optional tok
 assertIncludes(server, 'function requestGuard', 'HTTP API must enforce origin/token guard');
 assertIncludes(server, "req.path === '/health'", 'health endpoint must remain usable for readiness checks when auth token is enabled');
 assertIncludes(server, 'function websocketAllowed', 'WebSocket must enforce origin/token guard');
-assertIncludes(html, 'app.js?v=20260612-close-hit-isolation', 'served app cache-bust must remain current for browser smoke');
+assertIncludes(html, 'app.js?v=20260614-reset-date', 'served app cache-bust must remain current for browser smoke');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 assertIncludes(pkg.scripts.test, 'tests/browser-cdp.test.js', 'npm test must include real CDP browser smoke');
 assert.strictEqual(pkg.scripts['test:browser'], 'node tests/browser-cdp.test.js', 'browser smoke script should be callable directly');
