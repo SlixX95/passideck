@@ -4,7 +4,8 @@ const { WebSocketServer } = require('ws');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const { execFileSync, spawn } = require('child_process');
+const { execFileSync } = require('child_process');
+const https = require('https');
 
 let pty = null;
 try { pty = require('@homebridge/node-pty-prebuilt-multiarch'); } catch {}
@@ -47,6 +48,10 @@ let lastCpuSample = null;
 let lastNetSample = null;
 let codexLimitsCache = { at: 0, data: null };
 const CODEX_LIMITS_CACHE_MS = 60000;
+const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
+const CODEX_OAUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token';
+const CODEX_OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
+const CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 300;
 
 const UI_STATE_DEFAULT = { layout: 'auto', baseLayout: 'auto', focusedId: null, primaryId: null, activeId: null, minimized: [], theme: 'blue', skin: 'neon', fontSize: 13, chromeHidden: false, systemMonitor: false, panePrefs: { titles: {}, order: [], minimized: [], windows: {}, viewport: null }, updatedAt: null };
 
@@ -285,59 +290,176 @@ function percent(value) {
   return Math.max(0, Math.min(100, Math.round(value)));
 }
 
+function hermesHome() {
+  return process.env.HERMES_HOME || path.join(os.homedir(), '.hermes');
+}
+
+function codexAuthPath() {
+  return process.env.PASSIDECK_HERMES_AUTH_PATH || path.join(hermesHome(), 'auth.json');
+}
+
+function readHermesCodexAuth() {
+  const authPath = codexAuthPath();
+  let store;
+  try {
+    store = JSON.parse(fs.readFileSync(authPath, 'utf8'));
+  } catch (err) {
+    throw new Error(`Hermes Codex auth unavailable at ${authPath}: ${err.message}`);
+  }
+  const state = store.providers?.['openai-codex'] || store['openai-codex'];
+  const tokens = state?.tokens;
+  const accessToken = typeof tokens?.access_token === 'string' ? tokens.access_token.trim() : '';
+  const refreshToken = typeof tokens?.refresh_token === 'string' ? tokens.refresh_token.trim() : '';
+  if (!accessToken) throw new Error(`Hermes Codex auth at ${authPath} is missing access_token`);
+  if (!refreshToken) throw new Error(`Hermes Codex auth at ${authPath} is missing refresh_token`);
+  return { store, state, tokens: { ...tokens, access_token: accessToken, refresh_token: refreshToken }, authPath };
+}
+
+function saveHermesCodexAuth(auth, tokens) {
+  const now = new Date().toISOString();
+  const nextState = { ...(auth.state || {}), tokens: { ...(auth.state?.tokens || {}), ...tokens }, last_refresh: now, auth_mode: 'chatgpt' };
+  if (!auth.store.providers || typeof auth.store.providers !== 'object') auth.store.providers = {};
+  auth.store.providers['openai-codex'] = nextState;
+  auth.store['openai-codex'] = { auth_mode: 'chatgpt', tokens: nextState.tokens, last_refresh: now };
+  auth.store.updated_at = now;
+  const pool = auth.store.credential_pool?.['openai-codex'];
+  if (Array.isArray(pool)) {
+    for (const entry of pool) {
+      if (!entry || typeof entry !== 'object') continue;
+      if (entry.source === 'device_code') {
+        entry.access_token = nextState.tokens.access_token;
+        entry.refresh_token = nextState.tokens.refresh_token;
+        entry.last_refresh = now;
+        entry.last_status = null;
+        entry.last_error_code = null;
+        entry.last_error_message = null;
+      }
+    }
+  }
+  fs.writeFileSync(auth.authPath, `${JSON.stringify(auth.store, null, 2)}\n`, { mode: 0o600 });
+}
+
+function jwtPayload(token) {
+  try {
+    const part = token.split('.')[1];
+    if (!part) return null;
+    return JSON.parse(Buffer.from(part.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+  } catch { return null; }
+}
+
+function codexAccessTokenExpiring(token, skewSeconds = CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS) {
+  const payload = jwtPayload(token);
+  const exp = Number(payload?.exp || 0);
+  if (!exp) return false;
+  return exp <= Math.floor(Date.now() / 1000) + skewSeconds;
+}
+
+function requestJson(url, { method = 'GET', headers = {}, body = null, timeoutMs = 12000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const req = https.request(url, { method, headers }, res => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => { text += chunk; });
+      res.on('end', () => {
+        let json = null;
+        try { json = text ? JSON.parse(text) : null; } catch {}
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          const message = json?.error?.message || json?.error_description || json?.message || text.slice(0, 240) || `HTTP ${res.statusCode}`;
+          const err = new Error(`${method} ${url} failed: ${res.statusCode} ${message}`);
+          err.statusCode = res.statusCode;
+          err.body = json || text;
+          reject(err);
+          return;
+        }
+        resolve(json);
+      });
+    });
+    req.setTimeout(timeoutMs, () => req.destroy(new Error(`${method} ${url} timeout`)));
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+async function refreshHermesCodexAuth(auth) {
+  const form = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: auth.tokens.refresh_token,
+    client_id: CODEX_OAUTH_CLIENT_ID
+  }).toString();
+  const body = await requestJson(CODEX_OAUTH_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body,
+    timeoutMs: 20000
+  });
+  const accessToken = typeof body?.access_token === 'string' ? body.access_token.trim() : '';
+  if (!accessToken) throw new Error('Hermes Codex token refresh returned no access_token');
+  const refreshToken = typeof body?.refresh_token === 'string' && body.refresh_token.trim() ? body.refresh_token.trim() : auth.tokens.refresh_token;
+  const tokens = { ...auth.tokens, access_token: accessToken, refresh_token: refreshToken };
+  saveHermesCodexAuth(auth, tokens);
+  return tokens;
+}
+
+function parseWhamWindow(window) {
+  if (!window || typeof window !== 'object') return null;
+  const resetAtSeconds = Number(window.reset_at || 0);
+  return {
+    usedPercent: percent(Number(window.used_percent || 0)),
+    windowDurationMins: Math.round(Number(window.limit_window_seconds || 0) / 60),
+    resetsAt: resetAtSeconds ? new Date(resetAtSeconds * 1000).toISOString() : null,
+    resetAfterSeconds: Number(window.reset_after_seconds || 0),
+    allowed: window.allowed ?? null,
+    limitReached: window.limit_reached ?? null
+  };
+}
+
 function parseCodexLimits(body, cached) {
   if (body.error) throw new Error(body.error.message || 'Codex rate limit error');
-  const rl = body.result?.rateLimits || {};
+  const rl = body.rate_limit || body.result?.rateLimits || {};
+  const primary = body.rate_limit ? parseWhamWindow(rl.primary_window) : (rl.primary || null);
+  const secondary = body.rate_limit ? parseWhamWindow(rl.secondary_window) : (rl.secondary || null);
   return {
     ok: true,
     at: new Date().toISOString(),
     cached,
-    planType: rl.planType || null,
-    rateLimitReachedType: rl.rateLimitReachedType || null,
-    primary: rl.primary || null,
-    secondary: rl.secondary || null,
+    source: body.rate_limit ? 'hermes-openai-codex-auth' : 'codex-app-server',
+    planType: body.plan_type || rl.planType || null,
+    rateLimitReachedType: rl.rateLimitReachedType || (rl.limit_reached ? 'primary' : null),
+    primary,
+    secondary,
     credits: rl.credits || null
   };
 }
 
-function readCodexLimits() {
-  const now = Date.now();
-  if (codexLimitsCache.data && now - codexLimitsCache.at < CODEX_LIMITS_CACHE_MS) return Promise.resolve({ ...codexLimitsCache.data, cached: true });
-  return new Promise((resolve, reject) => {
-    const child = spawn('codex', ['app-server', '--listen', 'stdio://'], { stdio: ['pipe', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => { child.kill('SIGTERM'); reject(new Error('Codex rate limit timeout')); }, 12000);
-    const finish = (body) => {
-      clearTimeout(timer);
-      child.kill('SIGTERM');
-      try {
-        const data = parseCodexLimits(body, false);
-        codexLimitsCache = { at: now, data: { ...data, cached: undefined } };
-        resolve(data);
-      } catch (err) { reject(err); }
-    };
-    child.stdout.on('data', chunk => {
-      stdout += chunk.toString();
-      for (const line of stdout.split(/\r?\n/)) {
-        if (!line.trim()) continue;
-        try {
-          const msg = JSON.parse(line);
-          if (msg.id === 2) return finish(msg);
-        } catch {}
-      }
-    });
-    child.stderr.on('data', chunk => { stderr += chunk.toString(); });
-    child.on('error', err => { clearTimeout(timer); reject(err); });
-    child.on('exit', code => {
-      if (code === null || codexLimitsCache.data) return;
-      clearTimeout(timer);
-      reject(new Error((stderr || `codex exited ${code}`).trim()));
-    });
-    const req = (x) => `${JSON.stringify(x)}\n`;
-    child.stdin.write(req({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { clientInfo: { name: 'passideck', version: '0' }, capabilities: {} } }));
-    setTimeout(() => child.stdin.write(req({ jsonrpc: '2.0', id: 2, method: 'account/rateLimits/read', params: {} })), 100);
+async function fetchCodexUsageWithHermesAuth(tokens) {
+  return requestJson(CODEX_USAGE_URL, {
+    headers: {
+      Authorization: `Bearer ${tokens.access_token}`,
+      Accept: 'application/json',
+      'User-Agent': 'passideck/0 codex-limits'
+    },
+    timeoutMs: 12000
   });
+}
+
+async function readCodexLimits() {
+  const now = Date.now();
+  if (codexLimitsCache.data && now - codexLimitsCache.at < CODEX_LIMITS_CACHE_MS) return { ...codexLimitsCache.data, cached: true };
+  const auth = readHermesCodexAuth();
+  let tokens = auth.tokens;
+  if (codexAccessTokenExpiring(tokens.access_token)) tokens = await refreshHermesCodexAuth(auth);
+  let body;
+  try {
+    body = await fetchCodexUsageWithHermesAuth(tokens);
+  } catch (err) {
+    if (err.statusCode !== 401 && err.statusCode !== 403) throw err;
+    tokens = await refreshHermesCodexAuth({ ...auth, tokens });
+    body = await fetchCodexUsageWithHermesAuth(tokens);
+  }
+  const data = parseCodexLimits(body, false);
+  codexLimitsCache = { at: now, data: { ...data, cached: undefined } };
+  return data;
 }
 
 function readSystemMetrics() {
