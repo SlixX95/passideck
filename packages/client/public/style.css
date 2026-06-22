@@ -108,14 +108,17 @@ button, select { font: inherit; }
 .launch-strip { display: flex; gap: 3px; }
 .topbar-ql-btn { padding: 0 7px; color: var(--tg-accent); cursor: pointer; border-color: var(--tg-accent-dim); }
 .topbar-ql-btn:hover { background: var(--tg-accent-dim); color: var(--tg-bg); border-color: var(--tg-accent); }
-.switcher-grid {
+.active-session-desc {
   display: flex;
-  gap: 3px;
   min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding: 0;
-  scrollbar-width: none;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--tg-text-bright);
+  font-family: var(--tg-mono);
+  font-size: 11px;
+  justify-content: center;
 }
 .switcher-grid::-webkit-scrollbar { display: none; }
 .switcher-btn {

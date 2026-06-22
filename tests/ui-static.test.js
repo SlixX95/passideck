@@ -88,7 +88,7 @@ assertIncludes(app, 'entry.term.scrollToBottom?.()', 'after shrinking panes the 
 assertIncludes(app, 'const ro = new ResizeObserver(() => {', 'terminal container resizes must refit height through the debounced scheduler');
 assertIncludes(css, '#saveState { display: inline-block; min-width: 7ch;', 'save status text must reserve width so launch buttons do not jump');
 assertIncludes(html, 'app.js?v=20260622-electron-native-copy', 'wheel scroll fix must cache-bust app.js asset');
-assertIncludes(html, 'style.css?v=20260612-wide-actions', 'wider header action buttons must cache-bust style.css asset');
+assertIncludes(html, 'style.css?v=20260622-active-session-desc', 'active session description styling must cache-bust style.css asset');
 assertIncludes(app, "const closeButton = topEl?.closest?.('button.danger');", 'close hit-layer must only react to the actual close button under the pointer');
 assertIncludes(app, 'if (!btn || closeButton !== btn) return;', 'close hit-layer must not let padded close rect overlap minimize/arrange buttons');
 assertNotIncludes(app, 'const pad = 8;', 'close hit-layer must not use padded close hitboxes that overlap neighboring buttons');
@@ -101,6 +101,10 @@ assertIncludes(html, 'data-command="hermes --tui"', 'PassiDeck must expose a Her
 assertIncludes(html, '>+ tui</button>', 'topbar must include a compact Hermes TUI launch chip');
 assertIncludes(html, '<span class="ql-cmd">hermes --tui</span>', 'empty state must include a Hermes TUI launch field');
 assertIncludes(app, 'function sessionDescription', 'pane header must compute a visible session command/cwd description');
+assertIncludes(html, 'id="activeSessionDescription"', 'topbar must show the active session description');
+assertIncludes(app, "document.getElementById('activeSessionDescription')", 'active session changes must update the topbar description');
+assertIncludes(app, "sessionDescription(entry.session) || panelTitle(entry.session)", 'topbar should contain only the active session description with title fallback');
+assertIncludes(css, '.active-session-desc', 'active session description needs compact topbar ellipsis styling');
 assertIncludes(app, 'class="term-session-desc"', 'pane header must show session description next to the editable title');
 assertIncludes(app, 'setTooltip(headerEl, sessionDescription(session))', 'pane header tooltip must expose the full session description');
 assertIncludes(css, '.term-session-desc', 'session description in pane header needs compact ellipsis styling');
@@ -247,10 +251,6 @@ assertIncludes(app, "arrangeBtn.addEventListener('mouseenter'", 'arrange button 
 assertNotIncludes(app, 'function visiblePaneIds', 'unused visible pane helper must stay removed');
 assertIncludes(app, 'for (const id of state.order) {', 'desktop layout application must use persisted pane order');
 assertIncludes(app, 'if (!state.minimized.has(id)) bringWindowToFront(id);', 'clicking a non-minimized top switcher tab must bring that desktop window to the foreground');
-assertIncludes(app, "close.className = 'switcher-close'", 'switcher tabs must expose a hover close X');
-assertIncludes(app, 'requestClosePanel(id)', 'switcher close X must route through the close confirmation flow');
-assertIncludes(css, '.switcher-btn:hover .switcher-close, .switcher-btn:focus-within .switcher-close', 'switcher close X must only activate on tab hover/focus');
-assertIncludes(css, 'right: 3px;', 'switcher close X must sit on the right side of the tab');
 assertIncludes(app, 'function savePanePrefs', 'pane prefs persistence must exist');
 assertIncludes(app, 'if (!state.sessions.has(id)) delete prefs[id]', 'pane prefs must prune windows for deleted sessions');
 assertIncludes(app, '!state.minimized.has(id) && !el.classList.contains(\'layout-hidden\')', 'resize observer must not persist hidden/minimized geometry');
@@ -313,7 +313,7 @@ assertIncludes(html, 'id="chromePeek"', 'hidden topbar needs restore button');
 assertNotIncludes(html, 'PassiDeck</div>', 'topbar codename/logo text should not be visible');
 assertIncludes(html, 'class="command-strip"', 'topbar must be one slim command strip');
 assertIncludes(html, 'class="command-zone command-left"', 'topbar left zone required for fixed status and launch controls');
-assertIncludes(html, 'class="command-zone command-center"', 'topbar center zone required for scrollable session tabs');
+assertIncludes(html, 'class="command-zone command-center"', 'topbar center zone required for active session description');
 assertIncludes(html, 'class="command-zone command-right"', 'topbar right zone required for fixed controls');
 assertNotIncludes(html, 'topbar-row-1', 'old two-row topbar must not return');
 assertNotIncludes(html, 'topbar-row-2', 'old two-row topbar must not return');
@@ -322,9 +322,8 @@ assertIncludes(css, 'grid-template-columns: auto minmax(140px, 1fr) auto;', 'ses
 assertIncludes(css, '.command-right', 'right controls must remain grouped and fixed');
 assertIncludes(css, '.command-center { overflow: hidden;', 'session tab rail must be clipped/scroll-safe');
 assertIncludes(css, '.command-center::before, .command-center::after {\n  content: none;', 'session tab fade masks must not obscure buttons');
-assertIncludes(css, 'overflow-x: auto;', 'session tabs should remain reachable by horizontal scroll');
 assertNotIncludes(app, '<span>${idx + 1}</span><span class="switcher-title">', 'session tabs must not show leading numbers');
-assertIncludes(app, "title.className = 'switcher-title';", 'session tabs should show shell name only');
+assertIncludes(app, "root.textContent = text;", 'topbar should show active session description as plain text only');
 assertNotIncludes(app, 'role="button" aria-label="Schließen"', 'switcher close must not be an invalid nested role-button span');
 assertNotIncludes(html, 'hotkey-chip', 'visible Alt hotkey hint should not take topbar space');
 assertNotIncludes(html, 'Alt 1–9', 'visible Alt hotkey hint should be hidden');
@@ -424,10 +423,6 @@ assertIncludes(css, 'z-index: var(--z-settings);', 'settings panel must stack in
 assertIncludes(html, '<section class="minimized-bar" id="minimizedBar" hidden>', 'legacy minimized bar container remains for compatibility');
 assertIncludes(app, 'function minimizePanel', 'minimize function must hide panel and add to minimized set');
 assertIncludes(app, 'function restorePanel', 'restore function must show panel and remove from minimized set');
-assertIncludes(app, "btn.classList.add('minimized')", 'top switcher must mark minimized windows');
-assertIncludes(app, "state.minimized.has(id) ? smartRestorePanel(id) : selectPanel(id)", 'clicking a minimized top tab must restore it');
-assertIncludes(css, '.switcher-btn.minimized', 'minimized top tabs must have distinct color');
-assertIncludes(css, ".switcher-btn.minimized::before { content: '−';", 'minimized top tabs must show a minus marker');
 assertIncludes(css, '.term-panel.minimized', 'minimized panel CSS required');
 
 /* Close Confirmation */
@@ -446,9 +441,7 @@ assertNotIncludes(app, "document.addEventListener('pointerdown', handler, true)"
 
 
 /* General hardening + CDP smoke coverage */
-assertNotIncludes(app, 'state.order.slice(0, 9)', 'switcher must render all session tabs, not only the first 9');
-assertIncludes(app, 'state.order.forEach((id, idx) =>', 'switcher should render every persisted session');
-assertIncludes(app, 'idx < 9 ? `Alt+${idx + 1}', 'Alt shortcuts should remain limited to first 9 while all tabs render');
+assertNotIncludes(app, 'state.order.slice(0, 9)', 'session handling must not truncate persisted sessions');
 assertIncludes(app, 'const AUTH_TOKEN_KEY', 'client must support optional token-auth persistence from ?token=');
 assertIncludes(app, "opts.headers['X-PassiDeck-Token'] = token", 'client API requests must send optional auth token');
 assertIncludes(app, "qs.set('token', token)", 'client websocket URLs must include optional auth token');

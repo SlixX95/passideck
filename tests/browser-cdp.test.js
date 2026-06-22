@@ -7,8 +7,20 @@ const { spawn, execFileSync } = require('child_process');
 const WebSocket = require('ws');
 
 const root = path.resolve(__dirname, '..');
-const chromeBin = ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/brave-browser', '/usr/bin/brave'].find(p => fs.existsSync(p));
-if (!chromeBin) throw new Error('No Chrome/Chromium/Brave binary found for CDP smoke');
+const chromeCandidates = [
+  process.env.CHROME_BIN,
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
+  '/usr/bin/brave-browser',
+  '/usr/bin/brave',
+  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
+].filter(Boolean);
+const chromeBin = chromeCandidates.find(p => fs.existsSync(p));
+if (!chromeBin) throw new Error(`No Chrome/Chromium/Brave/Edge binary found for CDP smoke. Checked: ${chromeCandidates.join(', ')}`);
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'passideck-cdp-'));
 const home = path.join(tmp, 'home');
@@ -193,28 +205,39 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
 
     const counts = await evalExpr(cdp, sid, `(() => ({
       panels: document.querySelectorAll('.term-panel').length,
-      tabs: document.querySelectorAll('.switcher-btn').length,
-      visibleTabs: [...document.querySelectorAll('.switcher-btn')].filter(b => b.offsetWidth > 0 && b.offsetHeight > 0).length,
-      titles: [...document.querySelectorAll('.switcher-title')].map(x => x.textContent)
+      activeDesc: document.getElementById('activeSessionDescription')?.textContent || ''
     }))()`);
     assert.strictEqual(counts.panels, 11, 'all panels should render');
-    assert.strictEqual(counts.tabs, 11, 'switcher must render all tabs, not first 9 only');
-    assert.strictEqual(counts.visibleTabs, 11, 'all switcher tabs should be reachable/visible in scroll rail');
+    assert.ok(counts.activeDesc.includes('/bin/bash') || counts.activeDesc.includes('~'), `active description should render in topbar: ${JSON.stringify(counts)}`);
 
-    const clickAll = await evalExpr(cdp, sid, `(async () => {
-      const total = document.querySelectorAll('.switcher-btn').length;
-      for (let i = 0; i < total; i++) {
-        const tab = document.querySelectorAll('.switcher-btn')[i];
-        const title = tab.querySelector('.switcher-title')?.textContent;
-        tab.scrollIntoView({ block: 'nearest', inline: 'center' });
-        tab.click();
+    const switchDescriptions = await evalExpr(cdp, sid, `(async () => {
+      const ids = [...state.sessions.keys()];
+      for (const id of ids) {
+        selectPanel(id);
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-        const activeTitle = document.querySelector('.switcher-btn.active .switcher-title')?.textContent;
-        if (activeTitle !== title) return { ok: false, i, title, activeTitle };
+        const entry = state.sessions.get(id);
+        const expected = sessionDescription(entry.session) || panelTitle(entry.session);
+        const actual = document.getElementById('activeSessionDescription')?.textContent || '';
+        if (actual !== expected) return { ok: false, id, expected, actual };
       }
       return { ok: true };
     })()`);
-    assert.deepStrictEqual(clickAll, { ok: true }, 'every switcher tab should be clickable/selectable');
+    assert.deepStrictEqual(switchDescriptions, { ok: true }, 'topbar description must follow active session switches');
+
+    const wheelScroll = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      await new Promise(resolve => entry.term.write(Array.from({ length: 80 }, (_, i) => 'wheel-' + i + '\\r\\n').join(''), resolve));
+      await new Promise(resolve => entry.term.write('\\x1b[?1000h', resolve));
+      entry.term.scrollToBottom();
+      const before = entry.term.buffer.active.viewportY;
+      const target = entry.el.querySelector('.xterm-viewport') || entry.el.querySelector('.terminal');
+      const r = target.getBoundingClientRect();
+      target.dispatchEvent(new WheelEvent('wheel', { deltaY: -480, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 }));
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      await new Promise(resolve => entry.term.write('\\x1b[?1000l', resolve));
+      return { before, after: entry.term.buffer.active.viewportY };
+    })()`);
+    assert.ok(wheelScroll.after < wheelScroll.before, `wheel must scroll xterm history even when app mouse mode is active: ${JSON.stringify(wheelScroll)}`);
 
     const minimizeProbe = await evalExpr(cdp, sid, `(() => {
       const panel = document.querySelector('.term-panel.active');
@@ -233,7 +256,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await waitEval(cdp, sid, `document.getElementById('panel-${minimizeProbe.id}')?.classList.contains('minimized')`);
     const minimizeOpenedClose = await evalExpr(cdp, sid, `document.querySelector('#closeModal.open') && !document.querySelector('#closeModal').hidden`);
     assert.strictEqual(Boolean(minimizeOpenedClose), false, 'minimize button must not trigger close modal');
-    await evalExpr(cdp, sid, `[...document.querySelectorAll('.switcher-btn')].find(btn => btn.textContent.includes(document.querySelector('#panel-${minimizeProbe.id} .term-title')?.textContent || ''))?.click()`);
+    await evalExpr(cdp, sid, `restorePanel('${minimizeProbe.id}')`);
     await waitEval(cdp, sid, `!document.getElementById('panel-${minimizeProbe.id}')?.classList.contains('minimized')`);
 
     await evalExpr(cdp, sid, `document.querySelector('.term-panel.active button.danger').focus()`);

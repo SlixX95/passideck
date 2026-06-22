@@ -1959,39 +1959,13 @@ function reconnect(id) {
 }
 
 function renderSwitcher() {
-  const root = document.getElementById('switcherGrid');
-  root.innerHTML = '';
   state.order = state.order.filter(id => state.sessions.has(id));
-  state.order.forEach((id, idx) => {
-    const entry = state.sessions.get(id);
-    const btn = document.createElement('div');
-    btn.className = 'switcher-btn';
-    btn.setAttribute('role', 'button');
-    btn.tabIndex = 0;
-    if (id === state.activeId) btn.classList.add('active');
-    if (state.minimized.has(id)) btn.classList.add('minimized');
-    if (entry.el.classList.contains('exited')) btn.classList.add('exited');
-    setTooltip(btn, state.minimized.has(id) ? `Minimized · ${panelTitle(entry.session)}` : (idx < 9 ? `Alt+${idx + 1} · ${panelTitle(entry.session)}` : panelTitle(entry.session)));
-    const title = document.createElement('span');
-    title.className = 'switcher-title';
-    title.textContent = panelTitle(entry.session);
-    const close = document.createElement('button');
-    close.type = 'button';
-    close.className = 'switcher-close';
-    close.setAttribute('aria-label', `Schließen: ${panelTitle(entry.session)}`);
-    setTooltip(close, 'Schließen');
-    close.textContent = '×';
-    close.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); requestClosePanel(id); });
-    close.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); });
-    btn.append(title, close);
-    btn.onclick = () => state.minimized.has(id) ? smartRestorePanel(id) : selectPanel(id);
-    btn.addEventListener('keydown', e => {
-      if (e.key !== 'Enter' && e.key !== ' ') return;
-      e.preventDefault();
-      state.minimized.has(id) ? smartRestorePanel(id) : selectPanel(id);
-    });
-    root.appendChild(btn);
-  });
+  const root = document.getElementById('activeSessionDescription');
+  if (!root) return;
+  const entry = state.activeId ? state.sessions.get(state.activeId) : null;
+  const text = entry ? sessionDescription(entry.session) || panelTitle(entry.session) : 'Keine Session';
+  root.textContent = text;
+  setTooltip(root, text);
 }
 
 function selectPanel(id, opts = {}) {
