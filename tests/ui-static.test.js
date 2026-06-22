@@ -173,7 +173,9 @@ assertIncludes(app, 'function activeTerminalSelectionText', 'Electron wrapper mu
 assertIncludes(app, 'window.__passideckGetSelection', 'Electron wrapper must read selected xterm text before native copy');
 assertIncludes(app, 'window.__passideckClearSelection', 'Electron wrapper must clear xterm selection after native copy');
 assertIncludes(app, 'window.__passideckCopySelection', 'Electron wrapper must be able to invoke xterm selection copy');
-assertIncludes(app, "key === 'c'", 'client must own Ctrl+Shift+C for terminal copy');
+assertIncludes(app, "key !== 'c'", 'client must own Ctrl+Shift+C for terminal copy');
+assertIncludes(app, 'function handleTerminalCopyShortcut', 'Ctrl+Shift+C must be handled in capture phase before xterm/TUI consumes it');
+assertIncludes(app, "document.addEventListener('keydown', handleTerminalCopyShortcut, true)", 'terminal copy shortcut must use capture phase for Hermes TUI');
 assertIncludes(app, 'navigator.clipboard?.readText', 'right-click with no selection must paste clipboard text');
 assertIncludes(app, 'function bracketedPastePayload', 'right-click/Ctrl+V text paste must use bracketed paste, not raw Enter/newline input');
 assertIncludes(app, "return `\\x1b[200~${String(text || '').replace(/\\x1b/g, '')}\\x1b[201~`;", 'bracketed paste wrapper must preserve text insertion without submitting');

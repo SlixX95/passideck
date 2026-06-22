@@ -2249,6 +2249,14 @@ function letBrowserOwnTerminalPasteShortcut(e) {
   e.stopImmediatePropagation();
 }
 
+function handleTerminalCopyShortcut(e) {
+  const key = String(e.key || '').toLowerCase();
+  if (key !== 'c' || !(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  copyActiveTerminalSelection().catch(err => console.warn('terminal shortcut copy failed', err));
+}
+
 function armClipboardPasteMode() {
   const btn = document.getElementById('clipboardImageBtn');
   state.clipboardPasteArmed = true;
@@ -2488,6 +2496,7 @@ document.getElementById('closeModal').addEventListener('click', e => {
 document.addEventListener('paste', handleTerminalPaste, true);
 document.addEventListener('keydown', handleCloseModalKeydown, true);
 document.addEventListener('keydown', letBrowserOwnTerminalPasteShortcut, true);
+document.addEventListener('keydown', handleTerminalCopyShortcut, true);
 window.addEventListener('resize', () => { scaleWindowPrefsToViewport(); responsiveMinimizeForViewport(); applyLayoutVisibility(); savePanePrefs(); scheduleTerminalFit(); });
 window.addEventListener('beforeunload', () => { savePanePrefs(); flushUiState(); saveAllTerminalSnapshots(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveAllTerminalSnapshots(); });
@@ -2521,10 +2530,6 @@ document.addEventListener('keydown', e => {
   if (e.ctrlKey && e.shiftKey && key === 'v') {
     e.preventDefault();
     uploadClipboardImage();
-  }
-  if (e.ctrlKey && e.shiftKey && key === 'c') {
-    e.preventDefault();
-    copyActiveTerminalSelection().catch(err => console.warn('terminal shortcut copy failed', err));
   }
 });
 
