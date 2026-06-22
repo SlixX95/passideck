@@ -3,11 +3,14 @@ const path = require('path');
 const assert = require('assert');
 
 const root = path.resolve(__dirname, '..');
-const app = fs.readFileSync(path.join(root, 'packages/client/public/app.js'), 'utf8');
-const server = fs.readFileSync(path.join(root, 'packages/server/src/index.js'), 'utf8');
-const session = fs.readFileSync(path.join(root, 'packages/server/src/session.js'), 'utf8');
-const css = fs.readFileSync(path.join(root, 'packages/client/public/style.css'), 'utf8');
-const html = fs.readFileSync(path.join(root, 'packages/client/public/index.html'), 'utf8');
+function readText(...parts) {
+  return fs.readFileSync(path.join(root, ...parts), 'utf8').replace(/\r\n/g, '\n');
+}
+const app = readText('packages/client/public/app.js');
+const server = readText('packages/server/src/index.js');
+const session = readText('packages/server/src/session.js');
+const css = readText('packages/client/public/style.css');
+const html = readText('packages/client/public/index.html');
 
 function assertIncludes(haystack, needle, message) {
   assert.ok(haystack.includes(needle), message || `Expected ${needle}`);
@@ -84,7 +87,7 @@ assertIncludes(app, 'if (changed) entry.term.resize(cols, targetRows);', 'no-op 
 assertIncludes(app, 'entry.term.scrollToBottom?.()', 'after shrinking panes the active prompt must stay reachable at the bottom');
 assertIncludes(app, 'const ro = new ResizeObserver(() => {', 'terminal container resizes must refit height through the debounced scheduler');
 assertIncludes(css, '#saveState { display: inline-block; min-width: 7ch;', 'save status text must reserve width so launch buttons do not jump');
-assertIncludes(html, 'app.js?v=20260614-reset-date', 'reset date formatter fix must cache-bust app.js asset');
+assertIncludes(html, 'app.js?v=20260622-wheel-scroll', 'wheel scroll fix must cache-bust app.js asset');
 assertIncludes(html, 'style.css?v=20260612-wide-actions', 'wider header action buttons must cache-bust style.css asset');
 assertIncludes(app, "const closeButton = topEl?.closest?.('button.danger');", 'close hit-layer must only react to the actual close button under the pointer');
 assertIncludes(app, 'if (!btn || closeButton !== btn) return;', 'close hit-layer must not let padded close rect overlap minimize/arrange buttons');
@@ -97,6 +100,11 @@ assertNotIncludes(html, 'cdn.jsdelivr.net', 'standalone build must not depend on
 assertIncludes(html, 'data-command="hermes --tui"', 'PassiDeck must expose a Hermes TUI quick-launch command');
 assertIncludes(html, '>+ tui</button>', 'topbar must include a compact Hermes TUI launch chip');
 assertIncludes(html, '<span class="ql-cmd">hermes --tui</span>', 'empty state must include a Hermes TUI launch field');
+assertIncludes(app, 'function sessionDescription', 'pane header must compute a visible session command/cwd description');
+assertIncludes(app, 'class="term-session-desc"', 'pane header must show session description next to the editable title');
+assertIncludes(app, 'setTooltip(headerEl, sessionDescription(session))', 'pane header tooltip must expose the full session description');
+assertIncludes(css, '.term-session-desc', 'session description in pane header needs compact ellipsis styling');
+assertIncludes(session, 'home: os.homedir()', 'session metadata must include home so cwd can be shortened in the header');
 assertIncludes(server, "const UI_THEMES = new Set(['blue', 'green', 'emerald', 'cyan', 'amber', 'purple', 'red', 'mono'])", 'server ui-state must persist all frontend theme choices');
 assertNotIncludes(server, "'2x2', '3x2', '2x3'", 'server ui-state must reject retired fixed-grid layouts');
 assertNotIncludes(server, "(?:47|1047|1048|1049)[hl]", 'server must not strip alternate-screen TUI sequences');
@@ -105,6 +113,8 @@ assertIncludes(server, 'function tmuxSetDefaults', 'tmux defaults must be centra
 assertIncludes(server, 'tmuxSetDefaults(name);', 'new and reattached sessions must apply tmux defaults to their session');
 assertIncludes(server, 'process.env.PASSIDECK_TMUX_SOCKET', 'tmux socket selection must not depend on fragile whitespace-split args');
 assertIncludes(app, 'function installTerminalTouchScroll', 'mobile touch dragging inside terminal must scroll xterm buffer');
+assertIncludes(app, 'function installTerminalWheelScroll', 'mouse wheel must scroll xterm buffer even when CLI mouse reporting is active');
+assertIncludes(app, 'term.attachCustomWheelEventHandler', 'xterm wheel events must be intercepted before CLI mouse handling steals them');
 assertIncludes(app, 'term.scrollLines(lines);', 'touch scroll must use xterm scrollback API instead of relying only on DOM overflow');
 assertIncludes(css, 'height: 100dvh;', 'mobile viewport height must use dynamic viewport units');
 assertIncludes(css, 'touch-action: pan-y;', 'terminal panes must allow vertical touch scrolling');
@@ -329,7 +339,7 @@ assertIncludes(app, 'function showToast', 'toast helper required instead of aler
 assertNotIncludes(app, 'alert(`Upload failed:', 'upload errors must not use blocking alert');
 assertIncludes(app, "const date = new Date(value);", 'codex reset formatter must parse ISO reset timestamps');
 assertNotIncludes(app, 'new Date(Number(ts) * 1000)', 'codex reset formatter must not treat ISO timestamps as Unix seconds only');
-assertIncludes(html, 'app.js?v=20260614-reset-date', 'app.js must be cache-busted after reset date formatter fix');
+assertIncludes(html, 'app.js?v=20260622-wheel-scroll', 'app.js must be cache-busted after wheel scroll fix');
 
 /* Font Size */
 assertIncludes(html, 'id="fontSizeSlider"', 'font size slider required in settings');
@@ -450,7 +460,7 @@ assertIncludes(server, 'PASSIDECK_AUTH_TOKEN', 'server must support optional tok
 assertIncludes(server, 'function requestGuard', 'HTTP API must enforce origin/token guard');
 assertIncludes(server, "req.path === '/health'", 'health endpoint must remain usable for readiness checks when auth token is enabled');
 assertIncludes(server, 'function websocketAllowed', 'WebSocket must enforce origin/token guard');
-assertIncludes(html, 'app.js?v=20260614-reset-date', 'served app cache-bust must remain current for browser smoke');
+assertIncludes(html, 'app.js?v=20260622-wheel-scroll', 'served app cache-bust must remain current for browser smoke');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 assertIncludes(pkg.scripts.test, 'tests/browser-cdp.test.js', 'npm test must include real CDP browser smoke');
 assert.strictEqual(pkg.scripts['test:browser'], 'node tests/browser-cdp.test.js', 'browser smoke script should be callable directly');

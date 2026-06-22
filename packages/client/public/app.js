@@ -1258,6 +1258,21 @@ function installTerminalTouchScroll(termEl, term) {
   }, { passive: false });
 }
 
+function installTerminalWheelScroll(termEl, term) {
+  term.attachCustomWheelEventHandler?.(e => {
+    if (e.ctrlKey) return true;
+    const buffer = term.buffer?.active;
+    if (!buffer || buffer.baseY <= 0) return true;
+    // ponytail: xterm already has wheel plumbing; force scrollback before CLI mouse mode eats it.
+    const unit = e.deltaMode === 1 ? 1 : e.deltaMode === 2 ? term.rows : 1 / Math.max(8, state.fontSize * 1.2);
+    const lines = Math.trunc(e.deltaY * unit);
+    if (!lines) return true;
+    term.scrollLines(lines);
+    e.preventDefault();
+    return false;
+  });
+}
+
 function updateEmpty() {
   document.getElementById('emptyState').style.display = state.sessions.size ? 'none' : 'grid';
   document.getElementById('stat-active').textContent = String(state.sessions.size);
@@ -1438,6 +1453,15 @@ function defaultTitle(session) {
   const peers = state.order.filter(id => state.sessions.has(id) && sessionKind(state.sessions.get(id).session) === kind);
   const n = Math.max(1, peers.indexOf(session.id) + 1 || peers.length + 1);
   return `${kind} ${n}`;
+}
+
+function sessionDescription(session) {
+  const meta = session?.meta || {};
+  const command = String(meta.command || meta.label || '').trim();
+  const cwd = String(meta.cwd || '').trim();
+  const home = String(meta.home || '').trim();
+  const shortCwd = cwd && home && cwd.startsWith(home) ? `~${cwd.slice(home.length)}` : cwd;
+  return [command, shortCwd].filter(Boolean).join(' · ');
 }
 
 function panelTitle(session) {
@@ -1689,6 +1713,7 @@ function createPanel(session, opts = {}) {
     <div class="term-header">
       <span class="connection-dot" data-tooltip="Verbinde neu" aria-label="Verbinde neu"></span>
       <span class="term-title" contenteditable="true" spellcheck="false" aria-label="Fenstername">${escapeHtml(panelTitle(session))}</span>
+      <span class="term-session-desc">${escapeHtml(sessionDescription(session))}</span>
       <div class="term-actions">
         <button class="arrange" data-tooltip="Anordnen" aria-label="Anordnen">▦</button>
         <button class="minimize" data-tooltip="Minimieren" aria-label="Minimieren">−</button>
@@ -1701,8 +1726,11 @@ function createPanel(session, opts = {}) {
   grid.appendChild(el);
 
   const titleEl = el.querySelector('.term-title');
+  const descEl = el.querySelector('.term-session-desc');
   const headerEl = el.querySelector('.term-header');
   const [arrangeBtn, minBtn, closeBtn] = el.querySelectorAll('button');
+  setTooltip(headerEl, sessionDescription(session));
+  if (descEl && !descEl.textContent.trim()) descEl.hidden = true;
   arrangeBtn.dataset.paneId = id;
   minBtn.dataset.paneId = id;
   closeBtn.dataset.paneId = id;
@@ -1761,6 +1789,7 @@ function createPanel(session, opts = {}) {
   term.open(termEl);
   termEl.addEventListener('contextmenu', e => handleTerminalContextMenu(e, id));
   installTerminalTouchScroll(termEl, term);
+  installTerminalWheelScroll(termEl, term);
 
   // Auto-detect terminal title (vim, Codex, Hermes TUI, etc.)
   term.onTitleChange(title => {

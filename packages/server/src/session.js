@@ -14,6 +14,7 @@ class Session {
       label: options.label || options.command || 'Terminal',
       command: options.command || '',
       cwd: options.cwd || os.homedir(),
+      home: os.homedir(),
       createdAt: new Date().toISOString(),
       status: 'starting',
       statusDetail: '',
