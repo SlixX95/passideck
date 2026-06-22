@@ -2109,14 +2109,23 @@ async function copyTextToClipboard(text) {
   return fallbackCopyText(text);
 }
 
+function activeTerminalSelectionText() {
+  return activeTerminalEntry()?.term?.getSelection?.() || '';
+}
+
+function clearActiveTerminalSelection() {
+  activeTerminalEntry()?.term?.clearSelection?.();
+}
+
 async function copyActiveTerminalSelection() {
-  const entry = activeTerminalEntry();
-  const selected = entry?.term?.getSelection?.() || '';
+  const selected = activeTerminalSelectionText();
   if (!selected) return false;
   await copyTextToClipboard(selected);
-  entry.term.clearSelection?.();
+  clearActiveTerminalSelection();
   return true;
 }
+window.__passideckGetSelection = activeTerminalSelectionText;
+window.__passideckClearSelection = clearActiveTerminalSelection;
 window.__passideckCopySelection = copyActiveTerminalSelection;
 
 async function readTextFromClipboard() {
