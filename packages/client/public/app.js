@@ -1468,10 +1468,10 @@ function panelTitle(session) {
   const entry = state.sessions.get(session.id);
   const custom = state.panePrefs.titles?.[session.id];
   if (custom) return custom;
-  const desc = sessionDescription(session);
-  if (desc) return desc;
+  const generated = entry?.autoTitle || session?.meta?.title || session?.title;
+  if (generated) return generated;
   if (entry?.autoTitle) return entry.autoTitle;
-  return defaultTitle(session);
+  return 'Kein Titel';
 }
 
 function endPointerDrag(event) {
@@ -1802,11 +1802,13 @@ function createPanel(session, opts = {}) {
     // Only update if user hasn't set a custom title
     const custom = state.panePrefs.titles?.[id];
     entry.autoTitle = title;
+    entry.session.meta = { ...(entry.session.meta || {}), title };
     if (!custom) {
       const titleEl = el.querySelector('.term-title');
       if (titleEl && document.activeElement !== titleEl) {
         titleEl.textContent = title;
       }
+      renderSwitcher();
       updateMinimizedBar();
     }
   });
@@ -1965,7 +1967,7 @@ function renderSwitcher() {
   const root = document.getElementById('activeSessionDescription');
   if (!root) return;
   const entry = state.activeId ? state.sessions.get(state.activeId) : null;
-  const text = entry ? sessionDescription(entry.session) || panelTitle(entry.session) : 'Keine Session';
+  const text = entry ? panelTitle(entry.session) : 'Keine Session';
   root.textContent = text;
   setTooltip(root, text);
 }

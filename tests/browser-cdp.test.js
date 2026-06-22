@@ -205,10 +205,23 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
 
     const counts = await evalExpr(cdp, sid, `(() => ({
       panels: document.querySelectorAll('.term-panel').length,
-      activeDesc: document.getElementById('activeSessionDescription')?.textContent || ''
+      activeTitle: document.getElementById('activeSessionDescription')?.textContent || ''
     }))()`);
     assert.strictEqual(counts.panels, 11, 'all panels should render');
-    assert.ok(counts.activeDesc.includes('/bin/bash') || counts.activeDesc.includes('~'), `active description should render in topbar: ${JSON.stringify(counts)}`);
+    assert.strictEqual(counts.activeTitle, 'Kein Titel', `no generated title should show explicit fallback: ${JSON.stringify(counts)}`);
+
+    const generatedTitle = await evalExpr(cdp, sid, `(() => {
+      const entry = [...state.sessions.values()][0];
+      selectPanel(entry.session.id);
+      entry.session.meta.title = 'Model Session Title';
+      renderSwitcher();
+      entry.el.querySelector('.term-title').textContent = panelTitle(entry.session);
+      return {
+        pane: entry.el.querySelector('.term-title')?.textContent || '',
+        topbar: document.getElementById('activeSessionDescription')?.textContent || ''
+      };
+    })()`);
+    assert.deepStrictEqual(generatedTitle, { pane: 'Model Session Title', topbar: 'Model Session Title' }, 'generated terminal/model title must appear in pane and topbar');
 
     const switchDescriptions = await evalExpr(cdp, sid, `(async () => {
       const ids = [...state.sessions.keys()];
@@ -216,13 +229,13 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         selectPanel(id);
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
         const entry = state.sessions.get(id);
-        const expected = sessionDescription(entry.session) || panelTitle(entry.session);
+        const expected = panelTitle(entry.session);
         const actual = document.getElementById('activeSessionDescription')?.textContent || '';
         if (actual !== expected) return { ok: false, id, expected, actual };
       }
       return { ok: true };
     })()`);
-    assert.deepStrictEqual(switchDescriptions, { ok: true }, 'topbar description must follow active session switches');
+    assert.deepStrictEqual(switchDescriptions, { ok: true }, 'topbar title must follow active session switches');
 
     const wheelScroll = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];

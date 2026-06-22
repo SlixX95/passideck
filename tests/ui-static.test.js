@@ -101,11 +101,12 @@ assertIncludes(html, 'data-command="hermes --tui"', 'PassiDeck must expose a Her
 assertIncludes(html, '>+ tui</button>', 'topbar must include a compact Hermes TUI launch chip');
 assertIncludes(html, '<span class="ql-cmd">hermes --tui</span>', 'empty state must include a Hermes TUI launch field');
 assertIncludes(app, 'function sessionDescription', 'pane header must compute a visible session command/cwd description');
-assertIncludes(app, 'const desc = sessionDescription(session);', 'default pane title must use the session command/cwd description instead of Hermes 1/Hermes 2');
-assertIncludes(app, 'if (desc) return desc;', 'pane title must prefer session description before generated titles');
+assertIncludes(app, 'const generated = entry?.autoTitle || session?.meta?.title || session?.title;', 'pane title must use generated model/session titles');
+assertIncludes(app, 'return \'Kein Titel\';', 'pane title must not fall back to Hermes 1/Hermes 2 when no generated title exists');
 assertIncludes(html, 'id="activeSessionDescription"', 'topbar must show the active session description');
 assertIncludes(app, "document.getElementById('activeSessionDescription')", 'active session changes must update the topbar description');
-assertIncludes(app, "sessionDescription(entry.session) || panelTitle(entry.session)", 'topbar should contain only the active session description with title fallback');
+assertIncludes(app, "const text = entry ? panelTitle(entry.session) : 'Keine Session';", 'topbar should contain only the active pane title');
+assertIncludes(app, 'renderSwitcher();\n      updateMinimizedBar();', 'generated title changes must refresh the topbar immediately');
 assertIncludes(css, '.active-session-desc', 'active session description needs compact topbar ellipsis styling');
 assertIncludes(app, 'class="term-session-desc" hidden', 'pane header keeps the old desc node hidden because title now carries the session description');
 assertIncludes(app, 'setTooltip(headerEl, sessionDescription(session))', 'pane header tooltip must expose the full session description');
