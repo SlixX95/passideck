@@ -87,7 +87,7 @@ assertIncludes(app, 'if (changed) entry.term.resize(cols, targetRows);', 'no-op 
 assertIncludes(app, 'entry.term.scrollToBottom?.()', 'after shrinking panes the active prompt must stay reachable at the bottom');
 assertIncludes(app, 'const ro = new ResizeObserver(() => {', 'terminal container resizes must refit height through the debounced scheduler');
 assertIncludes(css, '#saveState { display: inline-block; min-width: 7ch;', 'save status text must reserve width so launch buttons do not jump');
-assertIncludes(html, 'app.js?v=20260622-wheel-scroll', 'wheel scroll fix must cache-bust app.js asset');
+assertIncludes(html, 'app.js?v=20260622-copy-shortcut', 'wheel scroll fix must cache-bust app.js asset');
 assertIncludes(html, 'style.css?v=20260612-wide-actions', 'wider header action buttons must cache-bust style.css asset');
 assertIncludes(app, "const closeButton = topEl?.closest?.('button.danger');", 'close hit-layer must only react to the actual close button under the pointer');
 assertIncludes(app, 'if (!btn || closeButton !== btn) return;', 'close hit-layer must not let padded close rect overlap minimize/arrange buttons');
@@ -161,6 +161,9 @@ assertIncludes(app, 'termEl.addEventListener(\'contextmenu\', e => handleTermina
 assertIncludes(app, 'entry?.term?.getSelection?.()', 'right-click with terminal selection must copy selected text');
 assertIncludes(app, 'navigator.clipboard?.writeText', 'right-click copy should use Clipboard API when available');
 assertIncludes(app, 'document.execCommand(\'copy\')', 'right-click copy needs fallback for insecure/non-Clipboard contexts');
+assertIncludes(app, 'function copyActiveTerminalSelection', 'Ctrl+Shift+C must copy xterm selection, not browser DOM selection');
+assertIncludes(app, 'window.__passideckCopySelection', 'Electron wrapper must be able to invoke xterm selection copy');
+assertIncludes(app, "key === 'c'", 'client must own Ctrl+Shift+C for terminal copy');
 assertIncludes(app, 'navigator.clipboard?.readText', 'right-click with no selection must paste clipboard text');
 assertIncludes(app, 'function bracketedPastePayload', 'right-click/Ctrl+V text paste must use bracketed paste, not raw Enter/newline input');
 assertIncludes(app, "return `\\x1b[200~${String(text || '').replace(/\\x1b/g, '')}\\x1b[201~`;", 'bracketed paste wrapper must preserve text insertion without submitting');
@@ -339,7 +342,7 @@ assertIncludes(app, 'function showToast', 'toast helper required instead of aler
 assertNotIncludes(app, 'alert(`Upload failed:', 'upload errors must not use blocking alert');
 assertIncludes(app, "const date = new Date(value);", 'codex reset formatter must parse ISO reset timestamps');
 assertNotIncludes(app, 'new Date(Number(ts) * 1000)', 'codex reset formatter must not treat ISO timestamps as Unix seconds only');
-assertIncludes(html, 'app.js?v=20260622-wheel-scroll', 'app.js must be cache-busted after wheel scroll fix');
+assertIncludes(html, 'app.js?v=20260622-copy-shortcut', 'app.js must be cache-busted after wheel scroll fix');
 
 /* Font Size */
 assertIncludes(html, 'id="fontSizeSlider"', 'font size slider required in settings');
@@ -460,7 +463,7 @@ assertIncludes(server, 'PASSIDECK_AUTH_TOKEN', 'server must support optional tok
 assertIncludes(server, 'function requestGuard', 'HTTP API must enforce origin/token guard');
 assertIncludes(server, "req.path === '/health'", 'health endpoint must remain usable for readiness checks when auth token is enabled');
 assertIncludes(server, 'function websocketAllowed', 'WebSocket must enforce origin/token guard');
-assertIncludes(html, 'app.js?v=20260622-wheel-scroll', 'served app cache-bust must remain current for browser smoke');
+assertIncludes(html, 'app.js?v=20260622-copy-shortcut', 'served app cache-bust must remain current for browser smoke');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 assertIncludes(pkg.scripts.test, 'tests/browser-cdp.test.js', 'npm test must include real CDP browser smoke');
 assert.strictEqual(pkg.scripts['test:browser'], 'node tests/browser-cdp.test.js', 'browser smoke script should be callable directly');

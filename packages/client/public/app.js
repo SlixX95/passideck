@@ -2109,6 +2109,16 @@ async function copyTextToClipboard(text) {
   return fallbackCopyText(text);
 }
 
+async function copyActiveTerminalSelection() {
+  const entry = activeTerminalEntry();
+  const selected = entry?.term?.getSelection?.() || '';
+  if (!selected) return false;
+  await copyTextToClipboard(selected);
+  entry.term.clearSelection?.();
+  return true;
+}
+window.__passideckCopySelection = copyActiveTerminalSelection;
+
 async function readTextFromClipboard() {
   if (!navigator.clipboard?.readText || !window.isSecureContext) return '';
   return navigator.clipboard.readText();
@@ -2525,6 +2535,10 @@ document.addEventListener('keydown', e => {
   if (e.ctrlKey && e.shiftKey && key === 'v') {
     e.preventDefault();
     uploadClipboardImage();
+  }
+  if (e.ctrlKey && e.shiftKey && key === 'c') {
+    e.preventDefault();
+    copyActiveTerminalSelection().catch(err => console.warn('terminal shortcut copy failed', err));
   }
 });
 
