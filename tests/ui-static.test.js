@@ -101,11 +101,13 @@ assertIncludes(html, 'data-command="hermes --tui"', 'PassiDeck must expose a Her
 assertIncludes(html, '>+ tui</button>', 'topbar must include a compact Hermes TUI launch chip');
 assertIncludes(html, '<span class="ql-cmd">hermes --tui</span>', 'empty state must include a Hermes TUI launch field');
 assertIncludes(app, 'function sessionDescription', 'pane header must compute a visible session command/cwd description');
+assertIncludes(app, 'const desc = sessionDescription(session);', 'default pane title must use the session command/cwd description instead of Hermes 1/Hermes 2');
+assertIncludes(app, 'if (desc) return desc;', 'pane title must prefer session description before generated titles');
 assertIncludes(html, 'id="activeSessionDescription"', 'topbar must show the active session description');
 assertIncludes(app, "document.getElementById('activeSessionDescription')", 'active session changes must update the topbar description');
 assertIncludes(app, "sessionDescription(entry.session) || panelTitle(entry.session)", 'topbar should contain only the active session description with title fallback');
 assertIncludes(css, '.active-session-desc', 'active session description needs compact topbar ellipsis styling');
-assertIncludes(app, 'class="term-session-desc"', 'pane header must show session description next to the editable title');
+assertIncludes(app, 'class="term-session-desc" hidden', 'pane header keeps the old desc node hidden because title now carries the session description');
 assertIncludes(app, 'setTooltip(headerEl, sessionDescription(session))', 'pane header tooltip must expose the full session description');
 assertIncludes(css, '.term-session-desc', 'session description in pane header needs compact ellipsis styling');
 assertIncludes(session, 'home: os.homedir()', 'session metadata must include home so cwd can be shortened in the header');
