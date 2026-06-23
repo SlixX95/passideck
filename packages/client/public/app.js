@@ -2082,6 +2082,16 @@ async function uploadBlob({ name, type, data }) {
   return api('POST', '/api/uploads', { name, type, data });
 }
 
+function dataUrlToFile(payload, fallbackName = 'clipboard-image.png') {
+  if (!payload?.data || !String(payload.data).startsWith('data:')) return null;
+  const [header, raw = ''] = String(payload.data).split(',', 2);
+  const type = payload.type || header.match(/^data:([^;]+)/)?.[1] || 'application/octet-stream';
+  const binary = atob(raw);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return new File([bytes], payload.name || fallbackName, { type });
+}
+
 function activeTerminalEntry() {
   const id = state.activeId || state.order[0];
   return id ? state.sessions.get(id) : null;
@@ -2132,6 +2142,20 @@ async function copyTextToClipboard(text) {
   return fallbackCopyText(text);
 }
 
+function activeDocumentSelectionText() {
+  const selection = document.getSelection?.();
+  const text = selection?.toString?.() || '';
+  if (!text.trim()) return '';
+  const anchor = selection.anchorNode?.nodeType === Node.ELEMENT_NODE ? selection.anchorNode : selection.anchorNode?.parentElement;
+  const focus = selection.focusNode?.nodeType === Node.ELEMENT_NODE ? selection.focusNode : selection.focusNode?.parentElement;
+  if (anchor?.closest?.('.xterm, .terminal') || focus?.closest?.('.xterm, .terminal')) return '';
+  return text;
+}
+
+function clearDocumentSelection() {
+  document.getSelection?.().removeAllRanges?.();
+}
+
 function activeTerminalSelectionText() {
   const entry = activeTerminalEntry();
   return entry?.term?.getSelection?.() || entry?.lastSelection || '';
@@ -2155,6 +2179,7 @@ window.__passideckClearSelection = clearActiveTerminalSelection;
 window.__passideckCopySelection = copyActiveTerminalSelection;
 
 async function readTextFromClipboard() {
+  if (window.passideckDesktop?.readText) return String(await window.passideckDesktop.readText() || '');
   if (!navigator.clipboard?.readText || !window.isSecureContext) return '';
   return navigator.clipboard.readText();
 }
@@ -2191,6 +2216,33 @@ async function handleTerminalContextMenu(e, id) {
   }
 }
 
+async function handlePassiDeckContextMenu(e) {
+  const target = e.target?.nodeType === Node.ELEMENT_NODE ? e.target : e.target?.parentElement;
+  const terminalPanel = target?.closest?.('.term-panel');
+  if (target?.closest?.('.terminal, .xterm') && terminalPanel?.dataset?.paneId) {
+    await handleTerminalContextMenu(e, terminalPanel.dataset.paneId);
+    return;
+  }
+  const selected = activeDocumentSelectionText();
+  if (selected) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation?.();
+    await copyTextToClipboard(selected);
+    clearDocumentSelection();
+    return;
+  }
+  if (shouldLetBrowserHandlePaste(target)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation?.();
+  try {
+    await pasteClipboardIntoTerminalEntry(activeTerminalEntry());
+  } catch (err) {
+    console.warn('app right-click paste failed', err);
+  }
+}
+
 function formatUploadInsertion(upload) {
   // Keep uploads simple and upstream-friendly: paste the local path into the PTY.
   // Hermes can auto-detect image paths on submit; shells/Codex/unknown panes keep
@@ -2209,6 +2261,9 @@ function findImageFileFromClipboardData(data) {
 }
 
 async function readImageFileFromSystemClipboard() {
+  if (window.passideckDesktop?.readImage) {
+    return dataUrlToFile(await window.passideckDesktop.readImage(), 'clipboard-image.png');
+  }
   if (!navigator.clipboard?.read || !window.isSecureContext) return null;
   const items = await navigator.clipboard.read();
   for (const item of items || []) {
@@ -2293,7 +2348,13 @@ function letBrowserOwnTerminalPasteShortcut(e) {
   const key = String(e.key || '').toLowerCase();
   if (key !== 'v' || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
   const target = e.target?.nodeType === Node.ELEMENT_NODE ? e.target : e.target?.parentElement;
-  if (!target?.closest('.terminal, .xterm')) return;
+  if (!target?.closest('.terminal, .xterm') && (shouldLetBrowserHandlePaste(target) || !activeTerminalEntry())) return;
+  if (window.passideckDesktop?.readText || window.passideckDesktop?.readImage) {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    pasteClipboardIntoTerminalEntry(activeTerminalEntry()).catch(err => console.warn('terminal shortcut paste failed', err));
+    return;
+  }
   // xterm may otherwise turn Ctrl+V into raw ^V. Stop xterm key handling, but do not preventDefault;
   // the browser then emits a real paste event that handleTerminalPaste can route to the PTY/upload bridge.
   e.stopImmediatePropagation();
@@ -2378,6 +2439,27 @@ async function uploadFile(file, opts = {}) {
   }
 }
 
+function eventHasFiles(e) {
+  return (e.dataTransfer?.files?.length || 0) > 0;
+}
+
+function handlePassiDeckDragOver(e) {
+  if (!eventHasFiles(e)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  e.dataTransfer.dropEffect = 'copy';
+}
+
+async function handlePassiDeckDrop(e) {
+  if (!eventHasFiles(e)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation?.();
+  const target = e.target?.nodeType === Node.ELEMENT_NODE ? e.target : e.target?.parentElement;
+  const panel = target?.closest?.('.term-panel');
+  if (panel?.dataset?.paneId) selectPanel(panel.dataset.paneId, { persist: false });
+  for (const file of [...e.dataTransfer.files]) await uploadFile(file, { pasteIntoTerminal: true });
+}
 
 function showToast(text, type = 'ok') {
   const el = document.getElementById('toast');
@@ -2544,6 +2626,9 @@ document.getElementById('closeModal').addEventListener('click', e => {
 });
 
 document.addEventListener('paste', handleTerminalPaste, true);
+document.addEventListener('contextmenu', handlePassiDeckContextMenu, true);
+document.addEventListener('dragover', handlePassiDeckDragOver, true);
+document.addEventListener('drop', handlePassiDeckDrop, true);
 document.addEventListener('keydown', handleCloseModalKeydown, true);
 document.addEventListener('keydown', letBrowserOwnTerminalPasteShortcut, true);
 document.addEventListener('keydown', handleTerminalCopyShortcut, true);

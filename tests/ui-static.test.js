@@ -87,7 +87,7 @@ assertIncludes(app, 'if (changed) entry.term.resize(cols, targetRows);', 'no-op 
 assertIncludes(app, 'entry.term.scrollToBottom?.()', 'after shrinking panes the active prompt must stay reachable at the bottom');
 assertIncludes(app, 'const ro = new ResizeObserver(() => {', 'terminal container resizes must refit height through the debounced scheduler');
 assertIncludes(css, '#saveState { display: inline-block; min-width: 7ch;', 'save status text must reserve width so launch buttons do not jump');
-assertIncludes(html, 'app.js?v=20260623-title-copy-selection', 'wheel scroll fix must cache-bust app.js asset');
+assertIncludes(html, 'app.js?v=20260623-global-clipboard-drop', 'wheel scroll fix must cache-bust app.js asset');
 assertIncludes(html, 'style.css?v=20260622-active-session-desc', 'active session description styling must cache-bust style.css asset');
 assertIncludes(app, "const closeButton = topEl?.closest?.('button.danger');", 'close hit-layer must only react to the actual close button under the pointer');
 assertIncludes(app, 'if (!btn || closeButton !== btn) return;', 'close hit-layer must not let padded close rect overlap minimize/arrange buttons');
@@ -146,7 +146,7 @@ assertIncludes(server, 'Math.max(1, Math.min(365, Number(maxDays) || UPLOAD_RETE
 assertNotIncludes(app, 'function movePanelBefore', 'dead before/after drag helper must stay removed');
 assertIncludes(app, "headerEl.addEventListener('pointerdown'", 'pane header empty space must be draggable via pointer events');
 assertNotIncludes(app, 'dragstart', 'desktop windows must not depend on native drag/drop');
-assertNotIncludes(app, "addEventListener('drop'", 'desktop windows must not magnetically drop into grid slots');
+assertNotIncludes(app, 'markDropTargetAt', 'desktop windows must not magnetically drop into grid slots');
 assertIncludes(app, 'contenteditable="true"', 'pane title must be editable inline');
 assertIncludes(app, 'aria-label="Window name"', 'editable title needs an accessible label');
 assertNotIncludes(app, '<span class="term-id">', 'session codename/id must not render in pane header');
@@ -161,11 +161,16 @@ assertIncludes(app, "setConnectionStatus(id, 'offline')", 'error/exit must mark 
 assertIncludes(app, 'class="minimize"', 'minimize button must exist in pane header');
 assertIncludes(app, 'document.addEventListener(\'paste\', handleTerminalPaste, true)', 'Ctrl+V must route paste events into active terminal before xterm/browser handlers');
 assertIncludes(app, 'document.addEventListener(\'keydown\', letBrowserOwnTerminalPasteShortcut, true)', 'Ctrl+V keydown must bypass xterm raw ^V handling');
+assertIncludes(app, 'pasteClipboardIntoTerminalEntry(activeTerminalEntry()).catch', 'Electron Ctrl+V must directly use native clipboard bridge so image clipboard paste works on remote HTTP app URLs');
 assertIncludes(app, 'e.stopImmediatePropagation();', 'Ctrl+V must stop xterm from consuming browser paste shortcut');
 assertIncludes(app, 'function shouldLetBrowserHandlePaste', 'normal editable fields must keep browser paste behavior');
 assertIncludes(app, "el.closest('.terminal, .xterm')", 'xterm hidden textarea must paste through PTY bridge');
 assertIncludes(app, "e.clipboardData?.getData('text/plain')", 'plain text clipboard must paste into active terminal');
 assertIncludes(app, 'function handleTerminalContextMenu', 'terminal right-click must emulate PowerShell copy/paste behavior');
+assertIncludes(app, 'function handlePassiDeckContextMenu', 'global right-click must copy any visible PassiDeck selection before paste fallback');
+assertIncludes(app, 'document.addEventListener(\'contextmenu\', handlePassiDeckContextMenu, true)', 'global contextmenu handler must run before browser/xterm defaults');
+assertIncludes(app, 'function activeDocumentSelectionText', 'global right-click copy must read normal DOM selections outside xterm');
+assertIncludes(app, 'document.getSelection?.().removeAllRanges?.()', 'global right-click copy must clear normal DOM selection after copying');
 assertIncludes(app, 'termEl.addEventListener(\'contextmenu\', e => handleTerminalContextMenu(e, id))', 'xterm panes must bind right-click copy/paste handler');
 assertIncludes(app, 'entry?.term?.getSelection?.()', 'right-click with terminal selection must copy selected text');
 assertIncludes(app, 'window.passideckDesktop?.copyText', 'Electron right-click and shortcut copy must prefer native desktop clipboard');
@@ -187,6 +192,8 @@ assertIncludes(app, 'function bracketedPastePayload', 'right-click/Ctrl+V text p
 assertIncludes(app, "return `\\x1b[200~${String(text || '').replace(/\\x1b/g, '')}\\x1b[201~`;", 'bracketed paste wrapper must preserve text insertion without submitting');
 assertIncludes(app, 'function insertIntoTerminalEntry', 'safe paste helper must insert at cursor via bracketed paste');
 assertIncludes(app, 'function pasteClipboardIntoTerminalEntry', 'right-click with no selection must paste text or image clipboard data');
+assertIncludes(app, 'window.passideckDesktop?.readText', 'Electron right-click/Ctrl+V paste must read native desktop text clipboard on insecure remote app URLs');
+assertIncludes(app, 'window.passideckDesktop?.readImage', 'Electron right-click/Ctrl+V image paste must read native desktop image clipboard on insecure remote app URLs');
 assertIncludes(app, 'const imageFile = await readImageFileFromSystemClipboard();', 'right-click paste must check image clipboard data first');
 assertIncludes(app, 'const upload = await uploadFile(imageFile, { keepBusy: true });', 'right-click image paste must upload without auto-pasting via active-pane helper');
 assertIncludes(app, 'return upload ? insertIntoTerminalEntry(entry, `${upload.path} `) : false;', 'right-click image paste must insert uploaded path at clicked cursor without submitting');
@@ -200,6 +207,9 @@ assertIncludes(app, 'e.stopImmediatePropagation();', 'handled paste must not als
 assertIncludes(app, 'uploadFile(file, { pasteIntoTerminal: true });', 'Ctrl+V image/file paste and explicit file upload must route upload into active terminal');
 assertIncludes(app, 'uploadFile(file, { pasteIntoTerminal: true, keepBusy: true });', 'explicit clipboard button must still route upload into active terminal');
 assertIncludes(app, 'function formatUploadInsertion', 'uploads must format pasted local paths for the active terminal');
+assertIncludes(app, 'function handlePassiDeckDrop', 'dropping a file anywhere on PassiDeck must upload and paste its path into the active terminal');
+assertIncludes(app, "document.addEventListener('drop', handlePassiDeckDrop, true)", 'global file drops must be handled at app level, not by browser navigation');
+assertIncludes(app, "document.addEventListener('dragover', handlePassiDeckDragOver, true)", 'global file drags must prevent browser navigation and allow drop');
 assertIncludes(app, "return `\\x01${upload.path} `;", 'uploads must paste explicit local paths into terminal instead of Hermes-specific slash commands');
 assertNotIncludes(app, "return `/image ${upload.path}\\r`;", 'uploads must not use Hermes-specific /image command injection');
 assertNotIncludes(app, "return `\\x1b[200~${upload.path}\\x1b[201~`;", 'uploads must not use custom Hermes composer placeholder injection');
@@ -355,7 +365,7 @@ assertIncludes(app, 'function showToast', 'toast helper required instead of aler
 assertNotIncludes(app, 'alert(`Upload failed:', 'upload errors must not use blocking alert');
 assertIncludes(app, "const date = new Date(value);", 'codex reset formatter must parse ISO reset timestamps');
 assertNotIncludes(app, 'new Date(Number(ts) * 1000)', 'codex reset formatter must not treat ISO timestamps as Unix seconds only');
-assertIncludes(html, 'app.js?v=20260623-title-copy-selection', 'app.js must be cache-busted after wheel scroll fix');
+assertIncludes(html, 'app.js?v=20260623-global-clipboard-drop', 'app.js must be cache-busted after wheel scroll fix');
 
 /* Font Size */
 assertIncludes(html, 'id="fontSizeSlider"', 'font size slider required in settings');
@@ -470,7 +480,7 @@ assertIncludes(server, 'PASSIDECK_AUTH_TOKEN', 'server must support optional tok
 assertIncludes(server, 'function requestGuard', 'HTTP API must enforce origin/token guard');
 assertIncludes(server, "req.path === '/health'", 'health endpoint must remain usable for readiness checks when auth token is enabled');
 assertIncludes(server, 'function websocketAllowed', 'WebSocket must enforce origin/token guard');
-assertIncludes(html, 'app.js?v=20260623-title-copy-selection', 'served app cache-bust must remain current for browser smoke');
+assertIncludes(html, 'app.js?v=20260623-global-clipboard-drop', 'served app cache-bust must remain current for browser smoke');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 assertIncludes(pkg.scripts.test, 'tests/browser-cdp.test.js', 'npm test must include real CDP browser smoke');
 assert.strictEqual(pkg.scripts['test:browser'], 'node tests/browser-cdp.test.js', 'browser smoke script should be callable directly');
