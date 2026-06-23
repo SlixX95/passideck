@@ -172,6 +172,9 @@ assertIncludes(app, 'window.passideckDesktop?.copyText', 'Electron right-click a
 assertIncludes(app, 'navigator.clipboard?.writeText', 'right-click copy should use Clipboard API when available');
 assertIncludes(app, 'document.execCommand(\'copy\')', 'right-click copy needs fallback for insecure/non-Clipboard contexts');
 assertIncludes(app, 'function copyActiveTerminalSelection', 'Ctrl+Shift+C must copy xterm selection, not browser DOM selection');
+assertIncludes(app, 'term.onSelectionChange', 'right-click copy must remember xterm selection before TUI mouse mode clears it');
+assertIncludes(app, "entry?.term?.getSelection?.() || entry?.lastSelection || ''", 'copy helpers must fall back to remembered terminal selection');
+assertIncludes(app, "entry.titleSource === 'hermes-session'", 'Hermes saved-session titles must not be overwritten by later terminal OSC noise');
 assertIncludes(app, 'function activeTerminalSelectionText', 'Electron wrapper must be able to read xterm selection text for native clipboard writes');
 assertIncludes(app, 'window.__passideckGetSelection', 'Electron wrapper must read selected xterm text before native copy');
 assertIncludes(app, 'window.__passideckClearSelection', 'Electron wrapper must clear xterm selection after native copy');

@@ -240,6 +240,28 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.deepStrictEqual(tuiSelectedTitle, { inferred: 'Passideck Repo Audit mit Ponytail', pane: 'Passideck Repo Audit mit Ponytail', topbar: 'Passideck Repo Audit mit Ponytail' }, 'Hermes TUI selected saved session must drive pane/topbar title');
 
+    const titleLock = await evalExpr(cdp, sid, `(() => {
+      const entry = [...state.sessions.values()][0];
+      applyGeneratedTitle(entry.session.id, 'Saved Session Name', { source: 'hermes-session' });
+      applyGeneratedTitle(entry.session.id, 'Duster', { source: 'terminal' });
+      return {
+        pane: entry.el.querySelector('.term-title')?.textContent || '',
+        topbar: document.getElementById('activeSessionDescription')?.textContent || '',
+        source: entry.titleSource
+      };
+    })()`);
+    assert.deepStrictEqual(titleLock, { pane: 'Saved Session Name', topbar: 'Saved Session Name', source: 'hermes-session' }, 'Hermes saved-session title must not be overwritten by later terminal OSC titles');
+
+    const rememberedSelectionCopy = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      window.passideckDesktop = { copyText: async text => { window.__passideckLastCopy = text; return true; } };
+      entry.lastSelection = 'remembered selection text';
+      entry.term.clearSelection?.();
+      await handleTerminalContextMenu({ preventDefault(){}, stopPropagation(){} }, entry.session.id);
+      return { lastSelection: entry.lastSelection, copied: window.__passideckLastCopy || '' };
+    })()`);
+    assert.deepStrictEqual(rememberedSelectionCopy, { lastSelection: '', copied: 'remembered selection text' }, 'right-click copy must use remembered xterm selection when TUI mouse mode clears active selection');
+
     const switchDescriptions = await evalExpr(cdp, sid, `(async () => {
       const ids = [...state.sessions.keys()];
       for (const id of ids) {

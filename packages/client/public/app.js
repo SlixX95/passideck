@@ -1501,11 +1501,14 @@ function inferHermesSessionTitle(lines) {
   return '';
 }
 
-function applyGeneratedTitle(id, title) {
+function applyGeneratedTitle(id, title, opts = {}) {
   const entry = state.sessions.get(id);
   const clean = String(title || '').trim();
   if (!entry || !clean || state.panePrefs.titles?.[id]) return false;
+  const source = opts.source || 'terminal';
+  if (entry.titleSource === 'hermes-session' && source !== 'hermes-session') return false;
   entry.autoTitle = clean;
+  entry.titleSource = source;
   entry.session.meta = { ...(entry.session.meta || {}), title: clean };
   const titleEl = entry.el.querySelector('.term-title');
   if (titleEl && document.activeElement !== titleEl) titleEl.textContent = clean;
@@ -1517,7 +1520,7 @@ function applyGeneratedTitle(id, title) {
 function refreshTitleFromTerminal(id) {
   const entry = state.sessions.get(id);
   const inferred = inferHermesSessionTitle(terminalViewportLines(entry?.term));
-  if (inferred) applyGeneratedTitle(id, inferred);
+  if (inferred) applyGeneratedTitle(id, inferred, { source: 'hermes-session' });
 }
 
 function endPointerDrag(event) {
@@ -1835,6 +1838,11 @@ function createPanel(session, opts = {}) {
   term.loadAddon(new WebLinksAddon.WebLinksAddon());
   const termEl = el.querySelector('.terminal');
   term.open(termEl);
+  term.onSelectionChange?.(() => {
+    const entry = state.sessions.get(id);
+    const selected = term.getSelection?.() || '';
+    if (entry && selected) entry.lastSelection = selected;
+  });
   termEl.addEventListener('contextmenu', e => handleTerminalContextMenu(e, id));
   installTerminalTouchScroll(termEl, term);
   installTerminalWheelScroll(termEl, term);
@@ -1865,7 +1873,7 @@ function createPanel(session, opts = {}) {
   });
 
   const hasSnapshot = hasTerminalSnapshot(id);
-  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, restored: hasSnapshot, snapshotTimer: null, lastSentCols: 0, lastSentRows: 0 });
+  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, restored: hasSnapshot, snapshotTimer: null, lastSelection: '', titleSource: '', lastSentCols: 0, lastSentRows: 0 });
   if (state.minimized.has(id)) el.classList.add('minimized');
   const replaceId = opts.replaceId;
   const replaceIndex = replaceId ? state.order.indexOf(replaceId) : -1;
@@ -2125,11 +2133,14 @@ async function copyTextToClipboard(text) {
 }
 
 function activeTerminalSelectionText() {
-  return activeTerminalEntry()?.term?.getSelection?.() || '';
+  const entry = activeTerminalEntry();
+  return entry?.term?.getSelection?.() || entry?.lastSelection || '';
 }
 
 function clearActiveTerminalSelection() {
-  activeTerminalEntry()?.term?.clearSelection?.();
+  const entry = activeTerminalEntry();
+  entry?.term?.clearSelection?.();
+  if (entry) entry.lastSelection = '';
 }
 
 async function copyActiveTerminalSelection() {
@@ -2162,11 +2173,12 @@ async function handleTerminalContextMenu(e, id) {
   e.stopPropagation();
   selectPanel(id, { persist: false });
   const entry = state.sessions.get(id);
-  const selected = entry?.term?.getSelection?.() || '';
+  const selected = entry?.term?.getSelection?.() || entry?.lastSelection || '';
   if (selected) {
     try {
       await copyTextToClipboard(selected);
       entry.term.clearSelection?.();
+      entry.lastSelection = '';
     } catch (err) {
       console.warn('terminal right-click copy failed', err);
     }
