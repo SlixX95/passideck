@@ -2116,7 +2116,7 @@ function fallbackCopyText(text) {
 
 async function copyTextToClipboard(text) {
   if (!text) return false;
-  if (window.passideckDesktop?.copyText?.(text)) return true;
+  if (window.passideckDesktop?.copyText) return Boolean(await window.passideckDesktop.copyText(text));
   if (navigator.clipboard?.writeText && window.isSecureContext) {
     await navigator.clipboard.writeText(text);
     return true;

@@ -168,7 +168,7 @@ assertIncludes(app, "e.clipboardData?.getData('text/plain')", 'plain text clipbo
 assertIncludes(app, 'function handleTerminalContextMenu', 'terminal right-click must emulate PowerShell copy/paste behavior');
 assertIncludes(app, 'termEl.addEventListener(\'contextmenu\', e => handleTerminalContextMenu(e, id))', 'xterm panes must bind right-click copy/paste handler');
 assertIncludes(app, 'entry?.term?.getSelection?.()', 'right-click with terminal selection must copy selected text');
-assertIncludes(app, 'window.passideckDesktop?.copyText?.(text)', 'Electron right-click and shortcut copy must prefer native desktop clipboard');
+assertIncludes(app, 'window.passideckDesktop?.copyText', 'Electron right-click and shortcut copy must prefer native desktop clipboard');
 assertIncludes(app, 'navigator.clipboard?.writeText', 'right-click copy should use Clipboard API when available');
 assertIncludes(app, 'document.execCommand(\'copy\')', 'right-click copy needs fallback for insecure/non-Clipboard contexts');
 assertIncludes(app, 'function copyActiveTerminalSelection', 'Ctrl+Shift+C must copy xterm selection, not browser DOM selection');
