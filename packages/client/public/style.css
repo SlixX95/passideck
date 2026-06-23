@@ -109,9 +109,9 @@ button, select { font: inherit; }
 .topbar-ql-btn { padding: 0 7px; color: var(--tg-accent); cursor: pointer; border-color: var(--tg-accent-dim); }
 .topbar-ql-btn:hover { background: var(--tg-accent-dim); color: var(--tg-bg); border-color: var(--tg-accent); }
 .active-session-desc {
-  display: flex;
+  display: none;
   min-width: 0;
-  width: 100%;
+  flex: 0 1 34%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -120,6 +120,7 @@ button, select { font: inherit; }
   font-size: 11px;
   justify-content: center;
 }
+.switcher-grid { display: flex; flex: 1 1 auto; min-width: 0; gap: 3px; overflow-x: auto; overflow-y: hidden; justify-content: flex-start; }
 .switcher-grid::-webkit-scrollbar { display: none; }
 .switcher-btn {
   min-width: 72px;
@@ -153,7 +154,7 @@ button, select { font: inherit; }
 .switcher-close:hover { color: #fff; background: var(--tg-red); }
 .switcher-btn:hover { color: var(--tg-accent); border-color: var(--tg-accent-dim); }
 .switcher-btn.active { color: var(--tg-bg); border-color: var(--tg-accent); background: linear-gradient(180deg, color-mix(in srgb, var(--tg-accent) 82%, white 18%), var(--tg-accent)); font-weight: 800; box-shadow: 0 0 14px color-mix(in srgb, var(--tg-accent) 25%, transparent); }
-.switcher-btn.minimized { color: var(--tg-amber); border-color: color-mix(in srgb, var(--tg-amber) 72%, black 28%); background: color-mix(in srgb, var(--tg-amber) 13%, #030707 87%); }
+.switcher-btn.minimized, .switcher-btn.active-minimized { color: var(--tg-amber); border-color: color-mix(in srgb, var(--tg-amber) 72%, black 28%); background: color-mix(in srgb, var(--tg-amber) 13%, #030707 87%); }
 .switcher-btn.minimized::before { content: '−'; margin-right: 4px; color: var(--tg-amber); }
 .switcher-btn.exited { opacity: .55; }
 .layout-pack { display: flex; align-items: center; }

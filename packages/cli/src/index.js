@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 const path = require('path');
+const { spawn } = require('child_process');
 
 const args = process.argv.slice(2);
 let noOpen = false;
@@ -12,6 +13,13 @@ for (let i = 0; i < args.length; i++) {
 }
 
 const { createServer, loadConfig } = require(path.join(__dirname, '..', '..', 'server', 'src', 'index.js'));
+
+function openUrl(url) {
+  const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
+  const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
+  // ponytail: no package for one OS opener; if this fails, the printed URL still works.
+  try { spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref(); } catch {}
+}
 const config = loadConfig();
 
 for (let i = 0; i < args.length; i++) {
@@ -40,5 +48,5 @@ const url = `http://${host}:${port}`;
 
 server.listen(port, host, () => {
   console.log(`PassiDeck running: ${url}`);
-  if (!noOpen && host === '127.0.0.1') import('open').then(({ default: open }) => open(url)).catch(() => {});
+  if (!noOpen && host === '127.0.0.1') openUrl(url);
 });

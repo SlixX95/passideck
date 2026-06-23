@@ -245,9 +245,8 @@ function cleanupOldUploads(maxDays = UPLOAD_RETENTION_DAYS) {
   return { removed, bytes };
 }
 
-function resolveCwd(config, cwd, project) {
-  const raw = cwd || config.projects?.[project]?.path || os.homedir();
-  return path.resolve(String(raw).replace(/^~/, os.homedir()));
+function resolveCwd(cwd) {
+  return path.resolve(String(cwd || os.homedir()).replace(/^~/, os.homedir()));
 }
 
 function isPlainShellCommand(command) {
@@ -634,16 +633,13 @@ function createServer(config = loadConfig()) {
     try { res.json(await readCodexLimits()); }
     catch (err) { res.status(503).json({ ok: false, error: err.message }); }
   });
-  app.get('/api/config', (_req, res) => res.json({ projects: config.projects || {}, defaultTheme: config.defaultTheme || 'tokyo-night' }));
   app.get('/api/ui-state', (_req, res) => res.json(readUiState()));
-  app.put('/api/ui-state', (req, res) => {
+  function saveUiStateHandler(req, res) {
     try { res.json(writeUiState(req.body || {})); }
     catch (err) { res.status(500).json({ error: err.message }); }
-  });
-  app.post('/api/ui-state', (req, res) => {
-    try { res.json(writeUiState(req.body || {})); }
-    catch (err) { res.status(500).json({ error: err.message }); }
-  });
+  }
+  app.put('/api/ui-state', saveUiStateHandler);
+  app.post('/api/ui-state', saveUiStateHandler);
 
   app.get('/api/sessions', (_req, res) => res.json(sessions.getAll()));
 
@@ -660,8 +656,8 @@ function createServer(config = loadConfig()) {
 
   app.post('/api/sessions', (req, res) => {
     if (!pty) return res.status(500).json({ error: 'PTY support not available' });
-    const { command, cwd, label, project, cols, rows } = req.body || {};
-    const resolvedCwd = resolveCwd(config, cwd, project);
+    const { command, cwd, label, cols, rows } = req.body || {};
+    const resolvedCwd = resolveCwd(cwd);
     const launch = splitCommand(command || config.shell || '/bin/bash', config.shell || '/bin/bash');
     const session = sessions.create({ command: command || config.shell || '/bin/bash', cwd: resolvedCwd, label, cols, rows });
 

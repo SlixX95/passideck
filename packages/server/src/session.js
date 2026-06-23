@@ -1,11 +1,11 @@
-const { v4: uuidv4 } = require('uuid');
+const { randomUUID } = require('crypto');
 const os = require('os');
 
 const OUTPUT_REPLAY_LIMIT = 128 * 1024;
 
 class Session {
   constructor(options = {}) {
-    this.id = options.id || uuidv4();
+    this.id = options.id || randomUUID();
     this.pty = null;
     this.pid = null;
     this.ws = null;

@@ -123,7 +123,7 @@ async function evalExpr(cdp, sessionId, expression, opts = {}) {
     returnByValue: true,
     userGesture: true
   }, sessionId);
-  if (result.exceptionDetails) throw new Error(`Runtime exception: ${result.exceptionDetails.text}`);
+  if (result.exceptionDetails) throw new Error(`Runtime exception: ${result.exceptionDetails.text} ${result.exceptionDetails.exception?.description || JSON.stringify(result.exceptionDetails)}`);
   return result.result?.value;
 }
 
@@ -144,7 +144,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
   const madeSessions = [];
   let server, cdp, chrome;
   try {
-    const appServer = createServer({ host: '127.0.0.1', port: 0, shell: '/bin/bash', projects: {}, defaultTheme: 'blue' });
+    const appServer = createServer({ host: '127.0.0.1', port: 0, shell: '/bin/bash' });
     server = appServer.server;
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const port = server.address().port;
@@ -208,7 +208,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       activeTitle: document.getElementById('activeSessionDescription')?.textContent || ''
     }))()`);
     assert.strictEqual(counts.panels, 11, 'all panels should render');
-    assert.strictEqual(counts.activeTitle, 'No title', `no generated title should show explicit fallback: ${JSON.stringify(counts)}`);
+    assert.notStrictEqual(counts.activeTitle, 'No title', `topbar should show session info, not the generated-title fallback: ${JSON.stringify(counts)}`);
 
     const generatedTitle = await evalExpr(cdp, sid, `(() => {
       const entry = [...state.sessions.values()][0];
@@ -218,10 +218,21 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       entry.el.querySelector('.term-title').textContent = panelTitle(entry.session);
       return {
         pane: entry.el.querySelector('.term-title')?.textContent || '',
-        topbar: document.getElementById('activeSessionDescription')?.textContent || ''
+        switcher: document.querySelector('#sessionSwitcher .switcher-btn.active .switcher-title')?.textContent || '',
+        topbarPresent: Boolean(document.getElementById('activeSessionDescription'))
       };
     })()`);
-    assert.deepStrictEqual(generatedTitle, { pane: 'Model Session Title', topbar: 'Model Session Title' }, 'generated terminal/model title must appear in pane and topbar');
+    assert.strictEqual(generatedTitle.pane, 'Model Session Title', 'generated terminal/model title must appear in pane header');
+    assert.strictEqual(generatedTitle.switcher, 'Model Session Title', 'taskbar/switcher item should use the pane title');
+    assert.strictEqual(generatedTitle.topbarPresent, false, 'old command/cwd topbar description should be removed');
+
+    const placeholderCustomDoesNotBlock = await evalExpr(cdp, sid, `(() => {
+      const entry = [...state.sessions.values()][0];
+      state.panePrefs.titles[entry.session.id] = 'Titel';
+      applyGeneratedTitle(entry.session.id, 'Generated After Placeholder', { source: 'terminal' });
+      return { pane: entry.el.querySelector('.term-title')?.textContent || '', stored: state.panePrefs.titles[entry.session.id] || '', osc: titleFromOsc('\\u001b]0;OSC Generated Title\\u0007') };
+    })()`);
+    assert.deepStrictEqual(placeholderCustomDoesNotBlock, { pane: 'Generated After Placeholder', stored: 'Titel', osc: 'OSC Generated Title' }, 'placeholder custom titles must not block later generated/OSC titles');
 
     const tuiSelectedTitle = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
@@ -229,16 +240,43 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       delete entry.session.meta.title;
       entry.el.querySelector('.term-title').textContent = panelTitle(entry.session);
       renderSwitcher();
-      const screen = '\\r\\nSessions\\r\\n  +  new        \\u2713 draft   current/default   Start new live session\\r\\n   1.  current    \\u2713 idle    gpt-5.5           Passideck Repo Audit mit Ponytail\\r\\n   2.  20260622_2_today     2 msgs                Friendly greeting\\r\\n';
+      const screen = '\\r\\n╔════════════════════════════════════════════════════════════════╗\\r\\n║ Sessions                                                       ║\\r\\n║ 1 live · 48 resumable                                          ║\\r\\n║    +   new        ✎ draft    current/default   Start a new live session ║\\r\\n║ ▸  1.  current    ✓ idle     gpt-5.5           Passideck Repo Audit mit Ponytail ║\\r\\n║    2.  20260622_2_today     2 msgs             Friendly greeting ║\\r\\n╚════════════════════════════════════════════════════════════════╝\\r\\n';
       await new Promise(resolve => entry.term.write(screen, resolve));
       refreshTitleFromTerminal(entry.session.id);
       return {
-        inferred: inferHermesSessionTitle(terminalViewportLines(entry.term)),
+        inferred: inferHermesSessionTitle(terminalViewportRows(entry.term)),
         pane: entry.el.querySelector('.term-title')?.textContent || '',
-        topbar: document.getElementById('activeSessionDescription')?.textContent || ''
+        switcher: document.querySelector('#sessionSwitcher .switcher-btn.active .switcher-title')?.textContent || ''
       };
     })()`);
-    assert.deepStrictEqual(tuiSelectedTitle, { inferred: 'Passideck Repo Audit mit Ponytail', pane: 'Passideck Repo Audit mit Ponytail', topbar: 'Passideck Repo Audit mit Ponytail' }, 'Hermes TUI selected saved session must drive pane/topbar title');
+    assert.strictEqual(tuiSelectedTitle.inferred, 'Passideck Repo Audit mit Ponytail', 'Hermes TUI selected saved session must be inferred despite box borders');
+    assert.strictEqual(tuiSelectedTitle.pane, 'Passideck Repo Audit mit Ponytail', 'Hermes TUI selected saved session must drive pane header title');
+    assert.strictEqual(tuiSelectedTitle.switcher, 'Passideck Repo Audit mit Ponytail', 'taskbar item should use the same pane title');
+
+    const tuiLoadedVisibleTitle = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      clearGeneratedTitle(entry.session.id);
+      await new Promise(resolve => entry.term.write('\\r\\nSession title: Loaded TUI Session Title\\r\\n', resolve));
+      refreshTitleFromTerminal(entry.session.id);
+      return { inferred: inferHermesVisibleTitle(terminalViewportRows(entry.term)), pane: entry.el.querySelector('.term-title')?.textContent || '' };
+    })()`);
+    assert.deepStrictEqual(tuiLoadedVisibleTitle, { inferred: 'Loaded TUI Session Title', pane: 'Loaded TUI Session Title' }, 'loaded Hermes TUI sessions must update pane title from visible session title text');
+
+    const tuiUntitledTitle = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      delete entry.autoTitle;
+      delete entry.session.meta.title;
+      delete entry.session.title;
+      entry.titleSource = '';
+      entry.el.querySelector('.term-title').textContent = panelTitle(entry.session);
+      renderSwitcher();
+      const lines = ['║ Sessions ║', '║ ▸  1.  current    ✓ idle     gpt-5.5           (untitled)                                                 ║', '║    2.  20260623_today      12 msgs            Should Not Become Title                                   ║'];
+      if (selectedHermesSessionTitleIsEmpty(lines)) clearGeneratedTitle(entry.session.id);
+      return { inferred: inferHermesSessionTitle(lines), pane: entry.el.querySelector('.term-title')?.textContent || '', topbarPresent: Boolean(document.getElementById('activeSessionDescription')) };
+    })()`);
+    assert.strictEqual(tuiUntitledTitle.inferred, '', 'Hermes TUI current untitled row must not infer a title');
+    assert.strictEqual(tuiUntitledTitle.pane, 'No title', 'Hermes TUI current untitled row must clear stale pane title');
+    assert.strictEqual(tuiUntitledTitle.topbarPresent, false, 'topbar command/cwd description should stay removed');
 
     const titleLock = await evalExpr(cdp, sid, `(() => {
       const entry = [...state.sessions.values()][0];
@@ -246,21 +284,253 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       applyGeneratedTitle(entry.session.id, 'Duster', { source: 'terminal' });
       return {
         pane: entry.el.querySelector('.term-title')?.textContent || '',
-        topbar: document.getElementById('activeSessionDescription')?.textContent || '',
+        switcher: document.querySelector('#sessionSwitcher .switcher-btn.active .switcher-title')?.textContent || '',
         source: entry.titleSource
       };
     })()`);
-    assert.deepStrictEqual(titleLock, { pane: 'Saved Session Name', topbar: 'Saved Session Name', source: 'hermes-session' }, 'Hermes saved-session title must not be overwritten by later terminal OSC titles');
+    assert.strictEqual(titleLock.pane, 'Saved Session Name', 'Hermes saved-session title must not be overwritten by later terminal OSC titles');
+    assert.strictEqual(titleLock.switcher, 'Saved Session Name', 'taskbar item should use saved-session title');
+    assert.strictEqual(titleLock.source, 'hermes-session', 'saved-session title source should stay locked');
+
+    const minimizedSwitcher = await evalExpr(cdp, sid, `(() => {
+      const entry = [...state.sessions.values()][0];
+      applyGeneratedTitle(entry.session.id, 'Minimized Window Name', { source: 'hermes-session' });
+      minimizePanel(entry.session.id);
+      const btn = document.querySelector('#sessionSwitcher .switcher-btn.minimized');
+      const before = { text: btn?.querySelector('.switcher-title')?.textContent?.trim() || '', title: btn?.title || '', hasClose: Boolean(btn?.querySelector('.switcher-close')), hidden: entry.el.classList.contains('layout-hidden') };
+      btn?.click();
+      const restored = !state.minimized.has(entry.session.id) && !entry.el.classList.contains('layout-hidden');
+      btn?.click();
+      const minimizedAgain = state.minimized.has(entry.session.id) && entry.el.classList.contains('layout-hidden');
+      restorePanel(entry.session.id);
+      return { before, restored, minimizedAgain };
+    })()`);
+    assert.deepStrictEqual(minimizedSwitcher, { before: { text: 'Minimized Window Name', title: 'Restore Minimized Window Name', hasClose: true, hidden: true }, restored: true, minimizedAgain: true }, 'taskbar click must restore minimized panes, minimize active panes, and expose close X');
 
     const rememberedSelectionCopy = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
+      const calls = [];
       window.passideckDesktop = { copyText: async text => { window.__passideckLastCopy = text; return true; } };
       entry.lastSelection = 'remembered selection text';
-      entry.term.clearSelection?.();
+      entry.term.getSelection = () => '';
+      entry.term.rows = 5;
+      entry.term.clearSelection = () => { calls.push('public'); };
+      entry.term._core.selectionService = { clearSelection: () => { calls.push('private'); } };
+      entry.term.refresh = (start, end) => { calls.push('refresh:' + start + '-' + end); };
       await handleTerminalContextMenu({ preventDefault(){}, stopPropagation(){} }, entry.session.id);
-      return { lastSelection: entry.lastSelection, copied: window.__passideckLastCopy || '' };
+      return { lastSelection: entry.lastSelection, copied: window.__passideckLastCopy || '', calls };
     })()`);
-    assert.deepStrictEqual(rememberedSelectionCopy, { lastSelection: '', copied: 'remembered selection text' }, 'right-click copy must use remembered xterm selection when TUI mouse mode clears active selection');
+    assert.strictEqual(rememberedSelectionCopy.lastSelection, '', 'right-click copy must clear remembered selection');
+    assert.strictEqual(rememberedSelectionCopy.copied, 'remembered selection text', 'right-click copy must use remembered xterm selection when TUI mouse mode clears active selection');
+    assert.deepStrictEqual(rememberedSelectionCopy.calls.slice(0, 2), ['public', 'private'], 'right-click copy must clear both public and private xterm selection state');
+    assert.ok(rememberedSelectionCopy.calls.some(call => call.startsWith('refresh:0-')), 'right-click copy must repaint terminal selection after clearing');
+
+    const noSelectionCopy = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      window.__passideckLastCopy = '';
+      window.passideckDesktop = { copyText: async text => { window.__passideckLastCopy = text; return true; } };
+      entry.lastSelection = '';
+      entry.term.getSelection = () => '';
+      await window.__passideckCopySelection();
+      return window.__passideckLastCopy || '';
+    })()`);
+    assert.strictEqual(noSelectionCopy, '', 'Ctrl+Shift+C must not copy visible viewport when no mouse selection exists');
+
+    const currentRowTitle = await evalExpr(cdp, sid, `(() => {
+      const rows = ['║ 1 live · 48 resumable ║', '║    1.  20260622_old      2 msgs             Old Title ║', '║    2.  current    ✓ idle     gpt-5.5           Selected Session Title ║'];
+      return inferHermesSessionTitle(rows);
+    })()`);
+    assert.strictEqual(currentRowTitle, 'Selected Session Title', 'Hermes TUI current row should infer title even when Sessions header/selector glyph is not visible');
+
+    const unnumberedCurrentRowTitle = await evalExpr(cdp, sid, `(() => {
+      const rows = ['║ Sessions ║', '║ ▸ current    ✓ idle     gpt-5.5           Real Visible Title ║', '║   2.  older      2 msgs             Wrong Title ║'];
+      return inferHermesSessionTitle(rows);
+    })()`);
+    assert.strictEqual(unnumberedCurrentRowTitle, 'Real Visible Title', 'Hermes TUI selected current row may omit numeric index; still infer title');
+
+    const terminalDomSelectionCopy = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const sent = [];
+      window.__passideckLastCopy = '';
+      window.passideckDesktop = { copyText: async text => { window.__passideckLastCopy = text; return true; }, readText: async () => 'must-not-paste' };
+      entry.lastSelection = '';
+      entry.ws = { readyState: WebSocket.OPEN, send: msg => sent.push(JSON.parse(msg).data) };
+      const span = document.createElement('span');
+      span.id = 'terminal-dom-copy-probe';
+      span.textContent = 'terminal dom selection';
+      entry.el.querySelector('.terminal').appendChild(span);
+      const range = document.createRange();
+      range.selectNodeContents(span);
+      const sel = document.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      await handleTerminalContextMenu({ target: span, preventDefault(){}, stopPropagation(){}, stopImmediatePropagation(){} }, entry.session.id);
+      const out = { copied: window.__passideckLastCopy || '', sent, remainingSelection: document.getSelection()?.toString() || '' };
+      span.remove();
+      return out;
+    })()`);
+    assert.deepStrictEqual(terminalDomSelectionCopy, { copied: 'terminal dom selection', sent: [], remainingSelection: '' }, 'right-click with terminal DOM selection must copy, not paste clipboard text into the chat');
+
+    const terminalNoSelectionRightClick = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const sent = [];
+      const copied = [];
+      window.passideckDesktop = { copyText: async text => { copied.push(text); return true; }, readImage: async () => null, readText: async () => 'must-not-paste' };
+      entry.lastSelection = '';
+      entry.term.getSelection = () => '';
+      entry.term.clearSelection = () => {};
+      document.getSelection()?.removeAllRanges?.();
+      entry.ws = { readyState: WebSocket.OPEN, send: msg => sent.push(JSON.parse(msg).data) };
+      await handleTerminalContextMenu({ shiftKey: false, preventDefault(){}, stopPropagation(){}, stopImmediatePropagation(){} }, entry.session.id);
+      return { sent, copied };
+    })()`);
+    assert.deepStrictEqual(terminalNoSelectionRightClick, { sent: [], copied: [] }, 'right-click with no visible terminal selection must not paste or overwrite clipboard in Hermes TUI/chat');
+
+    const terminalShiftRightClickPaste = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const sent = [];
+      window.passideckDesktop = { readImage: async () => null, readText: async () => 'explicit shift paste' };
+      entry.lastSelection = '';
+      entry.term.getSelection = () => '';
+      entry.term.clearSelection = () => {};
+      document.getSelection()?.removeAllRanges?.();
+      entry.ws = { readyState: WebSocket.OPEN, send: msg => sent.push(JSON.parse(msg).data) };
+      await handleTerminalContextMenu({ shiftKey: true, preventDefault(){}, stopPropagation(){}, stopImmediatePropagation(){} }, entry.session.id);
+      return sent;
+    })()`);
+    assert.deepStrictEqual(terminalShiftRightClickPaste, ['\u001b[200~explicit shift paste\u001b[201~'], 'Shift+right-click is the explicit terminal paste fallback');
+
+    const globalSelectionCopy = await evalExpr(cdp, sid, `(async () => {
+      window.__passideckLastCopy = '';
+      window.passideckDesktop = { copyText: async text => { window.__passideckLastCopy = text; return true; } };
+      const span = document.createElement('span');
+      span.id = 'global-copy-probe';
+      span.textContent = 'selected outside terminal';
+      document.body.appendChild(span);
+      const range = document.createRange();
+      range.selectNodeContents(span);
+      const sel = document.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      await handlePassiDeckContextMenu({ target: span, preventDefault(){}, stopPropagation(){}, stopImmediatePropagation(){} });
+      const out = { copied: window.__passideckLastCopy || '', remainingSelection: document.getSelection()?.toString() || '' };
+      span.remove();
+      return out;
+    })()`);
+    assert.deepStrictEqual(globalSelectionCopy, { copied: 'selected outside terminal', remainingSelection: '' }, 'right-click must copy normal visible PassiDeck DOM selection, not only xterm selection');
+
+    const desktopPasteFallbacks = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const sent = [];
+      entry.ws = { readyState: WebSocket.OPEN, send: msg => sent.push(JSON.parse(msg).data) };
+      entry.term.focus = () => {};
+      window.passideckDesktop = {
+        readImage: async () => ({ name: 'clip.png', type: 'image/png', data: 'data:image/png;base64,QUJD' }),
+        readText: async () => ''
+      };
+      uploadBlob = async body => ({ path: '/uploads/clip.png', name: body.name, type: body.type });
+      await pasteClipboardIntoTerminalEntry(entry);
+      window.passideckDesktop.readText = async () => 'desktop clipboard text';
+      await pasteClipboardIntoTerminalEntry(entry);
+      return sent;
+    })()`);
+    assert.deepStrictEqual(desktopPasteFallbacks, ['\u001b[200~/uploads/clip.png \u001b[201~', '\u001b[200~desktop clipboard text\u001b[201~'], 'Electron right-click/Ctrl+V paste must support native image-only and text-preferred clipboard on remote HTTP app');
+
+    const terminalCtrlVPaste = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const sent = [];
+      entry.ws = { readyState: WebSocket.OPEN, send: msg => sent.push(JSON.parse(msg).data) };
+      entry.term.focus = () => {};
+      selectPanel(entry.session.id, { persist: false });
+      window.passideckDesktop = { readImage: async () => null, readText: async () => 'ctrl-v desktop clipboard text' };
+      const target = entry.el.querySelector('.xterm textarea') || entry.el.querySelector('.terminal');
+      target.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', code: 'KeyV', ctrlKey: true, bubbles: true, cancelable: true }));
+      await new Promise(r => setTimeout(r, 20));
+      return sent;
+    })()`);
+    assert.deepStrictEqual(terminalCtrlVPaste, ['\u001b[200~ctrl-v desktop clipboard text\u001b[201~'], 'Ctrl+V in Electron terminal must paste native desktop clipboard text into PTY');
+
+    const terminalDragRememberedCopy = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const copied = [];
+      window.passideckDesktop = { copyText: async text => { copied.push(text); return true; } };
+      await new Promise(resolve => entry.term.write('\\r\\ndrag-copy-remembered-text\\r\\n', resolve));
+      const termEl = entry.el.querySelector('.terminal');
+      const screen = termEl.querySelector('.xterm-screen') || termEl;
+      const r = screen.getBoundingClientRect();
+      const buffer = entry.term.buffer.active;
+      let lineRow = entry.term.rows - 2;
+      for (let i = buffer.viewportY; i < buffer.viewportY + entry.term.rows; i += 1) {
+        if (buffer.getLine(i)?.translateToString(false).includes('drag-copy-remembered-text')) { lineRow = i - buffer.viewportY; break; }
+      }
+      const y = r.top + (lineRow + 0.5) * (r.height / entry.term.rows);
+      const x1 = r.left + 1 * (r.width / entry.term.cols);
+      const x2 = r.left + 25 * (r.width / entry.term.cols);
+      termEl.dispatchEvent(new PointerEvent('pointerdown', { button: 0, buttons: 1, clientX: x1, clientY: y, bubbles: true, cancelable: true }));
+      termEl.dispatchEvent(new PointerEvent('pointermove', { button: 0, buttons: 1, clientX: x2, clientY: y, bubbles: true, cancelable: true }));
+      termEl.dispatchEvent(new PointerEvent('pointerup', { button: 0, buttons: 0, clientX: x2, clientY: y, bubbles: true, cancelable: true }));
+      await copyActiveTerminalSelection();
+      return { last: entry.lastSelection, copied: copied[0] || '' };
+    })()`);
+    assert.ok(terminalDragRememberedCopy.copied.includes('drag-copy-remembered'), `left-dragged terminal text must be remembered for Ctrl+Shift+C copy: ${JSON.stringify(terminalDragRememberedCopy)}`);
+
+    const visibleSelectionClear = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      window.__passideckLastCopy = '';
+      window.passideckDesktop = { copyText: async text => { window.__passideckLastCopy = text; return true; } };
+      entry.lastSelection = 'visible-clear-probe-text';
+      entry.term.getSelection = () => '';
+      const layer = entry.el.querySelector('.xterm-selection-layer') || entry.el.querySelector('.terminal').appendChild(document.createElement('div'));
+      layer.classList.add('xterm-selection-layer');
+      const addPaint = () => {
+        const stalePaint = document.createElement('div');
+        stalePaint.style.cssText = 'position:absolute;left:0;top:0;width:120px;height:20px;background:red;';
+        layer.appendChild(stalePaint);
+      };
+      addPaint();
+      entry.term.rows = 5;
+      entry.term.refresh = () => setTimeout(addPaint, 250);
+      const before = layer.querySelectorAll('div').length;
+      await handleTerminalContextMenu({ shiftKey: false, preventDefault(){}, stopPropagation(){}, stopImmediatePropagation(){} }, entry.session.id);
+      await new Promise(r => setTimeout(r, 700));
+      return {
+        before,
+        copied: window.__passideckLastCopy || '',
+        selected: entry.term.getSelection(),
+        documentSelection: document.getSelection()?.toString() || '',
+        paint: entry.el.querySelectorAll('.xterm-selection-layer > div, .xterm-selection').length,
+        lastSelection: entry.lastSelection || ''
+      };
+    })()`);
+    assert.deepStrictEqual(visibleSelectionClear, { before: 1, copied: 'visible-clear-probe-text', selected: '', documentSelection: '', paint: 0, lastSelection: '' }, `right-click copy must visibly demark stale TUI/xterm selection paint: ${JSON.stringify(visibleSelectionClear)}`);
+
+    const hermesTuiSelectionClear = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const sent = [];
+      window.passideckDesktop = { copyText: async () => true };
+      entry.session.meta.command = 'hermes --tui';
+      entry.ws = { readyState: WebSocket.OPEN, send: msg => sent.push(JSON.parse(msg).data) };
+      entry.lastSelection = 'hermes-visible-highlight';
+      entry.term.getSelection = () => '';
+      await handleTerminalContextMenu({ shiftKey: false, preventDefault(){}, stopPropagation(){}, stopImmediatePropagation(){} }, entry.session.id);
+      entry.session.meta.command = '/bin/bash';
+      entry.lastSelection = 'shell-highlight';
+      await handleTerminalContextMenu({ shiftKey: false, preventDefault(){}, stopPropagation(){}, stopImmediatePropagation(){} }, entry.session.id);
+      return sent;
+    })()`);
+    assert.deepStrictEqual(hermesTuiSelectionClear, ['\u001b'], 'Hermes TUI copy must send Escape once to clear app-rendered selection highlight; shell panes must not');
+
+    const fileDrop = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const sent = [];
+      entry.ws = { readyState: WebSocket.OPEN, send: msg => sent.push(JSON.parse(msg).data) };
+      entry.term.focus = () => {};
+      uploadBlob = async body => ({ path: '/uploads/dropped.txt', name: body.name, type: body.type });
+      const file = new File(['drop-body'], 'dropped.txt', { type: 'text/plain' });
+      await handlePassiDeckDrop({ dataTransfer: { files: [file] }, target: entry.el, preventDefault(){ window.__dropPrevented = true; }, stopPropagation(){}, stopImmediatePropagation(){ window.__dropStopped = true; } });
+      return { sent, prevented: Boolean(window.__dropPrevented), stopped: Boolean(window.__dropStopped) };
+    })()`);
+    assert.deepStrictEqual(fileDrop, { sent: ['\u0001/uploads/dropped.txt '], prevented: true, stopped: true }, 'dropping a file into PassiDeck must upload and paste path into active terminal');
 
     const switchDescriptions = await evalExpr(cdp, sid, `(async () => {
       const ids = [...state.sessions.keys()];
@@ -269,12 +539,12 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
         const entry = state.sessions.get(id);
         const expected = panelTitle(entry.session);
-        const actual = document.getElementById('activeSessionDescription')?.textContent || '';
+        const actual = document.querySelector('#sessionSwitcher .switcher-btn.active .switcher-title')?.textContent || '';
         if (actual !== expected) return { ok: false, id, expected, actual };
       }
       return { ok: true };
     })()`);
-    assert.deepStrictEqual(switchDescriptions, { ok: true }, 'topbar title must follow active session switches');
+    assert.deepStrictEqual(switchDescriptions, { ok: true }, 'taskbar active item must follow active session switches');
 
     const wheelScroll = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
@@ -284,12 +554,30 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const before = entry.term.buffer.active.viewportY;
       const target = entry.el.querySelector('.xterm-viewport') || entry.el.querySelector('.terminal');
       const r = target.getBoundingClientRect();
+      target.dispatchEvent(new WheelEvent('wheel', { deltaY: -4, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 }));
       target.dispatchEvent(new WheelEvent('wheel', { deltaY: -480, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 }));
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       await new Promise(resolve => entry.term.write('\\x1b[?1000l', resolve));
       return { before, after: entry.term.buffer.active.viewportY };
     })()`);
     assert.ok(wheelScroll.after < wheelScroll.before, `wheel must scroll xterm history even when app mouse mode is active: ${JSON.stringify(wheelScroll)}`);
+
+    const altScreenWheel = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      let scrollCalls = 0;
+      const oldScrollLines = entry.term.scrollLines.bind(entry.term);
+      entry.term.scrollLines = n => { scrollCalls += 1; return oldScrollLines(n); };
+      await new Promise(resolve => entry.term.write('\\x1b[?1049h\\x1b[?1000h', resolve));
+      const target = entry.el.querySelector('.xterm-viewport') || entry.el.querySelector('.terminal');
+      const r = target.getBoundingClientRect();
+      target.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 }));
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const out = { scrollCalls, baseY: entry.term.buffer.active.baseY };
+      await new Promise(resolve => entry.term.write('\\x1b[?1000l\\x1b[?1049l', resolve));
+      entry.term.scrollLines = oldScrollLines;
+      return out;
+    })()`);
+    assert.deepStrictEqual(altScreenWheel, { scrollCalls: 0, baseY: 0 }, 'Hermes TUI alternate-screen wheel must not be stolen for xterm scrollback when no scrollback exists');
 
     const minimizeProbe = await evalExpr(cdp, sid, `(() => {
       const panel = document.querySelector('.term-panel.active');

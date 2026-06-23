@@ -12,12 +12,6 @@ function authToken() {
   try { return sessionStorage.getItem(AUTH_TOKEN_KEY) || ''; } catch { return ''; }
 }
 
-function authQuery() {
-  const token = authToken();
-  return token ? `token=${encodeURIComponent(token)}` : '';
-}
-
-const LEGACY_LAYOUTS = new Set(['auto', '1x1', '2x1', '3x1', '4x1', '1x2', '1x3', '1x4']);
 const THEMES = {
   blue:   { background: '#0f1117', foreground: '#c8ccd8', cursor: '#7aa2f7', selectionBackground: '#3d5a9e' },
   green:  { background: '#0f1117', foreground: '#d5e8d0', cursor: '#9ece6a', selectionBackground: '#4c6f38' },
@@ -58,7 +52,6 @@ const state = {
   saveState: 'saved'
 };
 
-const SERVER_STATE_ONLY = true;
 const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v1:';
 const TERM_SNAPSHOT_MAX_LINES = 20000;
 const TERM_SNAPSHOT_MAX_CHARS = 1024 * 1024;
@@ -234,30 +227,6 @@ async function api(method, path, body) {
 }
 
 
-function parseLayout(layout) {
-  const m = String(layout || '').match(/^(\d+)x(\d+)$/);
-  return m ? { rows: Number(m[1]), cols: Number(m[2]) } : null;
-}
-
-function layoutSize(layout, count = visibleLayoutCount()) {
-  count = Math.max(1, Number(count) || 1);
-  const base = parseLayout(layout);
-  if (!base) {
-    const cols = Math.max(1, Math.ceil(Math.sqrt(count)));
-    const rows = Math.max(1, Math.ceil(count / cols));
-    return { rows, cols, slots: rows * cols };
-  }
-  let { rows, cols } = base;
-  if (rows > cols) cols = Math.max(cols, Math.ceil(count / rows));
-  else if (cols > rows) rows = Math.max(rows, Math.ceil(count / cols));
-  else if (count > rows * cols) {
-    cols = Math.max(cols, Math.ceil(Math.sqrt(count)));
-    rows = Math.max(rows, Math.ceil(count / cols));
-  }
-  return { rows, cols, slots: rows * cols };
-}
-
-
 function slotKey(layout = state.layout) {
   return 'desktop';
 }
@@ -300,9 +269,6 @@ function responsiveMinimizeForViewport() {
   }
 }
 
-function desktopWindowIds() {
-  return new Set(Object.keys(windowPrefs()).filter(id => state.sessions.has(id) && !state.minimized.has(id)));
-}
 
 function rectOverlap(a, b) {
   const x = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
@@ -981,15 +947,6 @@ function setFontSize(size, opts = {}) {
 }
 
 /* ── Minimize / Restore ── */
-function getVisibleCount() {
-  return state.order.filter(id => state.sessions.has(id) && !state.minimized.has(id) && !state.sessions.get(id).el.classList.contains('layout-hidden')).length;
-}
-
-function smartRestorePanel(id) {
-  restorePanel(id);
-  bringWindowToFront(id);
-}
-
 function minimizePanel(id) {
   const entry = state.sessions.get(id);
   if (!entry) return;
@@ -1016,18 +973,7 @@ function restorePanel(id) {
 }
 
 function updateMinimizedBar() {
-  const bar = document.getElementById('minimizedBar');
-  const tabs = document.getElementById('minimizedTabs');
-  if (!bar || !tabs) return;
-
-  if (state.minimized.size === 0) {
-    bar.hidden = true;
-    tabs.innerHTML = '';
-    renderSwitcher();
-    return;
-  }
-  bar.hidden = true;
-  tabs.innerHTML = '';
+  // ponytail: minimized panes already live in the top switcher; no second bar.
   renderSwitcher();
 }
 
@@ -1258,19 +1204,38 @@ function installTerminalTouchScroll(termEl, term) {
   }, { passive: false });
 }
 
-function installTerminalWheelScroll(termEl, term) {
+function installTerminalWheelScroll(termEl, term, session = null) {
+  let wheelRemainder = 0;
   term.attachCustomWheelEventHandler?.(e => {
     if (e.ctrlKey) return true;
     const buffer = term.buffer?.active;
     if (!buffer || buffer.baseY <= 0) return true;
-    // ponytail: xterm already has wheel plumbing; force scrollback before CLI mouse mode eats it.
+    const command = String(session?.meta?.command || session?.meta?.label || '').toLowerCase();
+    const forceScrollback = /\bhermes\b/.test(command);
+    // ponytail: only steal wheel when xterm has scrollback; alternate-screen TUIs need their own wheel.
     const unit = e.deltaMode === 1 ? 1 : e.deltaMode === 2 ? term.rows : 1 / Math.max(8, state.fontSize * 1.2);
-    const lines = Math.trunc(e.deltaY * unit);
-    if (!lines) return true;
+    wheelRemainder += e.deltaY * unit;
+    const lines = Math.trunc(wheelRemainder);
+    if (!lines) return !forceScrollback;
+    wheelRemainder -= lines;
     term.scrollLines(lines);
     e.preventDefault();
     return false;
   });
+  termEl.addEventListener('wheel', e => {
+    const command = String(session?.meta?.command || session?.meta?.label || '').toLowerCase();
+    if (!/\bhermes\b/.test(command) || e.ctrlKey) return;
+    const buffer = term.buffer?.active;
+    if (!buffer || buffer.baseY <= 0) return;
+    const unit = e.deltaMode === 1 ? 1 : e.deltaMode === 2 ? term.rows : 1 / Math.max(8, state.fontSize * 1.2);
+    wheelRemainder += e.deltaY * unit;
+    const lines = Math.trunc(wheelRemainder);
+    if (!lines) return;
+    wheelRemainder -= lines;
+    term.scrollLines(lines);
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }, { capture: true, passive: false });
 }
 
 function updateEmpty() {
@@ -1467,44 +1432,155 @@ function sessionDescription(session) {
 function panelTitle(session) {
   const entry = state.sessions.get(session.id);
   const custom = state.panePrefs.titles?.[session.id];
-  if (custom) return custom;
+  if (custom && !isPlaceholderTitle(custom)) return custom;
   const generated = entry?.autoTitle || session?.meta?.title || session?.title;
   if (generated) return generated;
   if (entry?.autoTitle) return entry.autoTitle;
   return 'No title';
 }
 
-function terminalViewportLines(term) {
+function isPlaceholderTitle(title) {
+  return /^(?:no title|title|titel)$/i.test(String(title || '').trim());
+}
+
+function generatedTitleFromSession(session) {
+  const entry = state.sessions.get(session.id);
+  return String(entry?.autoTitle || session?.meta?.title || session?.title || '').trim();
+}
+
+function visibleTopbarDescription(session) {
+  if (!session) return 'No session';
+  return sessionDescription(session) || panelTitle(session);
+}
+
+function terminalLineText(row) {
+  return typeof row === 'string' ? row : String(row?.text || '');
+}
+
+function terminalLineIsSelected(row) {
+  return Boolean(row && typeof row === 'object' && row.selected);
+}
+
+function terminalViewportRows(term) {
   const buffer = term?.buffer?.active;
   if (!buffer) return [];
   const start = Math.max(0, buffer.viewportY || 0);
   const end = Math.min(buffer.length || 0, start + Math.max(1, term.rows || 30));
-  const lines = [];
+  const rows = [];
   for (let i = start; i < end; i += 1) {
     const line = buffer.getLine(i);
-    if (line) lines.push(line.translateToString(false));
+    if (!line) continue;
+    let selectedCells = 0;
+    let bgCells = 0;
+    const width = Math.min(line.length || term.cols || 120, term.cols || 120);
+    for (let x = 0; x < width; x += 1) {
+      const cell = line.getCell?.(x);
+      if (!cell) continue;
+      const chars = cell.getChars?.() || '';
+      if (!chars.trim()) continue;
+      if (cell.isInverse?.()) selectedCells += 1;
+      const bgMode = cell.getBgColorMode?.() || 0;
+      const bg = cell.getBgColor?.() || 0;
+      if (bgMode || bg > 0) bgCells += 1;
+    }
+    rows.push({ text: line.translateToString(false), selected: selectedCells >= 2 || bgCells >= 2 });
   }
-  return lines;
+  return rows;
 }
 
-function inferHermesSessionTitle(lines) {
-  const visible = Array.isArray(lines) ? lines : [];
-  if (!visible.some(line => /\bSessions\b/.test(line))) return '';
-  for (const raw of visible) {
-    const clean = String(raw || '').replace(/[│┃┆┊┌┐└┘├┤┬┴─═╭╮╰╯]/g, ' ').trim();
-    if (!/(?:^|\s)(?:[▶>▸]\s*)?\d+\./.test(clean)) continue;
-    const parts = clean.split(/\s{2,}/).map(s => s.trim()).filter(Boolean);
-    let candidate = parts[parts.length - 1] || '';
-    candidate = candidate.replace(/^Start new live session$/i, '').replace(/\s+/g, ' ').trim();
-    if (candidate && candidate.length <= 160 && !/^(new|draft|current\/default|\d+\s+msgs?|✓?\s*idle)$/i.test(candidate)) return candidate;
+function cleanHermesSessionLine(row) {
+  return terminalLineText(row).replace(/[│┃┆┊┌┐└┘├┤┬┴─═╭╮╰╯╔╗╚╝╠╣╦╩╬║╒╕╘╛╞╡╤╧╪]/g, ' ').trim();
+}
+
+function extractHermesSessionTitleCandidate(rowText) {
+  const text = String(rowText || '').trim();
+  const modelMatch = text.match(/\b(?:gpt|claude|gemini|codex|qwen|deepseek|openrouter|anthropic)[\w.\/-]*\s+(.+)$/i);
+  const parts = text.split(/\s{2,}/).map(s => s.trim()).filter(Boolean);
+  let candidate = parts[parts.length - 1] || '';
+  if ((!candidate || parts.length < 4) && modelMatch) candidate = modelMatch[1];
+  candidate = candidate.replace(/^Start (?:a )?new live session$/i, '').replace(/\s+/g, ' ').trim();
+  if (!candidate || candidate.length > 160) return '';
+  if (!/[\p{L}\p{N}]/u.test(candidate)) return '';
+  if (/^(?:new|draft|current\/default|\d+\s+msgs?|✓?\s*idle|\(untitled\)|untitled)$/i.test(candidate)) return '';
+  return candidate;
+}
+
+function inferHermesVisibleTitle(rowsOrLines) {
+  for (const raw of Array.isArray(rowsOrLines) ? rowsOrLines : []) {
+    const clean = cleanHermesSessionLine(raw).replace(/\s+/g, ' ').trim();
+    const m = clean.match(/\b(?:session\s+title|title|loaded\s+session)\s*[:=]\s*(.+)$/i);
+    const candidate = m ? extractHermesSessionTitleCandidate(m[1]) || m[1].trim() : '';
+    if (candidate && !isPlaceholderTitle(candidate)) return candidate.slice(0, 160);
   }
   return '';
+}
+
+function hermesSessionRowFromCleanLine(clean) {
+  const numbered = clean.match(/(?:^|\s)(?:[▶>▸]\s*)?\d+\.\s+(.*)$/);
+  if (numbered) return numbered[1].trim();
+  const current = clean.match(/(?:^|\s)(?:[▶>▸]\s*)?(current\b.*)$/i);
+  if (current) return current[1].trim();
+  return '';
+}
+
+function inferHermesSessionTitle(rowsOrLines) {
+  const visible = Array.isArray(rowsOrLines) ? rowsOrLines : [];
+  const hasSessionsHeader = visible.some(row => /\bSessions\b/.test(terminalLineText(row)));
+  const rows = [];
+  let selectedMarkerSeen = false;
+  for (const raw of visible) {
+    const clean = cleanHermesSessionLine(raw);
+    const markedSelected = /(?:^|\s)[▶>▸]\s*(?:\d+\.|\+|current\b)/i.test(clean) || terminalLineIsSelected(raw);
+    if (markedSelected) selectedMarkerSeen = true;
+    const row = hermesSessionRowFromCleanLine(clean);
+    if (!row) continue;
+    rows.push({ selected: markedSelected, row });
+  }
+  if (!hasSessionsHeader && !rows.some(row => /\bcurrent\b.*\b(?:gpt|claude|gemini|codex|qwen|deepseek)\b/i.test(row.row))) return '';
+  const candidates = selectedMarkerSeen ? rows.filter(row => row.selected) : rows;
+  const currentRows = candidates.filter(row => /\bcurrent\b/i.test(row.row));
+  if (!selectedMarkerSeen && currentRows.length === 1) candidates.splice(0, candidates.length, currentRows[0]);
+  for (const item of candidates) {
+    const candidate = extractHermesSessionTitleCandidate(item.row);
+    if (candidate) return candidate;
+  }
+  return '';
+}
+
+function selectedHermesSessionTitleIsEmpty(rowsOrLines) {
+  const visible = Array.isArray(rowsOrLines) ? rowsOrLines : [];
+  if (!visible.some(row => /\bSessions\b/.test(terminalLineText(row)))) return false;
+  if (visible.some(row => /\bprompt\s*›|New row: type prompt/i.test(terminalLineText(row)))) return true;
+  for (const raw of visible) {
+    const clean = cleanHermesSessionLine(raw);
+    const selected = terminalLineIsSelected(raw) || /(?:^|\s)[▶>▸]/.test(clean);
+    if (!selected) continue;
+    if (/\+\s+new\b/i.test(clean)) return true;
+    const row = hermesSessionRowFromCleanLine(clean);
+    if (!row) continue;
+    return !extractHermesSessionTitleCandidate(row);
+  }
+  return false;
+}
+
+function clearGeneratedTitle(id) {
+  const entry = state.sessions.get(id);
+  if (!entry || state.panePrefs.titles?.[id] && !isPlaceholderTitle(state.panePrefs.titles[id])) return false;
+  delete entry.autoTitle;
+  delete entry.session.title;
+  if (entry.session.meta) delete entry.session.meta.title;
+  entry.titleSource = '';
+  const titleEl = entry.el.querySelector('.term-title');
+  if (titleEl && document.activeElement !== titleEl) titleEl.textContent = panelTitle(entry.session);
+  renderSwitcher();
+  updateMinimizedBar();
+  return true;
 }
 
 function applyGeneratedTitle(id, title, opts = {}) {
   const entry = state.sessions.get(id);
   const clean = String(title || '').trim();
-  if (!entry || !clean || state.panePrefs.titles?.[id]) return false;
+  if (!entry || !clean || state.panePrefs.titles?.[id] && !isPlaceholderTitle(state.panePrefs.titles[id])) return false;
   const source = opts.source || 'terminal';
   if (entry.titleSource === 'hermes-session' && source !== 'hermes-session') return false;
   entry.autoTitle = clean;
@@ -1517,10 +1593,21 @@ function applyGeneratedTitle(id, title, opts = {}) {
   return true;
 }
 
+function titleFromOsc(data) {
+  const text = String(data || '');
+  const matches = [...text.matchAll(/\x1b\](?:0|1|2);([^\x07\x1b]*)(?:\x07|\x1b\\)/g)];
+  const title = matches.at(-1)?.[1]?.replace(/\s+/g, ' ').trim() || '';
+  if (!title || isPlaceholderTitle(title)) return '';
+  if (/^(?:bash|zsh|fish|sh|pwsh|powershell|cmd|\/bin\/(?:bash|zsh|sh))$/i.test(title)) return '';
+  return title.slice(0, 160);
+}
+
 function refreshTitleFromTerminal(id) {
   const entry = state.sessions.get(id);
-  const inferred = inferHermesSessionTitle(terminalViewportLines(entry?.term));
+  const rows = terminalViewportRows(entry?.term);
+  const inferred = inferHermesVisibleTitle(rows) || inferHermesSessionTitle(rows);
   if (inferred) applyGeneratedTitle(id, inferred, { source: 'hermes-session' });
+  else if (selectedHermesSessionTitleIsEmpty(rows)) clearGeneratedTitle(id);
 }
 
 function endPointerDrag(event) {
@@ -1791,7 +1878,7 @@ function createPanel(session, opts = {}) {
   });
   titleEl.addEventListener('blur', () => {
     const next = titleEl.textContent.trim();
-    if (next && next !== defaultTitle(session)) state.panePrefs.titles[id] = next;
+    if (next && next !== defaultTitle(session) && next !== generatedTitleFromSession(session) && !isPlaceholderTitle(next)) state.panePrefs.titles[id] = next;
     else delete state.panePrefs.titles[id];
     titleEl.textContent = panelTitle(session);
     savePanePrefs();
@@ -1843,9 +1930,10 @@ function createPanel(session, opts = {}) {
     const selected = term.getSelection?.() || '';
     if (entry && selected) entry.lastSelection = selected;
   });
-  termEl.addEventListener('contextmenu', e => handleTerminalContextMenu(e, id));
+  installTerminalRightClickGuards(termEl, id);
+  installTerminalDragSelectionMemory(termEl, id);
   installTerminalTouchScroll(termEl, term);
-  installTerminalWheelScroll(termEl, term);
+  installTerminalWheelScroll(termEl, term, session);
 
   // Auto-detect terminal title (vim, Codex, Hermes TUI, etc.)
   term.onTitleChange(title => {
@@ -1874,6 +1962,7 @@ function createPanel(session, opts = {}) {
 
   const hasSnapshot = hasTerminalSnapshot(id);
   state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, restored: hasSnapshot, snapshotTimer: null, lastSelection: '', titleSource: '', lastSentCols: 0, lastSentRows: 0 });
+  term.onWriteParsed?.(() => refreshTitleFromTerminal(id));
   if (state.minimized.has(id)) el.classList.add('minimized');
   const replaceId = opts.replaceId;
   const replaceIndex = replaceId ? state.order.indexOf(replaceId) : -1;
@@ -1970,6 +2059,8 @@ function attachSocket(id, term, el) {
     let msg;
     try { msg = JSON.parse(event.data); } catch { return; }
     const entry = state.sessions.get(id);
+    const oscTitle = titleFromOsc(msg.data);
+    if (oscTitle) applyGeneratedTitle(id, oscTitle, { source: 'terminal' });
     if (msg.type === 'replay') {
       // The server intentionally does not replay PTY history anymore. Do not print its
       // reconnect marker into the terminal: that visibly changes shell contents on every
@@ -2008,12 +2099,39 @@ function reconnect(id) {
 
 function renderSwitcher() {
   state.order = state.order.filter(id => state.sessions.has(id));
-  const root = document.getElementById('activeSessionDescription');
-  if (!root) return;
+  const desc = document.getElementById('activeSessionDescription');
   const entry = state.activeId ? state.sessions.get(state.activeId) : null;
-  const text = entry ? panelTitle(entry.session) : 'No session';
-  root.textContent = text;
-  setTooltip(root, text);
+  const text = entry ? visibleTopbarDescription(entry.session) : 'No session';
+  if (desc) {
+    desc.textContent = text;
+    setTooltip(desc, text);
+  }
+  const switcher = document.getElementById('sessionSwitcher');
+  if (!switcher) return;
+  switcher.replaceChildren();
+  for (const id of state.order) {
+    const item = state.sessions.get(id);
+    if (!item) continue;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'switcher-btn';
+    if (id === state.activeId) btn.classList.add('active');
+    if (state.minimized.has(id)) btn.classList.add('minimized');
+    if (id === state.activeId && state.minimized.has(id)) btn.classList.add('active-minimized');
+    if (item.session.exited) btn.classList.add('exited');
+    const title = panelTitle(item.session);
+    btn.dataset.switcherPaneId = id;
+    btn.title = state.minimized.has(id) ? `Restore ${title}` : id === state.activeId ? `Minimize ${title}` : `Focus ${title}`;
+    btn.innerHTML = `<span class="switcher-title"></span><span class="switcher-close" role="button" aria-label="Close">×</span>`;
+    btn.querySelector('.switcher-title').textContent = title;
+    btn.querySelector('.switcher-close').onclick = e => { e.preventDefault(); e.stopPropagation(); requestClosePanel(id); };
+    btn.onclick = () => {
+      if (state.minimized.has(id)) restorePanel(id);
+      else if (id === state.activeId) minimizePanel(id);
+      else selectPanel(id);
+    };
+    switcher.appendChild(btn);
+  }
 }
 
 function selectPanel(id, opts = {}) {
@@ -2104,6 +2222,18 @@ function pasteIntoTerminalEntry(entry, text) {
   return true;
 }
 
+function isHermesTerminalEntry(entry) {
+  const meta = entry?.session?.meta || {};
+  return /\bhermes\b/i.test(String(meta.command || meta.label || ''));
+}
+
+function clearHermesTuiSelection(entry) {
+  if (!isHermesTerminalEntry(entry)) return false;
+  // ponytail: in hermes --tui mouse mode the visible highlight can be TUI state,
+  // not xterm selection paint. Escape tells the TUI to leave/cancel selection mode.
+  return pasteIntoTerminalEntry(entry, '\x1b');
+}
+
 function bracketedPastePayload(text) {
   return `\x1b[200~${String(text || '').replace(/\x1b/g, '')}\x1b[201~`;
 }
@@ -2152,26 +2282,192 @@ function activeDocumentSelectionText() {
   return text;
 }
 
+function terminalDocumentSelectionText(scope) {
+  const selection = document.getSelection?.();
+  const text = selection?.toString?.() || '';
+  if (!text.trim()) return '';
+  const root = scope?.querySelector?.('.terminal, .xterm') || scope;
+  const anchor = selection.anchorNode?.nodeType === Node.ELEMENT_NODE ? selection.anchorNode : selection.anchorNode?.parentElement;
+  const focus = selection.focusNode?.nodeType === Node.ELEMENT_NODE ? selection.focusNode : selection.focusNode?.parentElement;
+  return root?.contains?.(anchor) || root?.contains?.(focus) ? text : '';
+}
+
+function rememberTerminalContextSelection(e, id) {
+  if (e.button !== 2) return;
+  const entry = state.sessions.get(id);
+  const selected = entry?.term?.getSelection?.() || terminalDocumentSelectionText(entry?.el);
+  if (entry && selected) entry.lastSelection = selected;
+}
+
+function stopTerminalRightClickEvent(e) {
+  e.preventDefault?.();
+  e.stopPropagation?.();
+  e.stopImmediatePropagation?.();
+}
+
+function installTerminalRightClickGuards(termEl, id) {
+  const swallow = e => {
+    if (e.button !== 2) return;
+    stopTerminalRightClickEvent(e);
+  };
+  const copyOrExplicitPaste = e => {
+    if (e.button !== 2) return;
+    rememberTerminalContextSelection(e, id);
+    stopTerminalRightClickEvent(e);
+    handleTerminalContextMenu(e, id).catch(err => console.warn('terminal right-click failed', err));
+  };
+  termEl.addEventListener('pointerdown', copyOrExplicitPaste, true);
+  termEl.addEventListener('mousedown', swallow, true);
+  termEl.addEventListener('mouseup', swallow, true);
+  termEl.addEventListener('auxclick', swallow, true);
+  termEl.addEventListener('contextmenu', swallow, true);
+}
+
+function installTerminalDragSelectionMemory(termEl, id) {
+  let drag = null;
+  const point = e => ({ x: e.clientX, y: e.clientY });
+  termEl.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    drag = { start: point(e), end: point(e) };
+  }, true);
+  termEl.addEventListener('pointermove', e => {
+    if (!drag || (e.buttons & 1) !== 1) return;
+    drag.end = point(e);
+  }, true);
+  const finish = e => {
+    if (!drag) return;
+    drag.end = point(e);
+    const d = Math.hypot(drag.end.x - drag.start.x, drag.end.y - drag.start.y);
+    if (d >= 6) {
+      const entry = state.sessions.get(id);
+      const text = terminalTextBetweenPoints(entry, termEl, drag.start, drag.end);
+      if (text.trim()) entry.lastSelection = text;
+    }
+    drag = null;
+  };
+  termEl.addEventListener('pointerup', finish, true);
+  termEl.addEventListener('pointercancel', () => { drag = null; }, true);
+}
+
+function terminalTextBetweenPoints(entry, termEl, a, b) {
+  const term = entry?.term;
+  const buffer = term?.buffer?.active;
+  const screen = termEl.querySelector?.('.xterm-screen') || termEl.querySelector?.('.xterm-rows') || termEl;
+  const r = screen.getBoundingClientRect?.();
+  if (!term || !buffer || !r?.width || !r?.height) return '';
+  const cols = Math.max(1, term.cols || 1);
+  const rows = Math.max(1, term.rows || 1);
+  const cellW = r.width / cols;
+  const cellH = r.height / rows;
+  const toCell = p => ({
+    col: Math.max(0, Math.min(cols - 1, Math.floor((p.x - r.left) / cellW))),
+    row: Math.max(0, Math.min(rows - 1, Math.floor((p.y - r.top) / cellH)))
+  });
+  const start = toCell(a);
+  const end = toCell(b);
+  const first = start.row < end.row || (start.row === end.row && start.col <= end.col) ? start : end;
+  const last = first === start ? end : start;
+  const out = [];
+  for (let row = first.row; row <= last.row; row += 1) {
+    const line = buffer.getLine((buffer.viewportY || 0) + row);
+    if (!line) continue;
+    const text = line.translateToString(false);
+    const from = row === first.row ? first.col : 0;
+    const to = row === last.row ? last.col + 1 : cols;
+    out.push(text.slice(from, to).replace(/\s+$/g, ''));
+  }
+  return out.join('\n').trim();
+}
+
+function terminalPanelForEvent(e) {
+  const path = e.composedPath?.() || [];
+  for (const node of path) {
+    if (node?.dataset?.paneId && node?.classList?.contains('term-panel')) return node;
+    if (node?.closest) {
+      const panel = node.closest('.term-panel');
+      if (panel?.dataset?.paneId && node.closest('.terminal, .xterm')) return panel;
+    }
+  }
+  const target = e.target?.nodeType === Node.ELEMENT_NODE ? e.target : e.target?.parentElement;
+  if (!target?.closest?.('.terminal, .xterm')) return null;
+  return target.closest('.term-panel');
+}
+
+function handleDocumentTerminalRightClickGuard(e) {
+  if (e.button !== 2) return;
+  const panel = terminalPanelForEvent(e);
+  const id = panel?.dataset?.paneId;
+  if (!id) return;
+  const entry = state.sessions.get(id);
+  stopTerminalRightClickEvent(e);
+  selectPanel(id, { persist: false });
+  if (e.type === 'pointerdown') {
+    rememberTerminalContextSelection(e, id);
+    if (entry) entry.lastRightClickAt = Date.now();
+    handleTerminalContextMenu(e, id).catch(err => console.warn('terminal right-click failed', err));
+  }
+}
+
 function clearDocumentSelection() {
   document.getSelection?.().removeAllRanges?.();
 }
 
+function clearTerminalSelectionPaint(entry) {
+  entry?.el?.querySelectorAll?.('.xterm-selection-layer > div, .xterm-selection')?.forEach(el => el.remove());
+}
+
+function clearTerminalSelectionVisual(entry) {
+  clearTerminalSelectionPaint(entry);
+  clearDocumentSelection();
+}
+
+function forceClearTerminalSelection(entry) {
+  entry?.term?.clearSelection?.();
+  entry?.term?._core?.selectionService?.clearSelection?.();
+  clearTerminalSelectionVisual(entry);
+  if (entry) entry.lastSelection = '';
+}
+
+function scheduleTerminalSelectionClear(entry) {
+  // ponytail: right-click mouseup/contextmenu can make xterm repaint TUI selection after the copy handler.
+  [0, 16, 80, 200, 500, 1000].forEach(ms => setTimeout(() => forceClearTerminalSelection(entry), ms));
+}
+
+function clearTerminalSelectionForEntry(entry) {
+  forceClearTerminalSelection(entry);
+  if (entry?.term?.refresh && Number.isFinite(entry.term.rows)) entry.term.refresh(0, Math.max(0, entry.term.rows - 1));
+  scheduleTerminalSelectionClear(entry);
+}
+
 function activeTerminalSelectionText() {
   const entry = activeTerminalEntry();
-  return entry?.term?.getSelection?.() || entry?.lastSelection || '';
+  return terminalSelectionTextForEntry(entry) || anyTerminalSelectionText();
+}
+
+function terminalSelectionTextForEntry(entry) {
+  return entry?.term?.getSelection?.() || terminalDocumentSelectionText(entry?.el) || entry?.lastSelection || '';
+}
+
+function anyTerminalSelectionText() {
+  for (const entry of state.sessions.values()) {
+    const selected = terminalSelectionTextForEntry(entry);
+    if (selected) return selected;
+  }
+  return '';
 }
 
 function clearActiveTerminalSelection() {
   const entry = activeTerminalEntry();
-  entry?.term?.clearSelection?.();
-  if (entry) entry.lastSelection = '';
+  clearTerminalSelectionForEntry(entry);
 }
 
 async function copyActiveTerminalSelection() {
   const selected = activeTerminalSelectionText();
   if (!selected) return false;
+  const entry = activeTerminalEntry();
   await copyTextToClipboard(selected);
-  clearActiveTerminalSelection();
+  clearTerminalSelectionForEntry(entry);
+  clearHermesTuiSelection(entry);
   return true;
 }
 window.__passideckGetSelection = activeTerminalSelectionText;
@@ -2185,12 +2481,14 @@ async function readTextFromClipboard() {
 }
 
 async function pasteClipboardIntoTerminalEntry(entry) {
+  const text = await readTextFromClipboard();
+  if (text) return insertIntoTerminalEntry(entry, text);
   const imageFile = await readImageFileFromSystemClipboard();
   if (imageFile) {
     const upload = await uploadFile(imageFile, { keepBusy: true });
     return upload ? insertIntoTerminalEntry(entry, `${upload.path} `) : false;
   }
-  return insertIntoTerminalEntry(entry, await readTextFromClipboard());
+  return false;
 }
 
 async function handleTerminalContextMenu(e, id) {
@@ -2198,17 +2496,18 @@ async function handleTerminalContextMenu(e, id) {
   e.stopPropagation();
   selectPanel(id, { persist: false });
   const entry = state.sessions.get(id);
-  const selected = entry?.term?.getSelection?.() || entry?.lastSelection || '';
+  const selected = entry?.term?.getSelection?.() || terminalDocumentSelectionText(entry?.el) || entry?.lastSelection || '';
   if (selected) {
     try {
       await copyTextToClipboard(selected);
-      entry.term.clearSelection?.();
-      entry.lastSelection = '';
+      clearTerminalSelectionForEntry(entry);
+      clearHermesTuiSelection(entry);
     } catch (err) {
       console.warn('terminal right-click copy failed', err);
     }
     return;
   }
+  if (!e.shiftKey) return;
   try {
     await pasteClipboardIntoTerminalEntry(entry);
   } catch (err) {
@@ -2232,6 +2531,7 @@ async function handlePassiDeckContextMenu(e) {
     clearDocumentSelection();
     return;
   }
+  if (!e.shiftKey) return;
   if (shouldLetBrowserHandlePaste(target)) return;
   e.preventDefault();
   e.stopPropagation();
@@ -2362,10 +2662,26 @@ function letBrowserOwnTerminalPasteShortcut(e) {
 
 function handleTerminalCopyShortcut(e) {
   const key = String(e.key || '').toLowerCase();
-  if (key !== 'c' || !(e.ctrlKey || e.metaKey) || !e.shiftKey || e.altKey) return;
+  if (key !== 'c' || !(e.ctrlKey || e.metaKey) || e.altKey) return;
+  if (!e.shiftKey && !anyTerminalSelectionText()) return;
   e.preventDefault();
   e.stopImmediatePropagation();
   copyActiveTerminalSelection().catch(err => console.warn('terminal shortcut copy failed', err));
+}
+
+function rememberDocumentTerminalSelection() {
+  const selection = document.getSelection?.();
+  const text = selection?.toString?.() || '';
+  if (!text.trim()) return;
+  const anchor = selection.anchorNode?.nodeType === Node.ELEMENT_NODE ? selection.anchorNode : selection.anchorNode?.parentElement;
+  const focus = selection.focusNode?.nodeType === Node.ELEMENT_NODE ? selection.focusNode : selection.focusNode?.parentElement;
+  for (const entry of state.sessions.values()) {
+    const root = entry?.el?.querySelector?.('.terminal, .xterm');
+    if (root?.contains?.(anchor) || root?.contains?.(focus)) {
+      entry.lastSelection = text;
+      return;
+    }
+  }
 }
 
 function armClipboardPasteMode() {
@@ -2492,9 +2808,8 @@ async function init() {
   sessions.forEach(createPanel);
   restorePanelOrder();
 
-  const base = ui?.baseLayout || ui?.layout || 'auto';
-  state.layout = LEGACY_LAYOUTS.has(base) ? base : 'auto';
-  setLayout(state.layout, { persist: false });
+  state.layout = 'auto';
+  setLayout('auto', { persist: false });
 
   state.minimized = new Set((state.panePrefs.minimized || []).filter(id => state.sessions.has(id)));
   state.minimized.forEach(id => state.sessions.get(id)?.el.classList.add('minimized'));
@@ -2626,12 +2941,18 @@ document.getElementById('closeModal').addEventListener('click', e => {
 });
 
 document.addEventListener('paste', handleTerminalPaste, true);
+document.addEventListener('pointerdown', handleDocumentTerminalRightClickGuard, true);
+document.addEventListener('mousedown', handleDocumentTerminalRightClickGuard, true);
+document.addEventListener('mouseup', handleDocumentTerminalRightClickGuard, true);
+document.addEventListener('auxclick', handleDocumentTerminalRightClickGuard, true);
+document.addEventListener('contextmenu', handleDocumentTerminalRightClickGuard, true);
 document.addEventListener('contextmenu', handlePassiDeckContextMenu, true);
 document.addEventListener('dragover', handlePassiDeckDragOver, true);
 document.addEventListener('drop', handlePassiDeckDrop, true);
 document.addEventListener('keydown', handleCloseModalKeydown, true);
 document.addEventListener('keydown', letBrowserOwnTerminalPasteShortcut, true);
 document.addEventListener('keydown', handleTerminalCopyShortcut, true);
+document.addEventListener('selectionchange', rememberDocumentTerminalSelection);
 window.addEventListener('resize', () => { scaleWindowPrefsToViewport(); responsiveMinimizeForViewport(); applyLayoutVisibility(); savePanePrefs(); scheduleTerminalFit(); });
 window.addEventListener('beforeunload', () => { savePanePrefs(); flushUiState(); saveAllTerminalSnapshots(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveAllTerminalSnapshots(); });

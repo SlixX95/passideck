@@ -22,7 +22,7 @@
       </div>
 
       <div class="command-zone command-center" aria-label="Window switcher">
-        <div class="active-session-desc" id="activeSessionDescription">No session</div>
+        <nav class="switcher-grid" id="sessionSwitcher" aria-label="Open and minimized windows"></nav>
       </div>
 
       <div class="command-zone command-right">
@@ -98,10 +98,6 @@
   </main>
   <div id="hiddenPanes" style="display:none"></div>
 
-  <section class="minimized-bar" id="minimizedBar" hidden>
-    <div class="minimized-tabs" id="minimizedTabs"></div>
-  </section>
-
   <div id="closeModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="closeModalTitle" hidden>
     <div class="modal-box">
       <h3 id="closeModalTitle" class="modal-title"></h3>
@@ -118,6 +114,6 @@
   <script src="vendor/addon-web-links.js"></script>
   <script src="vendor/addon-serialize.js"></script>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="app.js?v=20260623-global-clipboard-drop" defer></script>
+  <script src="app.js?v=20260623-taskbar-scroll-title-fix" defer></script>
 </body>
 </html>
