@@ -12,17 +12,17 @@
   <header class="topbar">
     <div class="command-strip">
       <div class="command-zone command-left">
-        <span class="status-chip"><span class="dot"></span><span id="stat-active">0</span> Fenster · <span id="saveState">saved</span></span>
-        <nav class="launch-strip" aria-label="Schnellstart">
-          <button class="topbar-ql-btn" data-command="/bin/bash" data-tooltip="Shell öffnen" aria-label="Shell öffnen">+ shell</button>
-          <button class="topbar-ql-btn" data-command="hermes" data-tooltip="Hermes CLI öffnen" aria-label="Hermes CLI öffnen">+ hermes</button>
-          <button class="topbar-ql-btn" data-command="hermes --tui" data-tooltip="Hermes TUI öffnen" aria-label="Hermes TUI öffnen">+ tui</button>
-          <button class="topbar-ql-btn" data-command="codex" data-tooltip="Codex CLI öffnen" aria-label="Codex CLI öffnen">+ codex</button>
+        <span class="status-chip"><span class="dot"></span><span id="stat-active">0</span> windows · <span id="saveState">saved</span></span>
+        <nav class="launch-strip" aria-label="Quick launch">
+          <button class="topbar-ql-btn" data-command="/bin/bash" data-tooltip="Open shell" aria-label="Open shell">+ shell</button>
+          <button class="topbar-ql-btn" data-command="hermes" data-tooltip="Open Hermes CLI" aria-label="Open Hermes CLI">+ hermes</button>
+          <button class="topbar-ql-btn" data-command="hermes --tui" data-tooltip="Open Hermes TUI" aria-label="Open Hermes TUI">+ tui</button>
+          <button class="topbar-ql-btn" data-command="codex" data-tooltip="Open Codex CLI" aria-label="Open Codex CLI">+ codex</button>
         </nav>
       </div>
 
-      <div class="command-zone command-center" aria-label="Fensterauswahl">
-        <div class="active-session-desc" id="activeSessionDescription">Keine Session</div>
+      <div class="command-zone command-center" aria-label="Window switcher">
+        <div class="active-session-desc" id="activeSessionDescription">No session</div>
       </div>
 
       <div class="command-zone command-right">
@@ -40,9 +40,9 @@
         </section>
         <span class="command-divider"></span>
         <button id="settingsToggle" class="chrome-btn" data-tooltip="Settings" aria-label="Settings" aria-expanded="false">⚙ settings</button>
-        <button id="uploadFileBtn" class="chrome-btn" data-tooltip="Datei hochladen · Pfad in aktive Shell einfügen" aria-label="Datei hochladen">⇧ upload</button>
-        <button id="clipboardImageBtn" class="chrome-btn" data-tooltip="Clipboard-Bild hochladen · Pfad in aktive Shell einfügen" aria-label="Clipboard-Bild hochladen">▧ clip img</button>
-        <button id="chromeToggle" class="chrome-btn" data-tooltip="UI ausblenden · Alt+0" aria-label="UI ausblenden">hide</button>
+        <button id="uploadFileBtn" class="chrome-btn" data-tooltip="Upload file · insert path into active shell" aria-label="Upload file">⇧ upload</button>
+        <button id="clipboardImageBtn" class="chrome-btn" data-tooltip="Upload clipboard image · insert path into active shell" aria-label="Upload clipboard image">▧ clip img</button>
+        <button id="chromeToggle" class="chrome-btn" data-tooltip="Hide UI · Alt+0" aria-label="Hide UI">hide</button>
         <input id="fileInput" type="file" hidden>
       </div>
     </div>
@@ -86,8 +86,8 @@
         <rect x="4" y="26" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/>
         <rect x="26" y="26" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/>
       </svg>
-      <h2>Keine Fenster offen.</h2>
-      <p>Shell, Hermes TUI oder Codex öffnen.</p>
+      <h2>No windows open.</h2>
+      <p>Open Shell, Hermes TUI, or Codex.</p>
       <div class="quick-launch-group">
         <button class="quick-launch-btn" data-command="/bin/bash"><span class="ql-cmd">shell</span><span class="ql-desc">Open a shell</span></button>
         <button class="quick-launch-btn" data-command="hermes"><span class="ql-cmd">hermes</span><span class="ql-desc">Open Hermes CLI</span></button>
@@ -105,10 +105,10 @@
   <div id="closeModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="closeModalTitle" hidden>
     <div class="modal-box">
       <h3 id="closeModalTitle" class="modal-title"></h3>
-      <p class="modal-text">Prozess wird beendet.</p>
+      <p class="modal-text">Process will be terminated.</p>
       <div class="modal-actions">
-        <button id="closeModalCancel" class="modal-btn modal-btn-cancel">Abbrechen</button>
-        <button id="closeModalConfirm" class="modal-btn modal-btn-confirm">Schließen</button>
+        <button id="closeModalCancel" class="modal-btn modal-btn-cancel">Cancel</button>
+        <button id="closeModalConfirm" class="modal-btn modal-btn-confirm">Close</button>
       </div>
     </div>
   </div>

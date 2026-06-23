@@ -208,7 +208,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       activeTitle: document.getElementById('activeSessionDescription')?.textContent || ''
     }))()`);
     assert.strictEqual(counts.panels, 11, 'all panels should render');
-    assert.strictEqual(counts.activeTitle, 'Kein Titel', `no generated title should show explicit fallback: ${JSON.stringify(counts)}`);
+    assert.strictEqual(counts.activeTitle, 'No title', `no generated title should show explicit fallback: ${JSON.stringify(counts)}`);
 
     const generatedTitle = await evalExpr(cdp, sid, `(() => {
       const entry = [...state.sessions.values()][0];
@@ -222,6 +222,23 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       };
     })()`);
     assert.deepStrictEqual(generatedTitle, { pane: 'Model Session Title', topbar: 'Model Session Title' }, 'generated terminal/model title must appear in pane and topbar');
+
+    const tuiSelectedTitle = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      delete entry.autoTitle;
+      delete entry.session.meta.title;
+      entry.el.querySelector('.term-title').textContent = panelTitle(entry.session);
+      renderSwitcher();
+      const screen = '\\r\\nSessions\\r\\n  +  new        \\u2713 draft   current/default   Start new live session\\r\\n   1.  current    \\u2713 idle    gpt-5.5           Passideck Repo Audit mit Ponytail\\r\\n   2.  20260622_2_today     2 msgs                Friendly greeting\\r\\n';
+      await new Promise(resolve => entry.term.write(screen, resolve));
+      refreshTitleFromTerminal(entry.session.id);
+      return {
+        inferred: inferHermesSessionTitle(terminalViewportLines(entry.term)),
+        pane: entry.el.querySelector('.term-title')?.textContent || '',
+        topbar: document.getElementById('activeSessionDescription')?.textContent || ''
+      };
+    })()`);
+    assert.deepStrictEqual(tuiSelectedTitle, { inferred: 'Passideck Repo Audit mit Ponytail', pane: 'Passideck Repo Audit mit Ponytail', topbar: 'Passideck Repo Audit mit Ponytail' }, 'Hermes TUI selected saved session must drive pane/topbar title');
 
     const switchDescriptions = await evalExpr(cdp, sid, `(async () => {
       const ids = [...state.sessions.keys()];

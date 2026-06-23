@@ -32,7 +32,7 @@ assertIncludes(app, 'restoreTerminalSnapshot(id, term)', 'snapshot must restore 
 assertIncludes(app, 'function restoreTerminalSnapshot', 'terminal buffer must be restored after reload');
 assertIncludes(app, 'flushUiState(); saveAllTerminalSnapshots();', 'terminal snapshots and server pane prefs must save on reload');
 assertIncludes(app, "includes('output replay disabled')", 'server reconnect marker must not overwrite restored terminal contents');
-assertIncludes(app, 'writeTerminalOutput(term, msg.data, () => scheduleTerminalSnapshot(id))', 'live output must refresh terminal snapshots');
+assertIncludes(app, 'writeTerminalOutput(term, msg.data, () => { scheduleTerminalSnapshot(id); refreshTitleFromTerminal(id); })', 'live output must refresh terminal snapshots');
 assertIncludes(app, 'function snapSuggestionsAt', 'desktop drag must compute contextual edge/corner snap suggestions');
 assertIncludes(app, 'function showSnapSuggestions', 'dragging near edges must render snap proposal overlays');
 assertIncludes(app, 'function chooseSnapSuggestionAt', 'corner proposals must choose quarter vs half based on pointer position');
@@ -102,11 +102,13 @@ assertIncludes(html, '>+ tui</button>', 'topbar must include a compact Hermes TU
 assertIncludes(html, '<span class="ql-cmd">hermes --tui</span>', 'empty state must include a Hermes TUI launch field');
 assertIncludes(app, 'function sessionDescription', 'pane header must compute a visible session command/cwd description');
 assertIncludes(app, 'const generated = entry?.autoTitle || session?.meta?.title || session?.title;', 'pane title must use generated model/session titles');
-assertIncludes(app, 'return \'Kein Titel\';', 'pane title must not fall back to Hermes 1/Hermes 2 when no generated title exists');
+assertIncludes(app, 'return \'No title\';', 'pane title must not fall back to Hermes 1/Hermes 2 when no generated title exists');
 assertIncludes(html, 'id="activeSessionDescription"', 'topbar must show the active session description');
 assertIncludes(app, "document.getElementById('activeSessionDescription')", 'active session changes must update the topbar description');
-assertIncludes(app, "const text = entry ? panelTitle(entry.session) : 'Keine Session';", 'topbar should contain only the active pane title');
-assertIncludes(app, 'renderSwitcher();\n      updateMinimizedBar();', 'generated title changes must refresh the topbar immediately');
+assertIncludes(app, "const text = entry ? panelTitle(entry.session) : 'No session';", 'topbar should contain only the active pane title');
+assertIncludes(app, 'function applyGeneratedTitle', 'generated title changes must refresh the pane and topbar immediately');
+assertIncludes(app, 'function inferHermesSessionTitle', 'Hermes TUI session picker must infer the selected saved-session title');
+assertIncludes(app, 'refreshTitleFromTerminal(id)', 'terminal output must refresh inferred Hermes session titles');
 assertIncludes(css, '.active-session-desc', 'active session description needs compact topbar ellipsis styling');
 assertIncludes(app, 'class="term-session-desc" hidden', 'pane header keeps the old desc node hidden because title now carries the session description');
 assertIncludes(app, 'setTooltip(headerEl, sessionDescription(session))', 'pane header tooltip must expose the full session description');
@@ -146,11 +148,11 @@ assertIncludes(app, "headerEl.addEventListener('pointerdown'", 'pane header empt
 assertNotIncludes(app, 'dragstart', 'desktop windows must not depend on native drag/drop');
 assertNotIncludes(app, "addEventListener('drop'", 'desktop windows must not magnetically drop into grid slots');
 assertIncludes(app, 'contenteditable="true"', 'pane title must be editable inline');
-assertIncludes(app, 'aria-label="Fenstername"', 'editable title needs an accessible label');
+assertIncludes(app, 'aria-label="Window name"', 'editable title needs an accessible label');
 assertNotIncludes(app, '<span class="term-id">', 'session codename/id must not render in pane header');
 assertNotIncludes(app, 'title="focus"', 'focus pane button must be removed');
 assertNotIncludes(app, 'title="half"', 'half pane button must be removed');
-assertIncludes(app, 'data-tooltip="Schließen" aria-label="Schließen">×</button>', 'close X must remain labeled with unified tooltip');
+assertIncludes(app, 'data-tooltip="Close" aria-label="Close">×</button>', 'close X must remain labeled with unified tooltip');
 assertIncludes(app, 'function setConnectionStatus', 'pane connection dot must have a single status helper');
 assertIncludes(app, 'class="connection-dot"', 'pane header must show a connection dot');
 assertIncludes(app, "el.dataset.connectionStatus = 'reconnecting'", 'new panes start orange while connecting');
@@ -206,7 +208,7 @@ assertIncludes(app, 'writeTerminalReplay(term, msg.data)', 'reload replay must u
 assertIncludes(app, 'normalizeReplayText(data)', 'reload replay must strip raw terminal controls');
 assertIncludes(app, "includes('output replay disabled')", 'server replay-disabled marker must never be printed into terminal contents');
 assertIncludes(app, "msg.type === 'replay'", 'client must handle server replay messages separately from live output');
-assertIncludes(app, 'writeTerminalOutput(term, msg.data, () => scheduleTerminalSnapshot(id))', 'live output must go through chunked/sanitized writer and snapshot refresh');
+assertIncludes(app, 'writeTerminalOutput(term, msg.data, () => { scheduleTerminalSnapshot(id); refreshTitleFromTerminal(id); })', 'live output must go through chunked/sanitized writer and snapshot refresh');
 assertIncludes(app, 'sanitizeTerminalOutput(data)', 'replayed output must strip old leaked RGB/CPR junk');
 assertIncludes(server, "type: 'replay'", 'server must send reload snapshots as replay messages, not raw output');
 assertIncludes(server, "output replay disabled", 'server must not replay old pane output on browser reload');
@@ -218,7 +220,7 @@ assertIncludes(app, 'CSI cursor reports', 'CPR cursor reports must be documented
 assertIncludes(app, 'bare leaked OSC color report fragments', 'old visible rgb junk must be documented/filtered');
 assertIncludes(app, 'semicolons/ESC stripped to 101110...3R', 'binary-looking 10/11/3R leak must be documented/filtered');
 assertIncludes(app, 'sanitizeTerminalInput(data)', 'stripped terminal replies must be filtered before PTY');
-assertIncludes(app, 'writeTerminalOutput(term, msg.data, () => scheduleTerminalSnapshot(id))', 'stripped terminal replies must be filtered on live output');
+assertIncludes(app, 'writeTerminalOutput(term, msg.data, () => { scheduleTerminalSnapshot(id); refreshTitleFromTerminal(id); })', 'stripped terminal replies must be filtered on live output');
 assertIncludes(app, 'function startPointerDrag', 'pane drag must use pointer events, not depend on fragile browser native DnD');
 assertIncludes(app, "headerEl.addEventListener('pointerdown'", 'header background must be directly grabbable by pointerdown');
 assertNotIncludes(app, 'requestPointerLock', 'window drag must use the native cursor, not pointer lock');
@@ -249,8 +251,8 @@ assertNotIncludes(app, 'class="term-drag-handle"', 'pane header itself is the dr
 assertNotIncludes(app, 'drop-before', 'drag target must not split panes into before/after zones');
 assertNotIncludes(app, 'drop-after', 'drag target must not split panes into before/after zones');
 assertIncludes(app, 'function showSnapSuggestions', 'drag preview must be contextual snap choices, not slot placeholders');
-assertIncludes(app, 'Viertel oben links', 'corner snap suggestions must offer quarter placement');
-assertIncludes(app, 'Linke Hälfte', 'edge/corner snap suggestions must offer half placement');
+assertIncludes(app, 'Top-left quarter', 'corner snap suggestions must offer quarter placement');
+assertIncludes(app, 'Left half', 'edge/corner snap suggestions must offer half placement');
 assertIncludes(app, 'function applySnapSuggestion', 'pointer drop must apply the selected snap proposal');
 assertIncludes(app, 'class="arrange"', 'each window needs a third arrange/snap-assist button');
 assertIncludes(app, "arrangeBtn.addEventListener('mouseenter'", 'arrange button must show proposals on hover');
@@ -330,7 +332,7 @@ assertIncludes(css, '.command-center { overflow: hidden;', 'session tab rail mus
 assertIncludes(css, '.command-center::before, .command-center::after {\n  content: none;', 'session tab fade masks must not obscure buttons');
 assertNotIncludes(app, '<span>${idx + 1}</span><span class="switcher-title">', 'session tabs must not show leading numbers');
 assertIncludes(app, "root.textContent = text;", 'topbar should show active session description as plain text only');
-assertNotIncludes(app, 'role="button" aria-label="Schließen"', 'switcher close must not be an invalid nested role-button span');
+assertNotIncludes(app, 'role="button" aria-label="Close"', 'switcher close must not be an invalid nested role-button span');
 assertNotIncludes(html, 'hotkey-chip', 'visible Alt hotkey hint should not take topbar space');
 assertNotIncludes(html, 'Alt 1–9', 'visible Alt hotkey hint should be hidden');
 assertNotIncludes(css, '.hotkey-chip', 'unused hotkey chip styling should be removed');

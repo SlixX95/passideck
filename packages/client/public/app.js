@@ -187,7 +187,7 @@ function setConnectionStatus(id, status) {
   el.dataset.connectionStatus = status;
   const dot = el.querySelector('.connection-dot');
   if (dot) {
-    const labels = { live: 'Verbunden', reconnecting: 'Verbinde neu', offline: 'Offline' };
+    const labels = { live: 'Connected', reconnecting: 'Reconnecting', offline: 'Offline' };
     const label = labels[status] || status;
     setTooltip(dot, label);
     dot.setAttribute('aria-label', label);
@@ -717,25 +717,25 @@ function snapSuggestionsAt(x, y) {
   const suggestions = [];
   const add = (key, label, rect) => suggestions.push({ key, label, rect });
   if (nearLeft && nearTop) {
-    add('top-left-quarter', 'Viertel oben links', { x: 0, y: 0, w: W / 2, h: H / 2 });
-    add('left-half', 'Linke Hälfte', { x: 0, y: 0, w: W / 2, h: H });
-    add('top-half', 'Obere Hälfte', { x: 0, y: 0, w: W, h: H / 2 });
+    add('top-left-quarter', 'Top-left quarter', { x: 0, y: 0, w: W / 2, h: H / 2 });
+    add('left-half', 'Left half', { x: 0, y: 0, w: W / 2, h: H });
+    add('top-half', 'Top half', { x: 0, y: 0, w: W, h: H / 2 });
   } else if (nearRight && nearTop) {
-    add('top-right-quarter', 'Viertel oben rechts', { x: W / 2, y: 0, w: W / 2, h: H / 2 });
-    add('right-half', 'Rechte Hälfte', { x: W / 2, y: 0, w: W / 2, h: H });
-    add('top-half', 'Obere Hälfte', { x: 0, y: 0, w: W, h: H / 2 });
+    add('top-right-quarter', 'Top-right quarter', { x: W / 2, y: 0, w: W / 2, h: H / 2 });
+    add('right-half', 'Right half', { x: W / 2, y: 0, w: W / 2, h: H });
+    add('top-half', 'Top half', { x: 0, y: 0, w: W, h: H / 2 });
   } else if (nearLeft && nearBottom) {
-    add('bottom-left-quarter', 'Viertel unten links', { x: 0, y: H / 2, w: W / 2, h: H / 2 });
-    add('left-half', 'Linke Hälfte', { x: 0, y: 0, w: W / 2, h: H });
-    add('bottom-half', 'Untere Hälfte', { x: 0, y: H / 2, w: W, h: H / 2 });
+    add('bottom-left-quarter', 'Bottom-left quarter', { x: 0, y: H / 2, w: W / 2, h: H / 2 });
+    add('left-half', 'Left half', { x: 0, y: 0, w: W / 2, h: H });
+    add('bottom-half', 'Bottom half', { x: 0, y: H / 2, w: W, h: H / 2 });
   } else if (nearRight && nearBottom) {
-    add('bottom-right-quarter', 'Viertel unten rechts', { x: W / 2, y: H / 2, w: W / 2, h: H / 2 });
-    add('right-half', 'Rechte Hälfte', { x: W / 2, y: 0, w: W / 2, h: H });
-    add('bottom-half', 'Untere Hälfte', { x: 0, y: H / 2, w: W, h: H / 2 });
-  } else if (nearLeft) add('left-half', 'Linke Hälfte', { x: 0, y: 0, w: W / 2, h: H });
-  else if (nearRight) add('right-half', 'Rechte Hälfte', { x: W / 2, y: 0, w: W / 2, h: H });
-  else if (nearTop) add('top-half', 'Obere Hälfte', { x: 0, y: 0, w: W, h: H / 2 });
-  else if (nearBottom) add('bottom-half', 'Untere Hälfte', { x: 0, y: H / 2, w: W, h: H / 2 });
+    add('bottom-right-quarter', 'Bottom-right quarter', { x: W / 2, y: H / 2, w: W / 2, h: H / 2 });
+    add('right-half', 'Right half', { x: W / 2, y: 0, w: W / 2, h: H });
+    add('bottom-half', 'Bottom half', { x: 0, y: H / 2, w: W, h: H / 2 });
+  } else if (nearLeft) add('left-half', 'Left half', { x: 0, y: 0, w: W / 2, h: H });
+  else if (nearRight) add('right-half', 'Right half', { x: W / 2, y: 0, w: W / 2, h: H });
+  else if (nearTop) add('top-half', 'Top half', { x: 0, y: 0, w: W, h: H / 2 });
+  else if (nearBottom) add('bottom-half', 'Bottom half', { x: 0, y: H / 2, w: W, h: H / 2 });
   return suggestions;
 }
 
@@ -1314,7 +1314,7 @@ function normalizeReplayText(data) {
 
 function sanitizeTerminalOutput(data) {
   let text = stripTerminalReplyJunk(data);
-  if (text.length > OUTPUT_FRAME_LIMIT) text = `\r\n[PassiDeck: großer Replay gekürzt — letzte ${OUTPUT_FRAME_LIMIT} Zeichen]\r\n` + text.slice(-OUTPUT_FRAME_LIMIT);
+  if (text.length > OUTPUT_FRAME_LIMIT) text = `\r\n[PassiDeck: large replay truncated — last ${OUTPUT_FRAME_LIMIT} chars]\r\n` + text.slice(-OUTPUT_FRAME_LIMIT);
   return text;
 }
 
@@ -1445,7 +1445,7 @@ function sessionKind(session) {
   if (cmd.includes('hermes')) return 'Hermes';
   if (cmd.includes('codex')) return 'Codex';
   if (cmd.includes('bash') || cmd.includes('zsh') || cmd.includes('shell')) return 'Shell';
-  return session.meta?.label || session.meta?.command || 'Fenster';
+  return session.meta?.label || session.meta?.command || 'Window';
 }
 
 function defaultTitle(session) {
@@ -1471,7 +1471,53 @@ function panelTitle(session) {
   const generated = entry?.autoTitle || session?.meta?.title || session?.title;
   if (generated) return generated;
   if (entry?.autoTitle) return entry.autoTitle;
-  return 'Kein Titel';
+  return 'No title';
+}
+
+function terminalViewportLines(term) {
+  const buffer = term?.buffer?.active;
+  if (!buffer) return [];
+  const start = Math.max(0, buffer.viewportY || 0);
+  const end = Math.min(buffer.length || 0, start + Math.max(1, term.rows || 30));
+  const lines = [];
+  for (let i = start; i < end; i += 1) {
+    const line = buffer.getLine(i);
+    if (line) lines.push(line.translateToString(false));
+  }
+  return lines;
+}
+
+function inferHermesSessionTitle(lines) {
+  const visible = Array.isArray(lines) ? lines : [];
+  if (!visible.some(line => /\bSessions\b/.test(line))) return '';
+  for (const raw of visible) {
+    const clean = String(raw || '').replace(/[│┃┆┊┌┐└┘├┤┬┴─═╭╮╰╯]/g, ' ').trim();
+    if (!/(?:^|\s)(?:[▶>▸]\s*)?\d+\./.test(clean)) continue;
+    const parts = clean.split(/\s{2,}/).map(s => s.trim()).filter(Boolean);
+    let candidate = parts[parts.length - 1] || '';
+    candidate = candidate.replace(/^Start new live session$/i, '').replace(/\s+/g, ' ').trim();
+    if (candidate && candidate.length <= 160 && !/^(new|draft|current\/default|\d+\s+msgs?|✓?\s*idle)$/i.test(candidate)) return candidate;
+  }
+  return '';
+}
+
+function applyGeneratedTitle(id, title) {
+  const entry = state.sessions.get(id);
+  const clean = String(title || '').trim();
+  if (!entry || !clean || state.panePrefs.titles?.[id]) return false;
+  entry.autoTitle = clean;
+  entry.session.meta = { ...(entry.session.meta || {}), title: clean };
+  const titleEl = entry.el.querySelector('.term-title');
+  if (titleEl && document.activeElement !== titleEl) titleEl.textContent = clean;
+  renderSwitcher();
+  updateMinimizedBar();
+  return true;
+}
+
+function refreshTitleFromTerminal(id) {
+  const entry = state.sessions.get(id);
+  const inferred = inferHermesSessionTitle(terminalViewportLines(entry?.term));
+  if (inferred) applyGeneratedTitle(id, inferred);
 }
 
 function endPointerDrag(event) {
@@ -1713,17 +1759,17 @@ function createPanel(session, opts = {}) {
   el.dataset.connectionStatus = 'reconnecting';
   el.innerHTML = `
     <div class="term-header">
-      <span class="connection-dot" data-tooltip="Verbinde neu" aria-label="Verbinde neu"></span>
-      <span class="term-title" contenteditable="true" spellcheck="false" aria-label="Fenstername">${escapeHtml(panelTitle(session))}</span>
+      <span class="connection-dot" data-tooltip="Reconnecting" aria-label="Reconnecting"></span>
+      <span class="term-title" contenteditable="true" spellcheck="false" aria-label="Window name">${escapeHtml(panelTitle(session))}</span>
       <span class="term-session-desc" hidden></span>
       <div class="term-actions">
-        <button class="arrange" data-tooltip="Anordnen" aria-label="Anordnen">▦</button>
-        <button class="minimize" data-tooltip="Minimieren" aria-label="Minimieren">−</button>
-        <button class="danger" data-tooltip="Schließen" aria-label="Schließen">×</button>
+        <button class="arrange" data-tooltip="Arrange" aria-label="Arrange">▦</button>
+        <button class="minimize" data-tooltip="Minimize" aria-label="Minimize">−</button>
+        <button class="danger" data-tooltip="Close" aria-label="Close">×</button>
       </div>
     </div>
     <div class="terminal" id="term-${id}"></div>
-    <div class="window-resize-handle" data-tooltip="Größe ändern" aria-hidden="true"></div>
+    <div class="window-resize-handle" data-tooltip="Resize" aria-hidden="true"></div>
   `;
   grid.appendChild(el);
 
@@ -1800,17 +1846,7 @@ function createPanel(session, opts = {}) {
     // Ignore generic/empty titles
     if (!title || /^(\s*|bash$|zsh$|\/bin\/bash$|\/bin\/zsh$)/.test(title)) return;
     // Only update if user hasn't set a custom title
-    const custom = state.panePrefs.titles?.[id];
-    entry.autoTitle = title;
-    entry.session.meta = { ...(entry.session.meta || {}), title };
-    if (!custom) {
-      const titleEl = el.querySelector('.term-title');
-      if (titleEl && document.activeElement !== titleEl) {
-        titleEl.textContent = title;
-      }
-      renderSwitcher();
-      updateMinimizedBar();
-    }
+    applyGeneratedTitle(id, title);
   });
 
   const ro = new ResizeObserver(() => {
@@ -1933,7 +1969,7 @@ function attachSocket(id, term, el) {
       if (String(msg.data || '').includes('output replay disabled')) return;
       if (!entry?.restored) writeTerminalReplay(term, msg.data);
     }
-    if (msg.type === 'output') writeTerminalOutput(term, msg.data, () => scheduleTerminalSnapshot(id));
+    if (msg.type === 'output') writeTerminalOutput(term, msg.data, () => { scheduleTerminalSnapshot(id); refreshTitleFromTerminal(id); });
     if (msg.type === 'exit') {
       el.classList.add('exited');
       setConnectionStatus(id, 'offline');
@@ -1967,7 +2003,7 @@ function renderSwitcher() {
   const root = document.getElementById('activeSessionDescription');
   if (!root) return;
   const entry = state.activeId ? state.sessions.get(state.activeId) : null;
-  const text = entry ? panelTitle(entry.session) : 'Keine Session';
+  const text = entry ? panelTitle(entry.session) : 'No session';
   root.textContent = text;
   setTooltip(root, text);
 }
@@ -2412,7 +2448,7 @@ let closeModalReturnFocus = null;
 function showCloseConfirm(sessionId, title) {
   const modal = document.getElementById('closeModal');
   closeModalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  document.getElementById('closeModalTitle').textContent = `${title} — wirklich schließen?`;
+  document.getElementById('closeModalTitle').textContent = `${title} — really close?`;
 
   // Do not rely on the native hidden repaint path here.
   // In full grids some browsers defer that paint until the next layout change.
@@ -2544,5 +2580,5 @@ async function ensureSerializeAddon() {
 
 ensureSerializeAddon().then(init).catch(err => {
   console.error(err);
-  document.getElementById('emptyState').innerHTML = '<h2>PassiDeck Fehler.</h2><p>Konsole prüfen.</p>';
+  document.getElementById('emptyState').innerHTML = '<h2>PassiDeck error.</h2><p>Check console.</p>';
 });
