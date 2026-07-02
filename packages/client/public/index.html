@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="de" style="color-scheme: dark;">
+<html lang="en" style="color-scheme: dark;">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -48,7 +48,7 @@
     </div>
   </header>
 
-  <button id="chromePeek" class="chrome-peek" data-tooltip="UI anzeigen · Alt+0" aria-label="UI anzeigen">ui</button>
+  <button id="chromePeek" class="chrome-peek" data-tooltip="Show UI · Alt+0" aria-label="Show UI">ui</button>
 
   <section id="settingsPanel" class="settings-panel" role="dialog" aria-label="Settings" hidden>
     <div class="settings-title">⚙ settings</div>
@@ -70,11 +70,11 @@
       <option value="prism">Prism edge</option>
     </select>
     <label for="fontSizeSlider">Font</label>
-    <input type="range" id="fontSizeSlider" name="fontSize" min="10" max="24" value="13" step="1" data-tooltip="Terminal Font-Size" aria-label="Terminal Font-Size">
+    <input type="range" id="fontSizeSlider" name="fontSize" min="10" max="24" value="13" step="1" data-tooltip="Terminal font size" aria-label="Terminal font size">
     <span id="fontSizeLabel" class="font-size-label">13px</span>
     <label class="monitor-toggle" for="systemMonitorToggle">
       <input id="systemMonitorToggle" type="checkbox">
-      <span>Monitor oben anzeigen</span>
+      <span>Show top monitor</span>
     </label>
   </section>
 
@@ -114,6 +114,6 @@
   <script src="vendor/addon-web-links.js"></script>
   <script src="vendor/addon-serialize.js"></script>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="app.js?v=20260623-taskbar-scroll-title-fix" defer></script>
+  <script src="app.js?v=20260624-tui-wheel-scroll-fix" defer></script>
 </body>
 </html>

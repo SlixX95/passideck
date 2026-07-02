@@ -14,9 +14,7 @@ function defaultConfig() {
   return {
     host: '127.0.0.1',
     port: 8791,
-    shell: '/bin/bash',
-    defaultTheme: 'tokyo-night',
-    projects: {}
+    shell: '/bin/bash'
   };
 }
 
@@ -26,7 +24,7 @@ function loadConfig() {
   fs.mkdirSync(dir, { recursive: true });
 
   if (!fs.existsSync(file)) {
-    fs.writeFileSync(file, `# PassiDeck local config\nhost: 127.0.0.1\nport: 8791\nshell: /bin/bash\ndefaultTheme: tokyo-night\nprojects: {}\n`, 'utf8');
+    fs.writeFileSync(file, `# PassiDeck local config\nhost: 127.0.0.1\nport: 8791\nshell: /bin/bash\n`, 'utf8');
   }
 
   let parsed = {};

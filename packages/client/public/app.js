@@ -533,6 +533,12 @@ function renderSharedResizeHandles() {
   grid.appendChild(wrap);
 }
 
+function layoutSize(_layout, count) {
+  const n = Math.max(1, Number(count) || 1);
+  const cols = Math.max(1, Math.ceil(Math.sqrt(n)));
+  return { cols, rows: Math.ceil(n / cols) };
+}
+
 function desktopGridSlotRects(count = visibleWindowIds().length + 1) {
   const grid = document.getElementById('termGrid');
   const r = grid?.getBoundingClientRect?.() || { width: 1280, height: 720 };
@@ -634,7 +640,7 @@ function showDesktopSlotSuggestions(result) {
     el.style.top = `${slot.rect.y}px`;
     el.style.width = `${slot.rect.w}px`;
     el.style.height = `${slot.rect.h}px`;
-    el.innerHTML = '<span>Frei</span>';
+    el.innerHTML = '<span>Free</span>';
     wrap.appendChild(el);
   }
   document.querySelectorAll('.term-panel.slot-swap-target').forEach(el => el.classList.remove('slot-swap-target'));
@@ -645,7 +651,7 @@ function applyFreeSlotSnap(id, rect) {
   const prefs = windowPrefs();
   const p = ensureFreeWindow(id);
   if (!p) return;
-  Object.assign(prefs[id], { x: rect.x, y: rect.y, w: rect.w, h: rect.h, z: p.z || nextWindowZ() });
+  Object.assign(prefs[id], { x: rect.x, y: rect.y, z: p.z || nextWindowZ() });
   applyFreeWindow(id);
 }
 
@@ -655,10 +661,10 @@ function swapWindowSlots(sourceId, targetId, sourceSlotRect = null) {
   const source = ensureFreeWindow(sourceId);
   const target = ensureFreeWindow(targetId);
   if (!source || !target) return;
-  const sourceRect = sourceSlotRect || { x: source.x, y: source.y, w: source.w, h: source.h };
-  const targetRect = { x: target.x, y: target.y, w: target.w, h: target.h };
-  Object.assign(prefs[sourceId], { ...targetRect, z: nextWindowZ() });
-  Object.assign(prefs[targetId], { ...sourceRect, z: Math.max(1, (prefs[sourceId].z || 10) - 1) });
+  const sourceRect = sourceSlotRect || { x: source.x, y: source.y };
+  const targetRect = { x: target.x, y: target.y };
+  Object.assign(prefs[sourceId], { x: targetRect.x, y: targetRect.y, z: nextWindowZ() });
+  Object.assign(prefs[targetId], { x: sourceRect.x, y: sourceRect.y, z: Math.max(1, (prefs[sourceId].z || 10) - 1) });
   const si = state.order.indexOf(sourceId);
   const ti = state.order.indexOf(targetId);
   if (si >= 0 && ti >= 0) [state.order[si], state.order[ti]] = [state.order[ti], state.order[si]];
@@ -809,10 +815,10 @@ function layoutProposals(id) {
   const ids = visibleWindowIds(id);
   const base = [
     { key: 'grid', label: 'Grid', ids },
-    { key: 'columns', label: 'Spalten', ids },
-    { key: 'rows', label: 'Zeilen', ids }
+    { key: 'columns', label: 'Columns', ids },
+    { key: 'rows', label: 'Rows', ids }
   ];
-  if (ids.length > 1) base.push({ key: 'focus-left', label: 'Links + Rest', ids }, { key: 'focus-top', label: 'Oben + Rest', ids });
+  if (ids.length > 1) base.push({ key: 'focus-left', label: 'Left + rest', ids }, { key: 'focus-top', label: 'Top + rest', ids });
   return base.map(p => ({ ...p, rects: layoutProposalRects(p.key, p.ids) }));
 }
 
@@ -1207,16 +1213,23 @@ function installTerminalTouchScroll(termEl, term) {
 function installTerminalWheelScroll(termEl, term, session = null) {
   let wheelRemainder = 0;
   term.attachCustomWheelEventHandler?.(e => {
+    const command = String(session?.meta?.command || session?.meta?.label || '').toLowerCase();
+    const isHermes = /\bhermes\b/.test(command);
     if (e.ctrlKey) return true;
     const buffer = term.buffer?.active;
-    if (!buffer || buffer.baseY <= 0) return true;
-    const command = String(session?.meta?.command || session?.meta?.label || '').toLowerCase();
-    const forceScrollback = /\bhermes\b/.test(command);
+    if (!buffer || buffer.baseY <= 0) {
+      if (isHermes) e.preventDefault();
+      return true;
+    }
+    const forceScrollback = isHermes;
     // ponytail: only steal wheel when xterm has scrollback; alternate-screen TUIs need their own wheel.
     const unit = e.deltaMode === 1 ? 1 : e.deltaMode === 2 ? term.rows : 1 / Math.max(8, state.fontSize * 1.2);
     wheelRemainder += e.deltaY * unit;
     const lines = Math.trunc(wheelRemainder);
-    if (!lines) return !forceScrollback;
+    if (!lines) {
+      if (forceScrollback) e.preventDefault();
+      return !forceScrollback;
+    }
     wheelRemainder -= lines;
     term.scrollLines(lines);
     e.preventDefault();
@@ -1224,9 +1237,13 @@ function installTerminalWheelScroll(termEl, term, session = null) {
   });
   termEl.addEventListener('wheel', e => {
     const command = String(session?.meta?.command || session?.meta?.label || '').toLowerCase();
-    if (!/\bhermes\b/.test(command) || e.ctrlKey) return;
+    const isHermes = /\bhermes\b/.test(command);
+    if (!isHermes || e.ctrlKey) return;
     const buffer = term.buffer?.active;
-    if (!buffer || buffer.baseY <= 0) return;
+    if (!buffer || buffer.baseY <= 0) {
+      e.preventDefault();
+      return;
+    }
     const unit = e.deltaMode === 1 ? 1 : e.deltaMode === 2 ? term.rows : 1 / Math.max(8, state.fontSize * 1.2);
     wheelRemainder += e.deltaY * unit;
     const lines = Math.trunc(wheelRemainder);
@@ -1610,6 +1627,10 @@ function refreshTitleFromTerminal(id) {
   else if (selectedHermesSessionTitleIsEmpty(rows)) clearGeneratedTitle(id);
 }
 
+function trySetPointerCapture(el, pointerId) {
+  try { el?.setPointerCapture?.(pointerId); } catch {}
+}
+
 function endPointerDrag(event) {
   const d = state.pointerDrag;
   if (!d) return;
@@ -1700,9 +1721,25 @@ function updateWindowResize(event) {
   const grid = document.getElementById('termGrid');
   const gr = grid.getBoundingClientRect();
   const pt = dragClientPoint(event, gr, d);
-  p.w = Math.max(300, Math.min(gr.width - p.x, d.startW + (pt.x - d.startX)));
-  p.h = Math.max(190, Math.min(gr.height - p.y, d.startH + (pt.y - d.startY)));
-  p.z = d.z;
+  const dx = pt.x - d.startX;
+  const dy = pt.y - d.startY;
+  const edge = d.edge || 'se';
+  const minW = 300;
+  const minH = 190;
+  let { x, y, w, h } = d.startRect;
+  if (edge.includes('e')) w = Math.max(minW, Math.min(gr.width - x, d.startRect.w + dx));
+  if (edge.includes('s')) h = Math.max(minH, Math.min(gr.height - y, d.startRect.h + dy));
+  if (edge.includes('w')) {
+    const right = d.startRect.x + d.startRect.w;
+    x = Math.max(0, Math.min(right - minW, d.startRect.x + dx));
+    w = right - x;
+  }
+  if (edge.includes('n')) {
+    const bottom = d.startRect.y + d.startRect.h;
+    y = Math.max(0, Math.min(bottom - minH, d.startRect.y + dy));
+    h = bottom - y;
+  }
+  Object.assign(p, { x, y, w, h, z: d.z });
   applyFreeWindow(d.sourceId);
   scheduleTerminalFit({ secondPass: false, latePass: false });
 }
@@ -1730,7 +1767,7 @@ function startSharedResize(group, event) {
   document.addEventListener('pointercancel', endSharedResize, true);
   document.addEventListener('mousemove', updateSharedResize, true);
   document.addEventListener('mouseup', endSharedResize, true);
-  event.currentTarget?.setPointerCapture?.(event.pointerId);
+  trySetPointerCapture(event.currentTarget, event.pointerId);
 }
 
 function sharedResizeDelta(d, rawDelta) {
@@ -1787,9 +1824,19 @@ function startWindowResize(id, event) {
   const entry = state.sessions.get(id);
   if (!entry) return;
   const p = makeFreeWindow(id, entry.el.getBoundingClientRect());
-  const grid = document.getElementById('termGrid');
   p.z = nextWindowZ();
-  state.resizeDrag = { sourceId: id, startX: event.clientX, startY: event.clientY, x: event.clientX, y: event.clientY, startW: p.w, startH: p.h, z: p.z };
+  state.resizeDrag = {
+    sourceId: id,
+    edge: event.currentTarget?.dataset?.resizeEdge || 'se',
+    startX: event.clientX,
+    startY: event.clientY,
+    x: event.clientX,
+    y: event.clientY,
+    startRect: { x: p.x, y: p.y, w: p.w, h: p.h },
+    startW: p.w,
+    startH: p.h,
+    z: p.z
+  };
   clearSharedResizeHandles();
   entry.el.classList.add('resizing');
   document.body.classList.add('window-resizing');
@@ -1798,7 +1845,7 @@ function startWindowResize(id, event) {
   document.addEventListener('pointercancel', endWindowResize, true);
   document.addEventListener('mousemove', updateWindowResize, true);
   document.addEventListener('mouseup', endWindowResize, true);
-  event.currentTarget?.setPointerCapture?.(event.pointerId);
+  trySetPointerCapture(event.currentTarget, event.pointerId);
   bringWindowToFront(id);
 }
 
@@ -1813,16 +1860,6 @@ function startPointerDrag(id, handle, event) {
   const swapOriginRect = { x: p.x, y: p.y, w: p.w, h: p.h };
   const grid = document.getElementById('termGrid');
   const gr = grid.getBoundingClientRect();
-  const normal = defaultWindowSize();
-  const restore = r.width > normal.w + 24 || r.height > normal.h + 24;
-  const rx = Math.max(0.12, Math.min(0.88, (event.clientX - r.left) / Math.max(1, r.width)));
-  if (restore) {
-    p.w = normal.w;
-    p.h = normal.h;
-    p.x = Math.max(0, Math.min(gr.width - 80, event.clientX - gr.left - p.w * rx));
-    p.y = Math.max(0, Math.min(gr.height - 36, event.clientY - gr.top - Math.min(18, event.clientY - r.top)));
-    applyFreeWindow(id);
-  }
   p.z = nextWindowZ();
   state.pointerDrag = { sourceId: id, dx: event.clientX - gr.left - p.x, dy: event.clientY - gr.top - p.y, x: event.clientX, y: event.clientY, z: p.z, activeSuggestion: null, activeDesktopSlot: null, lastSwapTarget: null, swapOriginRect };
   state.draggingId = id;
@@ -1834,7 +1871,7 @@ function startPointerDrag(id, handle, event) {
   document.addEventListener('pointercancel', endPointerDrag, true);
   document.addEventListener('mousemove', updatePointerDrag, true);
   document.addEventListener('mouseup', endPointerDrag, true);
-  handle.setPointerCapture?.(event.pointerId);
+  trySetPointerCapture(handle, event.pointerId);
   bringWindowToFront(id);
 }
 
@@ -1859,7 +1896,14 @@ function createPanel(session, opts = {}) {
       </div>
     </div>
     <div class="terminal" id="term-${id}"></div>
-    <div class="window-resize-handle" data-tooltip="Resize" aria-hidden="true"></div>
+    <div class="window-resize-handle edge-n" data-resize-edge="n" data-tooltip="Resize top" aria-hidden="true"></div>
+    <div class="window-resize-handle edge-e" data-resize-edge="e" data-tooltip="Resize right" aria-hidden="true"></div>
+    <div class="window-resize-handle edge-s" data-resize-edge="s" data-tooltip="Resize bottom" aria-hidden="true"></div>
+    <div class="window-resize-handle edge-w" data-resize-edge="w" data-tooltip="Resize left" aria-hidden="true"></div>
+    <div class="window-resize-handle edge-ne" data-resize-edge="ne" data-tooltip="Resize" aria-hidden="true"></div>
+    <div class="window-resize-handle edge-se" data-resize-edge="se" data-tooltip="Resize" aria-hidden="true"></div>
+    <div class="window-resize-handle edge-sw" data-resize-edge="sw" data-tooltip="Resize" aria-hidden="true"></div>
+    <div class="window-resize-handle edge-nw" data-resize-edge="nw" data-tooltip="Resize" aria-hidden="true"></div>
   `;
   grid.appendChild(el);
 
@@ -1885,7 +1929,8 @@ function createPanel(session, opts = {}) {
     renderSwitcher();
     updateMinimizedBar();
   });
-  titleEl.addEventListener('mousedown', e => e.stopPropagation());
+  titleEl.addEventListener('dblclick', e => { e.stopPropagation(); titleEl.dataset.editing = '1'; titleEl.focus(); });
+  titleEl.addEventListener('blur', () => { delete titleEl.dataset.editing; });
   arrangeBtn.addEventListener('mouseenter', () => showLayoutAssist(id, arrangeBtn));
   arrangeBtn.onclick = e => { e.stopPropagation(); showLayoutAssist(id, arrangeBtn); };
   arrangeBtn.addEventListener('pointerdown', e => e.stopPropagation());
@@ -1903,11 +1948,16 @@ function createPanel(session, opts = {}) {
   closeBtn.addEventListener('mouseup', e => e.stopPropagation());
   // Only select panel when clicking on terminal area, not header (buttons/title/drag)
   el.querySelector('.terminal').addEventListener('mousedown', () => selectPanel(id));
-  headerEl.addEventListener('pointerdown', e => {
-    if (e.target.closest('.term-title, .term-actions, button')) return;
+  const startHeaderDrag = e => {
+    if (e.target.closest('.term-actions, button')) return;
+    if (e.target.closest('.term-title') && titleEl.dataset.editing === '1') return;
     startPointerDrag(id, headerEl, e);
+  };
+  headerEl.addEventListener('pointerdown', startHeaderDrag);
+  headerEl.addEventListener('mousedown', e => { if (!state.pointerDrag) startHeaderDrag(e); });
+  el.querySelectorAll('.window-resize-handle').forEach(handle => {
+    handle.addEventListener('pointerdown', e => startWindowResize(id, e));
   });
-  el.querySelector('.window-resize-handle')?.addEventListener('pointerdown', e => startWindowResize(id, e));
 
   const term = new Terminal({
     fontFamily: "'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, monospace",
@@ -2112,23 +2162,32 @@ function renderSwitcher() {
   for (const id of state.order) {
     const item = state.sessions.get(id);
     if (!item) continue;
-    const btn = document.createElement('button');
-    btn.type = 'button';
+    const btn = document.createElement('div');
     btn.className = 'switcher-btn';
+    btn.tabIndex = 0;
+    btn.setAttribute('role', 'button');
     if (id === state.activeId) btn.classList.add('active');
     if (state.minimized.has(id)) btn.classList.add('minimized');
     if (id === state.activeId && state.minimized.has(id)) btn.classList.add('active-minimized');
     if (item.session.exited) btn.classList.add('exited');
     const title = panelTitle(item.session);
+    const action = state.minimized.has(id) ? `Restore ${title}` : id === state.activeId ? `Minimize ${title}` : `Focus ${title}`;
     btn.dataset.switcherPaneId = id;
-    btn.title = state.minimized.has(id) ? `Restore ${title}` : id === state.activeId ? `Minimize ${title}` : `Focus ${title}`;
-    btn.innerHTML = `<span class="switcher-title"></span><span class="switcher-close" role="button" aria-label="Close">×</span>`;
+    btn.setAttribute('aria-label', action);
+    setTooltip(btn, action);
+    btn.innerHTML = `<span class="switcher-title"></span><button class="switcher-close" type="button" aria-label="Close ${escapeHtml(title)}">×</button>`;
     btn.querySelector('.switcher-title').textContent = title;
     btn.querySelector('.switcher-close').onclick = e => { e.preventDefault(); e.stopPropagation(); requestClosePanel(id); };
-    btn.onclick = () => {
+    const activate = () => {
       if (state.minimized.has(id)) restorePanel(id);
       else if (id === state.activeId) minimizePanel(id);
       else selectPanel(id);
+    };
+    btn.onclick = activate;
+    btn.onkeydown = e => {
+      if (!['Enter', ' '].includes(e.key)) return;
+      e.preventDefault();
+      activate();
     };
     switcher.appendChild(btn);
   }
@@ -2225,6 +2284,11 @@ function pasteIntoTerminalEntry(entry, text) {
 function isHermesTerminalEntry(entry) {
   const meta = entry?.session?.meta || {};
   return /\bhermes\b/i.test(String(meta.command || meta.label || ''));
+}
+
+function isHermesTuiTerminalEntry(entry) {
+  const meta = entry?.session?.meta || {};
+  return /\bhermes\b[^\n]*\s--tui\b/i.test(String(meta.command || meta.label || ''));
 }
 
 function clearHermesTuiSelection(entry) {
@@ -2486,7 +2550,10 @@ async function pasteClipboardIntoTerminalEntry(entry) {
   const imageFile = await readImageFileFromSystemClipboard();
   if (imageFile) {
     const upload = await uploadFile(imageFile, { keepBusy: true });
-    return upload ? insertIntoTerminalEntry(entry, `${upload.path} `) : false;
+    if (!upload) return false;
+    return isHermesTuiTerminalEntry(entry)
+      ? pasteIntoTerminalEntry(entry, formatUploadInsertion(upload, entry))
+      : insertIntoTerminalEntry(entry, `${upload.path} `);
   }
   return false;
 }
@@ -2543,11 +2610,18 @@ async function handlePassiDeckContextMenu(e) {
   }
 }
 
-function formatUploadInsertion(upload) {
+function formatUploadInsertion(upload, entry = activeTerminalEntry()) {
+  const image = String(upload?.type || '').startsWith('image/');
+  const path = upload?.insert || upload?.path || '';
+  if (image && isHermesTuiTerminalEntry(entry)) {
+    // passitail: TUI has an image command; raw path paste can be eaten by bracketed-paste splitting.
+    // Prefix at prompt start so an existing draft becomes /image <path> <draft>, then TUI restores the draft as remainder.
+    return `\x01/image ${path}\r`;
+  }
   // Keep uploads simple and upstream-friendly: paste the local path into the PTY.
   // Hermes can auto-detect image paths on submit; shells/Codex/unknown panes keep
   // the same explicit path behavior.
-  return `\x01${upload.path} `;
+  return `\x01${path} `;
 }
 
 function findImageFileFromClipboardData(data) {

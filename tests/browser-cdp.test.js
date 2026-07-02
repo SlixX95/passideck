@@ -164,7 +164,8 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         viewport: { w: 3200, h: 1800 },
         windows: {
           desktop: {
-            [madeSessions[0]]: { x: 99999, y: 99999, w: 1600, h: 900, z: 11 }
+            [madeSessions[0]]: { x: 99999, y: 99999, w: 1600, h: 900, z: 11 },
+            [madeSessions[1]]: { x: 60, y: 60, w: 1200, h: 700, z: 12 }
           }
         }
       }
@@ -202,6 +203,58 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     const savedUi = await requestJson(base, 'GET', '/api/ui-state');
     const savedRect = savedUi.panePrefs?.windows?.desktop?.[madeSessions[0]];
     assert.ok(savedRect && savedRect.x + savedRect.w <= clampedWindow.grid.width + 1 && savedRect.y + savedRect.h <= clampedWindow.grid.height + 1, `clamped window rect must persist server-side: ${JSON.stringify(savedRect)}`);
+
+    const titleDragProbe = await evalExpr(cdp, sid, `(() => {
+      document.activeElement?.blur?.();
+      const title = document.querySelector('[data-pane-id="${madeSessions[1]}"] .term-title');
+      const panel = title.closest('.term-panel');
+      const tr = title.getBoundingClientRect();
+      const pr = panel.getBoundingClientRect();
+      return { x: Math.round(tr.left + Math.min(20, tr.width / 2)), y: Math.round(tr.top + tr.height / 2), before: { left: pr.left, top: pr.top, width: pr.width, height: pr.height } };
+    })()`);
+    const titleDragAfter = await evalExpr(cdp, sid, `(() => {
+      const title = document.querySelector('[data-pane-id="${madeSessions[1]}"] .term-title');
+      title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: ${titleDragProbe.x}, clientY: ${titleDragProbe.y}, pointerId: 7, pointerType: 'mouse' }));
+      updatePointerDrag({ preventDefault(){}, clientX: ${titleDragProbe.x + 90}, clientY: ${titleDragProbe.y + 45} });
+      const r = document.querySelector('[data-pane-id="${madeSessions[1]}"]').getBoundingClientRect();
+      const dragging = Boolean(state.pointerDrag);
+      const classes = title.closest('.term-panel').className;
+      endPointerDrag({ preventDefault(){} });
+      return { left: r.left, top: r.top, width: r.width, height: r.height, dragging, classes, editing: title.dataset.editing || '', target: document.elementFromPoint(${titleDragProbe.x}, ${titleDragProbe.y})?.className || '' };
+    })()`);
+    assert.ok(titleDragAfter.left > titleDragProbe.before.left + 40 && titleDragAfter.top > titleDragProbe.before.top + 20, `window title drag must move pane: ${JSON.stringify({ before: titleDragProbe.before, after: titleDragAfter })}`);
+    assert.ok(Math.abs(titleDragAfter.width - titleDragProbe.before.width) < 2 && Math.abs(titleDragAfter.height - titleDragProbe.before.height) < 2, `window drag must not resize pane: ${JSON.stringify({ before: titleDragProbe.before, after: titleDragAfter })}`);
+    const dragDropSizePreserved = await evalExpr(cdp, sid, `(() => {
+      const prefs = windowPrefs();
+      const a = '${madeSessions[1]}';
+      const b = '${madeSessions[2]}';
+      ensureFreeWindow(a); ensureFreeWindow(b);
+      Object.assign(prefs[a], { x: 80, y: 80, w: 1111, h: 555, z: 30 });
+      Object.assign(prefs[b], { x: 360, y: 260, w: 640, h: 360, z: 29 });
+      applyFreeSlotSnap(a, { x: 120, y: 140, w: 300, h: 190 });
+      const afterFree = { ...prefs[a] };
+      swapWindowSlots(a, b, { x: 120, y: 140, w: 999, h: 999 });
+      return { afterFree, afterSwapA: { ...prefs[a] }, afterSwapB: { ...prefs[b] } };
+    })()`);
+    assert.strictEqual(dragDropSizePreserved.afterFree.w, 1111, `free slot drop must preserve width: ${JSON.stringify(dragDropSizePreserved)}`);
+    assert.strictEqual(dragDropSizePreserved.afterFree.h, 555, `free slot drop must preserve height: ${JSON.stringify(dragDropSizePreserved)}`);
+    assert.strictEqual(dragDropSizePreserved.afterSwapA.w, 1111, `swap drop must preserve source width: ${JSON.stringify(dragDropSizePreserved)}`);
+    assert.strictEqual(dragDropSizePreserved.afterSwapA.h, 555, `swap drop must preserve source height: ${JSON.stringify(dragDropSizePreserved)}`);
+    assert.strictEqual(dragDropSizePreserved.afterSwapB.w, 640, `swap drop must preserve target width: ${JSON.stringify(dragDropSizePreserved)}`);
+    assert.strictEqual(dragDropSizePreserved.afterSwapB.h, 360, `swap drop must preserve target height: ${JSON.stringify(dragDropSizePreserved)}`);
+    const edgeResize = await evalExpr(cdp, sid, `(() => {
+      const id = '${madeSessions[1]}';
+      const entry = state.sessions.get(id);
+      const prefs = windowPrefs();
+      Object.assign(prefs[id], { x: 100, y: 100, w: 500, h: 300, z: 40 });
+      applyFreeWindow(id);
+      const handle = entry.el.querySelector('.window-resize-handle.edge-w');
+      handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: 100, clientY: 200, pointerId: 8, pointerType: 'mouse' }));
+      updateWindowResize({ preventDefault(){}, clientX: 40, clientY: 200 });
+      endWindowResize({ preventDefault(){} });
+      return { x: Math.round(prefs[id].x), w: Math.round(prefs[id].w), edges: entry.el.querySelectorAll('.window-resize-handle').length };
+    })()`);
+    assert.deepStrictEqual(edgeResize, { x: 40, w: 560, edges: 8 }, `left edge resize must grow window without bottom-right-only lock: ${JSON.stringify(edgeResize)}`);
 
     const counts = await evalExpr(cdp, sid, `(() => ({
       panels: document.querySelectorAll('.term-panel').length,
@@ -297,7 +350,15 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       applyGeneratedTitle(entry.session.id, 'Minimized Window Name', { source: 'hermes-session' });
       minimizePanel(entry.session.id);
       const btn = document.querySelector('#sessionSwitcher .switcher-btn.minimized');
-      const before = { text: btn?.querySelector('.switcher-title')?.textContent?.trim() || '', title: btn?.title || '', hasClose: Boolean(btn?.querySelector('.switcher-close')), hidden: entry.el.classList.contains('layout-hidden') };
+      const close = btn?.querySelector('.switcher-close');
+      const before = {
+        text: btn?.querySelector('.switcher-title')?.textContent?.trim() || '',
+        tooltip: btn?.dataset?.tooltip || '',
+        nativeTitle: btn?.getAttribute('title') || '',
+        role: btn?.getAttribute('role') || '',
+        closeTag: close?.tagName || '',
+        hidden: entry.el.classList.contains('layout-hidden')
+      };
       btn?.click();
       const restored = !state.minimized.has(entry.session.id) && !entry.el.classList.contains('layout-hidden');
       btn?.click();
@@ -305,7 +366,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       restorePanel(entry.session.id);
       return { before, restored, minimizedAgain };
     })()`);
-    assert.deepStrictEqual(minimizedSwitcher, { before: { text: 'Minimized Window Name', title: 'Restore Minimized Window Name', hasClose: true, hidden: true }, restored: true, minimizedAgain: true }, 'taskbar click must restore minimized panes, minimize active panes, and expose close X');
+    assert.deepStrictEqual(minimizedSwitcher, { before: { text: 'Minimized Window Name', tooltip: 'Restore Minimized Window Name', nativeTitle: '', role: 'button', closeTag: 'BUTTON', hidden: true }, restored: true, minimizedAgain: true }, 'taskbar click must restore minimized panes, minimize active panes, and expose close button without native title');
 
     const rememberedSelectionCopy = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
@@ -450,6 +511,29 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.deepStrictEqual(terminalCtrlVPaste, ['\u001b[200~ctrl-v desktop clipboard text\u001b[201~'], 'Ctrl+V in Electron terminal must paste native desktop clipboard text into PTY');
 
+    const hermesTuiImagePaste = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const sent = [];
+      entry.session.meta.command = 'hermes --tui';
+      entry.ws = { readyState: WebSocket.OPEN, send: msg => sent.push(JSON.parse(msg).data) };
+      entry.term.focus = () => {};
+      window.passideckDesktop = {
+        readImage: async () => ({ name: 'tui.png', type: 'image/png', data: 'data:image/png;base64,QUJD' }),
+        readText: async () => ''
+      };
+      uploadBlob = async body => ({ path: '/uploads/tui.png', name: body.name, type: body.type });
+      await pasteClipboardIntoTerminalEntry(entry);
+      const uploadInsertion = formatUploadInsertion({ path: '/uploads/drop.png', type: 'image/png' }, entry);
+      entry.session.meta.command = '/bin/bash';
+      const shellInsertion = formatUploadInsertion({ path: '/uploads/drop.png', type: 'image/png' }, entry);
+      return { sent, uploadInsertion, shellInsertion };
+    })()`);
+    assert.deepStrictEqual(hermesTuiImagePaste, {
+      sent: ['\u0001/image /uploads/tui.png\r'],
+      uploadInsertion: '\u0001/image /uploads/drop.png\r',
+      shellInsertion: '\u0001/uploads/drop.png '
+    }, 'Hermes TUI image paste/drop must use /image so it attaches, while shell panes keep raw path insertion');
+
     const terminalDragRememberedCopy = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
       const copied = [];
@@ -564,20 +648,28 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
 
     const altScreenWheel = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
+      const oldCommand = entry.session.meta.command;
+      entry.session.meta.command = 'hermes --tui';
       let scrollCalls = 0;
       const oldScrollLines = entry.term.scrollLines.bind(entry.term);
       entry.term.scrollLines = n => { scrollCalls += 1; return oldScrollLines(n); };
       await new Promise(resolve => entry.term.write('\\x1b[?1049h\\x1b[?1000h', resolve));
       const target = entry.el.querySelector('.xterm-viewport') || entry.el.querySelector('.terminal');
+      const termEl = entry.el.querySelector('.terminal');
+      let capturePrevented = null;
+      const captureProbe = e => { capturePrevented = e.defaultPrevented; };
+      termEl.addEventListener('wheel', captureProbe, { capture: true, once: true });
       const r = target.getBoundingClientRect();
-      target.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 }));
+      const event = new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 });
+      const dispatched = target.dispatchEvent(event);
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-      const out = { scrollCalls, baseY: entry.term.buffer.active.baseY };
+      const out = { scrollCalls, baseY: entry.term.buffer.active.baseY, canceled: !dispatched || event.defaultPrevented, capturePrevented };
       await new Promise(resolve => entry.term.write('\\x1b[?1000l\\x1b[?1049l', resolve));
       entry.term.scrollLines = oldScrollLines;
+      entry.session.meta.command = oldCommand;
       return out;
     })()`);
-    assert.deepStrictEqual(altScreenWheel, { scrollCalls: 0, baseY: 0 }, 'Hermes TUI alternate-screen wheel must not be stolen for xterm scrollback when no scrollback exists');
+    assert.deepStrictEqual(altScreenWheel, { scrollCalls: 0, baseY: 0, canceled: true, capturePrevented: true }, 'Hermes TUI alternate-screen wheel must not scroll xterm/browser chrome when no scrollback exists');
 
     const minimizeProbe = await evalExpr(cdp, sid, `(() => {
       const panel = document.querySelector('.term-panel.active');
