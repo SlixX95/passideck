@@ -632,19 +632,27 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
 
     const wheelScroll = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
+      const oldCommand = entry.session.meta.command;
+      entry.session.meta.command = 'hermes';
       await new Promise(resolve => entry.term.write(Array.from({ length: 80 }, (_, i) => 'wheel-' + i + '\\r\\n').join(''), resolve));
       await new Promise(resolve => entry.term.write('\\x1b[?1000h', resolve));
       entry.term.scrollToBottom();
       const before = entry.term.buffer.active.viewportY;
       const target = entry.el.querySelector('.xterm-viewport') || entry.el.querySelector('.terminal');
       const r = target.getBoundingClientRect();
-      target.dispatchEvent(new WheelEvent('wheel', { deltaY: -4, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 }));
+      let tinyLeaked = false;
+      target.addEventListener('wheel', () => { tinyLeaked = true; }, { once: true });
+      const tinyEvent = new WheelEvent('wheel', { deltaY: -4, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 });
+      const tinyDispatched = target.dispatchEvent(tinyEvent);
       target.dispatchEvent(new WheelEvent('wheel', { deltaY: -480, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 }));
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       await new Promise(resolve => entry.term.write('\\x1b[?1000l', resolve));
-      return { before, after: entry.term.buffer.active.viewportY };
+      entry.session.meta.command = oldCommand;
+      return { before, after: entry.term.buffer.active.viewportY, tinyCanceled: !tinyDispatched || tinyEvent.defaultPrevented, tinyLeaked };
     })()`);
-    assert.ok(wheelScroll.after < wheelScroll.before, `wheel must scroll xterm history even when app mouse mode is active: ${JSON.stringify(wheelScroll)}`);
+    assert.ok(wheelScroll.after < wheelScroll.before, `normal Hermes wheel must scroll xterm history even when app mouse mode is active: ${JSON.stringify(wheelScroll)}`);
+    assert.strictEqual(wheelScroll.tinyCanceled, true, `normal Hermes tiny wheel deltas must be canceled while accumulating: ${JSON.stringify(wheelScroll)}`);
+    assert.strictEqual(wheelScroll.tinyLeaked, false, `normal Hermes tiny wheel deltas must not reach xterm/Hermes app mouse handling: ${JSON.stringify(wheelScroll)}`);
 
     const altScreenWheel = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];

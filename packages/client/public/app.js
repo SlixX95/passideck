@@ -1247,7 +1247,11 @@ function installTerminalWheelScroll(termEl, term, session = null) {
     const unit = e.deltaMode === 1 ? 1 : e.deltaMode === 2 ? term.rows : 1 / Math.max(8, state.fontSize * 1.2);
     wheelRemainder += e.deltaY * unit;
     const lines = Math.trunc(wheelRemainder);
-    if (!lines) return;
+    if (!lines) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
+    }
     wheelRemainder -= lines;
     term.scrollLines(lines);
     e.preventDefault();
