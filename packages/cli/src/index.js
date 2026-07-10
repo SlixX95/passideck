@@ -41,7 +41,7 @@ if (showConfig) {
   process.exit(0);
 }
 
-const { server } = createServer(config);
+const { server, close } = createServer(config);
 const host = config.host || '127.0.0.1';
 const port = config.port || 8791;
 const url = `http://${host}:${port}`;
@@ -50,3 +50,14 @@ server.listen(port, host, () => {
   console.log(`PassiDeck running: ${url}`);
   if (!noOpen && host === '127.0.0.1') openUrl(url);
 });
+
+let closing = false;
+function gracefulShutdown(signal) {
+  if (closing) return;
+  closing = true;
+  console.log(`\n[shutdown] ${signal} received`);
+  close().then(() => process.exit(0));
+  setTimeout(() => process.exit(1), 3000).unref();
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

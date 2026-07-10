@@ -29,6 +29,8 @@ const UI_SKINS = new Set(['neon', 'stealth', 'prism']);
 const UPLOAD_RETENTION_DAYS = 7;
 const UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
 const UPLOAD_JSON_LIMIT = '72mb';
+const TERMINAL_MAX_INPUT_BYTES = 1024 * 1024;
+const TERMINAL_MAX_DIMENSION = 1000;
 const UPLOAD_MIME_ALLOWLIST = new Set([
   'image/png',
   'image/jpeg',
@@ -52,6 +54,7 @@ const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
 const CODEX_OAUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token';
 const CODEX_OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 const CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 300;
+const UPLOAD_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 const UI_STATE_DEFAULT = { layout: 'auto', baseLayout: 'auto', focusedId: null, primaryId: null, activeId: null, minimized: [], theme: 'blue', skin: 'neon', fontSize: 13, chromeHidden: false, systemMonitor: false, panePrefs: { titles: {}, order: [], minimized: [], windows: {}, viewport: null }, updatedAt: null };
 
@@ -194,6 +197,9 @@ function saveUploadedBlob(input) {
   const mime = normalizeMime(src.type || (match && match[1]) || 'application/octet-stream');
   requireAllowedUploadMime(mime);
   const b64 = match ? match[2] : raw;
+  if (b64.length > Math.ceil(UPLOAD_MAX_BYTES / 3) * 4 || !/^(?:[a-zA-Z0-9+/]{4})*(?:[a-zA-Z0-9+/]{2}==|[a-zA-Z0-9+/]{3}=)?$/.test(b64)) {
+    throw new Error('Invalid base64 upload');
+  }
   const buffer = Buffer.from(b64, 'base64');
   if (!buffer.length) throw new Error('Empty upload');
   if (buffer.length > UPLOAD_MAX_BYTES) throw new Error('Upload too large');
@@ -605,8 +611,13 @@ function restoreTmuxSessions(sessions) {
 function createServer(config = loadConfig()) {
   const app = express();
   const server = http.createServer(app);
-  const wss = new WebSocketServer({ server, path: '/ws' });
+  const wss = new WebSocketServer({ server, path: '/ws', maxPayload: TERMINAL_MAX_INPUT_BYTES });
   const sessions = new SessionManager();
+  const uploadCleanupTimer = setInterval(() => {
+    try { cleanupOldUploads(); }
+    catch (err) { console.warn(`[uploads] cleanup failed: ${err.message}`); }
+  }, UPLOAD_CLEANUP_INTERVAL_MS);
+  uploadCleanupTimer.unref?.();
   restoreTmuxSessions(sessions);
 
   app.set('trust proxy', 'loopback');
@@ -678,15 +689,17 @@ function createServer(config = loadConfig()) {
   app.post('/api/sessions/:id/input', (req, res) => {
     const session = sessions.get(req.params.id);
     if (!session?.pty) return res.status(404).json({ error: 'Session not found' });
-    session.pty.write(String(req.body?.text ?? req.body?.data ?? ''));
+    const text = String(req.body?.text ?? req.body?.data ?? '');
+    if (Buffer.byteLength(text) > TERMINAL_MAX_INPUT_BYTES) return res.status(413).json({ error: 'Terminal input too large' });
+    session.pty.write(text);
     res.json({ ok: true });
   });
 
   app.post('/api/sessions/:id/resize', (req, res) => {
     const session = sessions.get(req.params.id);
     if (!session?.pty) return res.status(404).json({ error: 'Session not found' });
-    const cols = Math.max(2, Number(req.body?.cols) || 120);
-    const rows = Math.max(2, Number(req.body?.rows) || 30);
+    const cols = Math.min(TERMINAL_MAX_DIMENSION, Math.max(2, Number(req.body?.cols) || 120));
+    const rows = Math.min(TERMINAL_MAX_DIMENSION, Math.max(2, Number(req.body?.rows) || 30));
     session.meta.cols = cols;
     session.meta.rows = rows;
     try { session.pty.resize(cols, rows); res.json({ ok: true, cols, rows }); }
@@ -707,17 +720,19 @@ function createServer(config = loadConfig()) {
     if (!websocketAllowed(req, url)) return ws.close(4003, 'Unauthorized');
     const session = sessions.get(url.searchParams.get('session'));
     if (!session) return ws.close(4001, 'Session not found');
+    if (session.ws && session.ws !== ws) session.ws.close(4000, 'superseded');
     session.ws = ws;
     ws.send(JSON.stringify({ type: 'meta', session: session.toJSON() }));
     ws.send(JSON.stringify({ type: 'replay', data: '\r\n[PassiDeck reconnect: output replay disabled; live session still running]\r\n' }));
 
     ws.on('message', (raw) => {
+      if (session.ws !== ws) return;
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (msg.type === 'input' && session.pty) session.pty.write(String(msg.data || ''));
       if (msg.type === 'resize' && session.pty) {
-        const cols = Math.max(2, Number(msg.cols) || 120);
-        const rows = Math.max(2, Number(msg.rows) || 30);
+        const cols = Math.min(TERMINAL_MAX_DIMENSION, Math.max(2, Number(msg.cols) || 120));
+        const rows = Math.min(TERMINAL_MAX_DIMENSION, Math.max(2, Number(msg.rows) || 30));
         session.meta.cols = cols;
         session.meta.rows = rows;
         try { session.pty.resize(cols, rows); } catch {}
@@ -729,14 +744,24 @@ function createServer(config = loadConfig()) {
     });
   });
 
-  return { app, server, wss, sessions };
+  async function close() {
+    clearInterval(uploadCleanupTimer);
+    for (const client of wss.clients) client.terminate();
+    for (const session of sessions.sessions.values()) {
+      if (session.pid) try { process.kill(session.pid, 'SIGTERM'); } catch {}
+    }
+    await new Promise(resolve => wss.close(() => resolve()));
+    if (server.listening) await new Promise(resolve => server.close(() => resolve()));
+  }
+
+  return { app, server, wss, sessions, close };
 }
 
 module.exports = { createServer, loadConfig, readCodexLimits, saveUploadedBlob, normalizeMime, UPLOAD_MIME_ALLOWLIST };
 
 if (require.main === module) {
   const config = loadConfig();
-  const { server, sessions } = createServer(config);
+  const { server, close } = createServer(config);
   const port = config.port || 3000;
   const host = config.host || '127.0.0.1';
   const result = cleanupOldUploads();
@@ -744,10 +769,7 @@ if (require.main === module) {
 
   function gracefulShutdown(sig) {
     console.log(`[shutdown] ${sig} received, detaching tmux clients...`);
-    for (const session of Object.values(sessions.getAll())) {
-      try { process.kill(session.pid, 'SIGTERM'); } catch {}
-    }
-    server.close(() => process.exit(0));
+    close().then(() => process.exit(0));
     setTimeout(() => process.exit(1), 3000);
   }
 

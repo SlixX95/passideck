@@ -1,6 +1,6 @@
 {
   "name": "@passi/passideck",
-  "version": "0.8.19-dev",
+  "version": "0.8.23-dev",
   "description": "Standalone self-hosted browser terminal wall",
   "bin": {
     "passideck": "./packages/cli/src/index.js"
@@ -10,6 +10,7 @@
     "packages/cli/src/index.js",
     "packages/server/src/**",
     "packages/client/public/**",
+    "scripts/prepare-assets.js",
     "scripts/install.sh",
     "scripts/passideck.service",
     "README.md",
@@ -21,8 +22,12 @@
     "server": "node packages/server/src/index.js",
     "start": "node packages/cli/src/index.js",
     "install-local": "bash scripts/install.sh",
-    "test": "node --check packages/server/src/index.js && node --check packages/client/public/app.js && node scripts/prepare-assets.js && node tests/ui-static.test.js && node tests/browser-cdp.test.js",
-    "test:browser": "node tests/browser-cdp.test.js"
+    "test": "node --check packages/server/src/index.js && node --check packages/client/public/app.js && node scripts/prepare-assets.js && node tests/session.test.js && node tests/upload.test.js && node tests/server-validation.test.js && node tests/ui-static.test.js && node tests/browser-cdp.test.js",
+    "test:browser": "node tests/browser-cdp.test.js",
+    "prepare": "node scripts/prepare-assets.js",
+    "predev": "npm run prepare-assets",
+    "preserver": "npm run prepare-assets",
+    "prestart": "npm run prepare-assets"
   },
   "dependencies": {
     "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
@@ -44,6 +49,7 @@
   ],
   "license": "MIT",
   "engines": {
-    "node": ">=18.0.0"
-  }
+    "node": ">=20.0.0"
+  },
+  "author": "PassiDeck contributors"
 }

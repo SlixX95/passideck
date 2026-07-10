@@ -122,6 +122,7 @@ button, select { font: inherit; }
 }
 .switcher-grid { display: flex; flex: 1 1 auto; min-width: 0; gap: 3px; overflow-x: auto; overflow-y: hidden; justify-content: flex-start; }
 .switcher-grid::-webkit-scrollbar { display: none; }
+.switcher-item { position: relative; display: inline-flex; flex: 0 0 auto; }
 .switcher-btn {
   min-width: 72px;
   max-width: 132px;
@@ -130,7 +131,6 @@ button, select { font: inherit; }
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 0 0 auto;
-  position: relative;
 }
 .switcher-btn .switcher-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .switcher-close {
@@ -153,7 +153,7 @@ button, select { font: inherit; }
   line-height: 1;
   cursor: pointer;
 }
-.switcher-btn:hover .switcher-close, .switcher-btn:focus-within .switcher-close { opacity: 1; pointer-events: auto; }
+.switcher-item:hover .switcher-close, .switcher-item:focus-within .switcher-close { opacity: 1; pointer-events: auto; }
 .switcher-close:hover { color: #fff; background: var(--tg-red); }
 .switcher-btn:hover { color: var(--tg-accent); border-color: var(--tg-accent-dim); }
 .switcher-btn.active { color: var(--tg-bg); border-color: var(--tg-accent); background: linear-gradient(180deg, color-mix(in srgb, var(--tg-accent) 82%, white 18%), var(--tg-accent)); font-weight: 800; box-shadow: 0 0 14px color-mix(in srgb, var(--tg-accent) 25%, transparent); }
@@ -726,7 +726,8 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 1px s
   .command-divider { display: none; }
   .system-monitor { height: 25px; }
   .monitor-cell { height: 25px; padding: 0 4px; }
-  .grid-container[class*="layout-"] { grid-template-columns: 1fr !important; grid-template-rows: none !important; grid-auto-rows: minmax(320px, calc(100dvh - 62px)); overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .grid-container[class*="layout-"] { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .free-window:not(.layout-hidden) { left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important; min-width: 0; min-height: 0; }
   .snap-suggestions, .desktop-slot-suggestions { display: none !important; }
   .switcher-btn { min-width: 68px; max-width: 110px; }
   .term-header { height: 30px; padding-right: 90px; }

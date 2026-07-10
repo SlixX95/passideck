@@ -5,9 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/projects/passideck-dev
 EnvironmentFile=%h/.passideck/passideck.env
-ExecStart=/usr/bin/env npm start -- --no-open
+ExecStart=/usr/bin/env npm --prefix ${PASSIDECK_ROOT} start -- --no-open
 Restart=on-failure
 RestartSec=3
 

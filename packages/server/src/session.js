@@ -61,6 +61,9 @@ class SessionManager {
   }
 
   getAll() {
+    for (const [id, session] of this.sessions) {
+      if (session.meta.status === 'exited' && !session.ws) this.sessions.delete(id);
+    }
     return Array.from(this.sessions.values()).map(s => s.toJSON());
   }
 

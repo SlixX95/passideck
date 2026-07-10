@@ -30,6 +30,7 @@ quote_env() {
 cat > "$HOME_DIR/passideck.env" <<ENV
 PASSIDECK_HOME=$(quote_env "$HOME_DIR")
 PASSIDECK_TMUX_SOCKET=$(quote_env "$SOCKET")
+PASSIDECK_ROOT=$(quote_env "$ROOT")
 NODE_ENV=production
 ENV
 printf 'PassiDeck installed\nrepo=%s\nhome=%s\nstart=%s\n' "$ROOT" "$HOME_DIR" "PASSIDECK_HOME=$HOME_DIR PASSIDECK_TMUX_SOCKET=$SOCKET npm start -- --host $HOST --port $PORT"

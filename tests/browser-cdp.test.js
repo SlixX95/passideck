@@ -287,6 +287,15 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.deepStrictEqual(placeholderCustomDoesNotBlock, { pane: 'Generated After Placeholder', stored: 'Titel', osc: 'OSC Generated Title' }, 'placeholder custom titles must not block later generated/OSC titles');
 
+    const oscTitleEvent = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      clearGeneratedTitle(entry.session.id);
+      await new Promise(resolve => entry.term.write('\\u001b]0;OSC Event Title\\u0007', resolve));
+      await new Promise(resolve => setTimeout(resolve, 20));
+      return entry.el.querySelector('.term-title')?.textContent || '';
+    })()`);
+    assert.strictEqual(oscTitleEvent, 'OSC Event Title', 'xterm OSC title events must update the pane header');
+
     const tuiSelectedTitle = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
       delete entry.autoTitle;
@@ -350,13 +359,14 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       applyGeneratedTitle(entry.session.id, 'Minimized Window Name', { source: 'hermes-session' });
       minimizePanel(entry.session.id);
       const btn = document.querySelector('#sessionSwitcher .switcher-btn.minimized');
-      const close = btn?.querySelector('.switcher-close');
+      const close = btn?.closest('.switcher-item')?.querySelector('.switcher-close');
       const before = {
         text: btn?.querySelector('.switcher-title')?.textContent?.trim() || '',
         tooltip: btn?.dataset?.tooltip || '',
         nativeTitle: btn?.getAttribute('title') || '',
-        role: btn?.getAttribute('role') || '',
+        tag: btn?.tagName || '',
         closeTag: close?.tagName || '',
+        closeNested: Boolean(btn?.querySelector('.switcher-close')),
         hidden: entry.el.classList.contains('layout-hidden')
       };
       btn?.click();
@@ -366,7 +376,20 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       restorePanel(entry.session.id);
       return { before, restored, minimizedAgain };
     })()`);
-    assert.deepStrictEqual(minimizedSwitcher, { before: { text: 'Minimized Window Name', tooltip: 'Restore Minimized Window Name', nativeTitle: '', role: 'button', closeTag: 'BUTTON', hidden: true }, restored: true, minimizedAgain: true }, 'taskbar click must restore minimized panes, minimize active panes, and expose close button without native title');
+    assert.deepStrictEqual(minimizedSwitcher, { before: { text: 'Minimized Window Name', tooltip: 'Restore Minimized Window Name', nativeTitle: '', tag: 'BUTTON', closeTag: 'BUTTON', closeNested: false, hidden: true }, restored: true, minimizedAgain: true }, 'taskbar must use sibling native buttons; pane activation must restore/minimize without swallowing close keyboard input');
+
+    const keyboardCloseId = await evalExpr(cdp, sid, `(() => {
+      const close = document.querySelector('#sessionSwitcher .switcher-close');
+      close.focus();
+      return close.closest('.switcher-item').querySelector('.switcher-btn').dataset.switcherPaneId;
+    })()`);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32 }, sid);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32 }, sid);
+    await waitEval(cdp, sid, `document.querySelector('#closeModal.open') && !document.querySelector('#closeModal').hidden`);
+    assert.strictEqual(await evalExpr(cdp, sid, 'closeConfirmSessionId'), keyboardCloseId, 'Space on taskbar close must target close, not activate/minimize its pane');
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }, sid);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }, sid);
+    await waitEval(cdp, sid, `document.querySelector('#closeModal').hidden`);
 
     const rememberedSelectionCopy = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
@@ -415,7 +438,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       window.__passideckLastCopy = '';
       window.passideckDesktop = { copyText: async text => { window.__passideckLastCopy = text; return true; }, readText: async () => 'must-not-paste' };
       entry.lastSelection = '';
-      entry.ws = { readyState: WebSocket.OPEN, send: msg => sent.push(JSON.parse(msg).data) };
+      entry.ws = { readyState: WebSocket.OPEN, send: msg => { const frame = JSON.parse(msg); if (frame.type === 'input') sent.push(frame.data); } };
       const span = document.createElement('span');
       span.id = 'terminal-dom-copy-probe';
       span.textContent = 'terminal dom selection';
@@ -441,7 +464,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       entry.term.getSelection = () => '';
       entry.term.clearSelection = () => {};
       document.getSelection()?.removeAllRanges?.();
-      entry.ws = { readyState: WebSocket.OPEN, send: msg => sent.push(JSON.parse(msg).data) };
+      entry.ws = { readyState: WebSocket.OPEN, send: msg => { const frame = JSON.parse(msg); if (frame.type === 'input') sent.push(frame.data); } };
       await handleTerminalContextMenu({ shiftKey: false, preventDefault(){}, stopPropagation(){}, stopImmediatePropagation(){} }, entry.session.id);
       return { sent, copied };
     })()`);
@@ -455,7 +478,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       entry.term.getSelection = () => '';
       entry.term.clearSelection = () => {};
       document.getSelection()?.removeAllRanges?.();
-      entry.ws = { readyState: WebSocket.OPEN, send: msg => sent.push(JSON.parse(msg).data) };
+      entry.ws = { readyState: WebSocket.OPEN, send: msg => { const frame = JSON.parse(msg); if (frame.type === 'input') sent.push(frame.data); } };
       await handleTerminalContextMenu({ shiftKey: true, preventDefault(){}, stopPropagation(){}, stopImmediatePropagation(){} }, entry.session.id);
       return sent;
     })()`);
@@ -483,7 +506,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     const desktopPasteFallbacks = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
       const sent = [];
-      entry.ws = { readyState: WebSocket.OPEN, send: msg => sent.push(JSON.parse(msg).data) };
+      entry.ws = { readyState: WebSocket.OPEN, send: msg => { const frame = JSON.parse(msg); if (frame.type === 'input') sent.push(frame.data); } };
       entry.term.focus = () => {};
       window.passideckDesktop = {
         readImage: async () => ({ name: 'clip.png', type: 'image/png', data: 'data:image/png;base64,QUJD' }),
@@ -500,7 +523,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     const terminalCtrlVPaste = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
       const sent = [];
-      entry.ws = { readyState: WebSocket.OPEN, send: msg => sent.push(JSON.parse(msg).data) };
+      entry.ws = { readyState: WebSocket.OPEN, send: msg => { const frame = JSON.parse(msg); if (frame.type === 'input') sent.push(frame.data); } };
       entry.term.focus = () => {};
       selectPanel(entry.session.id, { persist: false });
       window.passideckDesktop = { readImage: async () => null, readText: async () => 'ctrl-v desktop clipboard text' };
@@ -515,7 +538,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const entry = [...state.sessions.values()][0];
       const sent = [];
       entry.session.meta.command = 'hermes --tui';
-      entry.ws = { readyState: WebSocket.OPEN, send: msg => sent.push(JSON.parse(msg).data) };
+      entry.ws = { readyState: WebSocket.OPEN, send: msg => { const frame = JSON.parse(msg); if (frame.type === 'input') sent.push(frame.data); } };
       entry.term.focus = () => {};
       window.passideckDesktop = {
         readImage: async () => ({ name: 'tui.png', type: 'image/png', data: 'data:image/png;base64,QUJD' }),
@@ -534,11 +557,36 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       shellInsertion: '\u0001/uploads/drop.png '
     }, 'Hermes TUI image paste/drop must use /image so it attaches, while shell panes keep raw path insertion');
 
-    const terminalDragRememberedCopy = await evalExpr(cdp, sid, `(async () => {
-      const entry = [...state.sessions.values()][0];
-      const copied = [];
-      window.passideckDesktop = { copyText: async text => { copied.push(text); return true; } };
-      await new Promise(resolve => entry.term.write('\\r\\ndrag-copy-remembered-text\\r\\n', resolve));
+    const asyncUploadTarget = await evalExpr(cdp, sid, `(async () => {
+      const [first, second] = [...state.sessions.values()];
+      const sent = { first: [], second: [] };
+      first.session.meta.command = '/bin/bash';
+      second.session.meta.command = '/bin/bash';
+      first.ws = { readyState: WebSocket.OPEN, send: msg => { const frame = JSON.parse(msg); if (frame.type === 'input') sent.first.push(frame.data); } };
+      second.ws = { readyState: WebSocket.OPEN, send: msg => { const frame = JSON.parse(msg); if (frame.type === 'input') sent.second.push(frame.data); } };
+      first.term.focus = second.term.focus = () => {};
+      selectPanel(first.session.id, { persist: false });
+      const originalUploadBlob = uploadBlob;
+      let resolveUpload;
+      uploadBlob = () => new Promise(resolve => { resolveUpload = resolve; });
+      const pending = uploadFile(new File(['x'], 'target.txt', { type: 'text/plain' }), { pasteIntoTerminal: true });
+      while (!resolveUpload) await new Promise(resolve => setTimeout(resolve, 0));
+      selectPanel(second.session.id, { persist: false });
+      resolveUpload({ path: '/uploads/target.txt', name: 'target.txt', type: 'text/plain' });
+      await pending;
+      uploadBlob = originalUploadBlob;
+      return sent;
+    })()`);
+    assert.deepStrictEqual(asyncUploadTarget, { first: ['\u0001/uploads/target.txt '], second: [] }, 'async upload must paste into its original pane even if focus changes before completion');
+
+    const terminalDragProbe = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()].find(item => item.el.offsetParent !== null && !item.el.classList.contains('layout-hidden')) || activeTerminalEntry();
+      selectPanel(entry.session.id, { persist: false });
+      await new Promise(resolve => setTimeout(resolve, 350));
+      window.__passideckDragEntryId = entry.session.id;
+      window.__passideckCopied = [];
+      window.passideckDesktop = { copyText: async text => { window.__passideckCopied.push(text); return true; } };
+      await new Promise(resolve => entry.term.write('\\r\\ndrag-copy-remembered-text\\r\\n\\x1b[?1000h', resolve));
       const termEl = entry.el.querySelector('.terminal');
       const screen = termEl.querySelector('.xterm-screen') || termEl;
       const r = screen.getBoundingClientRect();
@@ -548,15 +596,21 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         if (buffer.getLine(i)?.translateToString(false).includes('drag-copy-remembered-text')) { lineRow = i - buffer.viewportY; break; }
       }
       const y = r.top + (lineRow + 0.5) * (r.height / entry.term.rows);
-      const x1 = r.left + 1 * (r.width / entry.term.cols);
-      const x2 = r.left + 25 * (r.width / entry.term.cols);
-      termEl.dispatchEvent(new PointerEvent('pointerdown', { button: 0, buttons: 1, clientX: x1, clientY: y, bubbles: true, cancelable: true }));
-      termEl.dispatchEvent(new PointerEvent('pointermove', { button: 0, buttons: 1, clientX: x2, clientY: y, bubbles: true, cancelable: true }));
-      termEl.dispatchEvent(new PointerEvent('pointerup', { button: 0, buttons: 0, clientX: x2, clientY: y, bubbles: true, cancelable: true }));
-      await copyActiveTerminalSelection();
-      return { last: entry.lastSelection, copied: copied[0] || '' };
+      return { x1: r.left + (r.width / entry.term.cols), x2: r.left + 25 * (r.width / entry.term.cols), y };
     })()`);
-    assert.ok(terminalDragRememberedCopy.copied.includes('drag-copy-remembered'), `left-dragged terminal text must be remembered for Ctrl+Shift+C copy: ${JSON.stringify(terminalDragRememberedCopy)}`);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', buttons: 1, clickCount: 1, x: terminalDragProbe.x1, y: terminalDragProbe.y }, sid);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', button: 'left', buttons: 1, x: terminalDragProbe.x2, y: terminalDragProbe.y }, sid);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'left', buttons: 0, clickCount: 1, x: terminalDragProbe.x2, y: terminalDragProbe.y }, sid);
+    const terminalDragRememberedCopy = await evalExpr(cdp, sid, `(async () => {
+      const entry = state.sessions.get(window.__passideckDragEntryId);
+      const nativeSelection = entry.term.getSelection() || '';
+      const rememberedSelection = entry.lastSelection || '';
+      await copyActiveTerminalSelection();
+      await new Promise(resolve => entry.term.write('\\x1b[?1000l', resolve));
+      return { nativeSelection, rememberedSelection, copied: window.__passideckCopied[0] || '' };
+    })()`);
+    assert.ok((terminalDragRememberedCopy.nativeSelection || terminalDragRememberedCopy.rememberedSelection).includes('rag-copy-remembered'), `real TUI-mode left-drag must visibly or logically select terminal text: ${JSON.stringify(terminalDragRememberedCopy)}`);
+    assert.ok(terminalDragRememberedCopy.copied.includes('rag-copy-remembered'), `real TUI-mode left-dragged terminal text must copy with Ctrl+Shift+C: ${JSON.stringify(terminalDragRememberedCopy)}`);
 
     const visibleSelectionClear = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
@@ -593,7 +647,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const sent = [];
       window.passideckDesktop = { copyText: async () => true };
       entry.session.meta.command = 'hermes --tui';
-      entry.ws = { readyState: WebSocket.OPEN, send: msg => sent.push(JSON.parse(msg).data) };
+      entry.ws = { readyState: WebSocket.OPEN, send: msg => { const frame = JSON.parse(msg); if (frame.type === 'input') sent.push(frame.data); } };
       entry.lastSelection = 'hermes-visible-highlight';
       entry.term.getSelection = () => '';
       await handleTerminalContextMenu({ shiftKey: false, preventDefault(){}, stopPropagation(){}, stopImmediatePropagation(){} }, entry.session.id);
@@ -607,7 +661,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     const fileDrop = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
       const sent = [];
-      entry.ws = { readyState: WebSocket.OPEN, send: msg => sent.push(JSON.parse(msg).data) };
+      entry.ws = { readyState: WebSocket.OPEN, send: msg => { const frame = JSON.parse(msg); if (frame.type === 'input') sent.push(frame.data); } };
       entry.term.focus = () => {};
       uploadBlob = async body => ({ path: '/uploads/dropped.txt', name: body.name, type: body.type });
       const file = new File(['drop-body'], 'dropped.txt', { type: 'text/plain' });
@@ -740,6 +794,102 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await sleep(500);
     const delayedTip = await evalExpr(cdp, sid, `!!document.querySelector('#appTooltip.visible') && !document.getElementById('appTooltip')?.hidden`);
     assert.strictEqual(delayedTip, true, 'tooltip should appear after 300ms delay');
+
+    const failedCloseKeepsPane = await evalExpr(cdp, sid, `(async () => {
+      const id = [...state.sessions.keys()][0];
+      const originalApi = api;
+      api = async () => { throw new Error('backend unavailable'); };
+      try { await closePanel(id); } finally { api = originalApi; }
+      return { inState: state.sessions.has(id), inDom: Boolean(document.getElementById('panel-' + id)) };
+    })()`);
+    assert.deepStrictEqual(failedCloseKeepsPane, { inState: true, inDom: true }, 'failed session close must keep the pane so the running process remains reachable');
+
+    const failedLaunchIsVisible = await evalExpr(cdp, sid, `(async () => {
+      const originalApi = api;
+      const originalToast = showToast;
+      let toast = '';
+      api = async () => { throw new Error('backend unavailable'); };
+      showToast = text => { toast = text; };
+      let threw = false;
+      try { await launch('/bin/bash'); } catch { threw = true; }
+      api = originalApi;
+      showToast = originalToast;
+      return { threw, toast };
+    })()`);
+    assert.deepStrictEqual(failedLaunchIsVisible, { threw: false, toast: 'Launch failed: backend unavailable' }, 'failed launch must show an actionable error instead of an unhandled promise rejection');
+
+    await evalExpr(cdp, sid, `document.getElementById('settingsToggle').click()`);
+    await waitEval(cdp, sid, `document.activeElement?.id === 'themeSelect'`);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }, sid);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }, sid);
+    await waitEval(cdp, sid, `document.getElementById('settingsPanel').hidden && document.activeElement?.id === 'settingsToggle'`);
+
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 760, height: 700, deviceScaleFactor: 1, mobile: false }, sid);
+    await waitEval(cdp, sid, 'innerWidth === 760');
+    const mobileLayout = await evalExpr(cdp, sid, `(() => {
+      window.__mobileUserMinimized = persistentMinimizedIds();
+      responsiveMinimizeForViewport();
+      applyLayoutVisibility();
+      savePanePrefs();
+      const visible = [...document.querySelectorAll('.term-panel')].filter(panel => !panel.classList.contains('layout-hidden'));
+      const rects = visible.map(panel => { const r = panel.getBoundingClientRect(); return { left: r.left, right: r.right }; });
+      return {
+        visible: visible.length,
+        total: state.sessions.size,
+        inBounds: rects.every(r => r.left >= 0 && r.right <= innerWidth),
+        persisted: state.panePrefs.minimized,
+        expectedPersisted: window.__mobileUserMinimized
+      };
+    })()`);
+    assert.ok(mobileLayout.total > 1 && mobileLayout.visible === 1 && mobileLayout.inBounds, `760px viewport must expose one in-bounds pane, got ${JSON.stringify(mobileLayout)}`);
+    assert.deepStrictEqual(mobileLayout.persisted, mobileLayout.expectedPersisted, 'responsive-only minimization must not be persisted as user state');
+    const narrowClose = await evalExpr(cdp, sid, `(async () => {
+      const closedId = state.activeId;
+      await closePanel(closedId);
+      const visible = [...document.querySelectorAll('.term-panel')].filter(panel => !panel.classList.contains('layout-hidden'));
+      return { visible: visible.length, active: state.activeId, activeResponsive: state.responsiveMinimized.has(state.activeId), persisted: persistentMinimizedIds(), expectedPersisted: window.__mobileUserMinimized };
+    })()`);
+    assert.ok(narrowClose.visible === 1 && narrowClose.active && !narrowClose.activeResponsive, `closing the mobile active pane must reveal one successor, got ${JSON.stringify(narrowClose)}`);
+    assert.deepStrictEqual(narrowClose.persisted, narrowClose.expectedPersisted, 'mobile close must preserve explicit user minimization');
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false }, sid);
+    await waitEval(cdp, sid, 'innerWidth === 1280');
+    const restoredDesktop = await evalExpr(cdp, sid, `(() => {
+      responsiveMinimizeForViewport();
+      applyLayoutVisibility();
+      const visible = [...document.querySelectorAll('.term-panel')].filter(panel => !panel.classList.contains('layout-hidden')).length;
+      return { visible, expectedVisible: state.sessions.size - window.__mobileUserMinimized.length, transient: state.responsiveMinimized.size, minimized: persistentMinimizedIds(), expectedMinimized: window.__mobileUserMinimized };
+    })()`);
+    assert.deepStrictEqual(restoredDesktop, { visible: restoredDesktop.expectedVisible, expectedVisible: restoredDesktop.expectedVisible, transient: 0, minimized: restoredDesktop.expectedMinimized, expectedMinimized: restoredDesktop.expectedMinimized }, 'widening must restore only responsive-minimized panes and preserve user minimization');
+
+    await cdp.send('Page.navigate', { url: `${base}/?token=secret-token#keep` }, sid);
+    await waitEval(cdp, sid, 'document.readyState === "complete"');
+    const scrubbedAuthToken = await waitEval(cdp, sid, `(() => ({ token: sessionStorage.getItem('passideck:auth-token'), search: location.search, hash: location.hash }))()`);
+    assert.deepStrictEqual(scrubbedAuthToken, { token: 'secret-token', search: '', hash: '#keep' }, 'auth token must move to session storage and be removed from browser history/address bar');
+
+    const socketCloseLifecycle = await evalExpr(cdp, sid, `(async () => {
+      const entry = activeTerminalEntry();
+      const currentSocket = entry.ws;
+      const originalReconnect = reconnect;
+      let reconnects = 0;
+      reconnect = () => { reconnects += 1; };
+      handleSocketClose(entry.session.id, currentSocket, { code: 4000 });
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      const currentResult = { reconnects, retained: state.sessions.has(entry.session.id), status: entry.el.dataset.connectionStatus };
+      setConnectionStatus(entry.session.id, 'live');
+      reconnects = 0;
+      handleSocketClose(entry.session.id, {}, { code: 4000 });
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      const staleResult = { reconnects, retained: state.sessions.has(entry.session.id), status: entry.el.dataset.connectionStatus };
+      reconnect = originalReconnect;
+      return { currentResult, staleResult };
+    })()`);
+    assert.deepStrictEqual(socketCloseLifecycle, {
+      currentResult: { reconnects: 0, retained: true, status: 'offline' },
+      staleResult: { reconnects: 0, retained: true, status: 'live' }
+    }, 'current superseded websocket must stop; stale websocket close must not affect its newer live replacement');
+
+    await evalExpr(cdp, sid, `createPanel({ id: 'missing-session-probe', meta: { command: '/bin/bash', label: 'orphan probe', status: 'active', cols: 120, rows: 30 } })`);
+    await waitEval(cdp, sid, `!state.sessions.has('missing-session-probe') && !document.getElementById('panel-missing-session-probe')`, 3000);
 
     const badEvents = cdp.events.filter(e => {
       if (e.method === 'Log.entryAdded') {

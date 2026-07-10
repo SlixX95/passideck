@@ -39,7 +39,7 @@
           <span class="codex-limit" data-limit="secondary" data-tooltip="Codex weekly" aria-label="Codex weekly"><span>W</span><b>--%</b></span>
         </section>
         <span class="command-divider"></span>
-        <button id="settingsToggle" class="chrome-btn" data-tooltip="Settings" aria-label="Settings" aria-expanded="false">⚙ settings</button>
+        <button id="settingsToggle" class="chrome-btn" data-tooltip="Settings" aria-label="Settings" aria-expanded="false" aria-controls="settingsPanel">⚙ settings</button>
         <button id="uploadFileBtn" class="chrome-btn" data-tooltip="Upload file · insert path into active shell" aria-label="Upload file">⇧ upload</button>
         <button id="clipboardImageBtn" class="chrome-btn" data-tooltip="Upload clipboard image · insert path into active shell" aria-label="Upload clipboard image">▧ clip img</button>
         <button id="chromeToggle" class="chrome-btn" data-tooltip="Hide UI · Alt+0" aria-label="Hide UI">hide</button>
@@ -50,8 +50,8 @@
 
   <button id="chromePeek" class="chrome-peek" data-tooltip="Show UI · Alt+0" aria-label="Show UI">ui</button>
 
-  <section id="settingsPanel" class="settings-panel" role="dialog" aria-label="Settings" hidden>
-    <div class="settings-title">⚙ settings</div>
+  <section id="settingsPanel" class="settings-panel" role="region" aria-labelledby="settingsTitle" hidden>
+    <div id="settingsTitle" class="settings-title">⚙ settings</div>
     <label for="themeSelect">Theme</label>
     <select id="themeSelect">
       <option value="blue">Blue</option>
@@ -114,6 +114,6 @@
   <script src="vendor/addon-web-links.js"></script>
   <script src="vendor/addon-serialize.js"></script>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="app.js?v=20260704-normal-hermes-wheel-fix" defer></script>
+  <script src="app.js?v=20260710-audit-fixes" defer></script>
 </body>
 </html>

@@ -7,6 +7,9 @@ function authToken() {
   const urlToken = new URLSearchParams(window.location.search).get('token') || '';
   if (urlToken) {
     try { sessionStorage.setItem(AUTH_TOKEN_KEY, urlToken); } catch {}
+    const cleanUrl = new URL(window.location.href);
+    cleanUrl.searchParams.delete('token');
+    history.replaceState(history.state, '', `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
     return urlToken;
   }
   try { return sessionStorage.getItem(AUTH_TOKEN_KEY) || ''; } catch { return ''; }
@@ -33,6 +36,7 @@ const state = {
   skin: 'neon',
   fontSize: 13,
   minimized: new Set(),
+  responsiveMinimized: new Set(),
   saveTimer: null,
   launchBusy: false,
   uploadBusy: false,
@@ -259,11 +263,19 @@ function scaleWindowPrefsToViewport() {
 
 function responsiveMinimizeForViewport() {
   const { w, h } = desktopSize();
-  if (w >= 720 && h >= 420) return;
+  if (Math.min(w, window.innerWidth || w) > 760 && h >= 420) {
+    for (const id of state.responsiveMinimized) {
+      state.minimized.delete(id);
+      state.sessions.get(id)?.el.classList.remove('minimized');
+    }
+    state.responsiveMinimized.clear();
+    return;
+  }
   const keep = state.activeId && state.sessions.has(state.activeId) ? state.activeId : state.order.find(id => state.sessions.has(id));
   for (const id of state.order) {
-    if (id !== keep && state.sessions.has(id)) {
+    if (id !== keep && state.sessions.has(id) && !state.minimized.has(id)) {
       state.minimized.add(id);
+      state.responsiveMinimized.add(id);
       state.sessions.get(id)?.el.classList.add('minimized');
     }
   }
@@ -892,12 +904,16 @@ function setSaveState(value) {
   if (el) el.textContent = value;
 }
 
+function persistentMinimizedIds() {
+  return [...state.minimized].filter(id => !state.responsiveMinimized.has(id));
+}
+
 function uiPayload() {
   return {
     layout: state.activeLayout,
     baseLayout: state.layout,
     activeId: state.activeId,
-    minimized: [...state.minimized],
+    minimized: persistentMinimizedIds(),
     theme: state.theme,
     skin: state.skin,
     fontSize: state.fontSize,
@@ -918,7 +934,12 @@ function flushUiState() {
   clearTimeout(state.saveTimer);
   const body = JSON.stringify(uiPayload());
   try {
-    navigator.sendBeacon?.('/api/ui-state', new Blob([body], { type: 'application/json' })) || fetch('/api/ui-state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body, keepalive: true });
+    const token = authToken();
+    if (token) {
+      fetch('/api/ui-state', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-PassiDeck-Token': token }, body, keepalive: true });
+    } else {
+      navigator.sendBeacon?.('/api/ui-state', new Blob([body], { type: 'application/json' })) || fetch('/api/ui-state', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body, keepalive: true });
+    }
   } catch {}
 }
 function setLayout(layout, opts = {}) {
@@ -957,6 +978,7 @@ function minimizePanel(id) {
   const entry = state.sessions.get(id);
   if (!entry) return;
   entry.el.classList.add('minimized');
+  state.responsiveMinimized.delete(id);
   state.minimized.add(id);
   updateMinimizedBar();
   applyLayoutVisibility();
@@ -968,12 +990,15 @@ function restorePanel(id) {
   const entry = state.sessions.get(id);
   if (!entry) return;
   entry.el.classList.remove('minimized');
+  state.responsiveMinimized.delete(id);
   state.minimized.delete(id);
   ensureFreeWindow(id);
   updateMinimizedBar();
   applyLayoutVisibility();
   savePanePrefs();
   selectPanel(id, { persist: false });
+  responsiveMinimizeForViewport();
+  applyLayoutVisibility();
   // Fit after restore — panel was display:none, needs full resize cycle.
   scheduleTerminalFit();
 }
@@ -1136,14 +1161,13 @@ function toggleChrome() {
 }
 
 function sendResize(id, entry, force = false) {
+  if (entry.ws?.readyState !== WebSocket.OPEN) return;
   const cols = entry.term.cols;
   const rows = entry.term.rows;
   if (!force && entry.lastSentCols === cols && entry.lastSentRows === rows) return;
   entry.lastSentCols = cols;
   entry.lastSentRows = rows;
-  const payload = { type: 'resize', cols, rows };
-  if (entry.ws?.readyState === WebSocket.OPEN) entry.ws.send(JSON.stringify(payload));
-  else api('POST', `/api/sessions/${id}/resize`, payload).catch(() => {});
+  entry.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
 }
 
 function fitEntry(id, entry, opts = {}) {
@@ -1415,7 +1439,7 @@ function savePanePrefs() {
   if (state.hydrating) return;
   state.order = state.order.filter(id => state.sessions.has(id));
   state.panePrefs.order = state.order.slice();
-  state.panePrefs.minimized = [...state.minimized].filter(id => state.sessions.has(id));
+  state.panePrefs.minimized = persistentMinimizedIds().filter(id => state.sessions.has(id));
   state.panePrefs.windows = state.panePrefs.windows && typeof state.panePrefs.windows === 'object' ? state.panePrefs.windows : {};
   state.panePrefs.viewport = desktopSize();
   const prefs = windowPrefs();
@@ -1985,7 +2009,7 @@ function createPanel(session, opts = {}) {
     if (entry && selected) entry.lastSelection = selected;
   });
   installTerminalRightClickGuards(termEl, id);
-  installTerminalDragSelectionMemory(termEl, id);
+  const dragSelectionCleanup = installTerminalDragSelectionMemory(termEl, id);
   installTerminalTouchScroll(termEl, term);
   installTerminalWheelScroll(termEl, term, session);
 
@@ -1994,7 +2018,7 @@ function createPanel(session, opts = {}) {
     const entry = state.sessions.get(id);
     if (!entry) return;
     // Ignore generic/empty titles
-    if (!title || /^(\s*|bash$|zsh$|\/bin\/bash$|\/bin\/zsh$)/.test(title)) return;
+    if (!title || /^(?:\s*|bash|zsh|\/bin\/bash|\/bin\/zsh)$/.test(title)) return;
     // Only update if user hasn't set a custom title
     applyGeneratedTitle(id, title);
   });
@@ -2015,7 +2039,7 @@ function createPanel(session, opts = {}) {
   });
 
   const hasSnapshot = hasTerminalSnapshot(id);
-  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, restored: hasSnapshot, snapshotTimer: null, lastSelection: '', titleSource: '', lastSentCols: 0, lastSentRows: 0 });
+  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, dragSelectionCleanup, restored: hasSnapshot, snapshotTimer: null, lastSelection: '', titleSource: '', lastSentCols: 0, lastSentRows: 0 });
   term.onWriteParsed?.(() => refreshTitleFromTerminal(id));
   if (state.minimized.has(id)) el.classList.add('minimized');
   const replaceId = opts.replaceId;
@@ -2104,6 +2128,21 @@ function notifySessionExit(title, exitCode) {
   } catch {}
 }
 
+function handleSocketClose(id, socket, event) {
+  const entry = state.sessions.get(id);
+  if (!entry || entry.ws !== socket) return;
+  if (event.code === 4000) {
+    setConnectionStatus(id, 'offline');
+    return;
+  }
+  if (event.code === 4001) {
+    discardPanel(id);
+    return;
+  }
+  if (!entry.el.classList.contains('exited')) setConnectionStatus(id, 'reconnecting');
+  setTimeout(() => reconnect(id), 1000);
+}
+
 function attachSocket(id, term, el) {
   const qs = new URLSearchParams({ session: id });
   const token = authToken();
@@ -2134,14 +2173,10 @@ function attachSocket(id, term, el) {
   };
   ws.onopen = () => {
     setConnectionStatus(id, 'live');
-    scheduleTerminalFit();
+    scheduleTerminalFit({ force: true });
   };
   ws.onerror = () => setConnectionStatus(id, 'offline');
-  ws.onclose = () => {
-    const entry = state.sessions.get(id);
-    if (!entry?.el.classList.contains('exited')) setConnectionStatus(id, 'reconnecting');
-    setTimeout(() => reconnect(id), 1000);
-  };
+  ws.onclose = (event) => handleSocketClose(id, ws, event);
   return ws;
 }
 
@@ -2166,10 +2201,11 @@ function renderSwitcher() {
   for (const id of state.order) {
     const item = state.sessions.get(id);
     if (!item) continue;
-    const btn = document.createElement('div');
+    const wrapper = document.createElement('span');
+    wrapper.className = 'switcher-item';
+    const btn = document.createElement('button');
     btn.className = 'switcher-btn';
-    btn.tabIndex = 0;
-    btn.setAttribute('role', 'button');
+    btn.type = 'button';
     if (id === state.activeId) btn.classList.add('active');
     if (state.minimized.has(id)) btn.classList.add('minimized');
     if (id === state.activeId && state.minimized.has(id)) btn.classList.add('active-minimized');
@@ -2179,21 +2215,22 @@ function renderSwitcher() {
     btn.dataset.switcherPaneId = id;
     btn.setAttribute('aria-label', action);
     setTooltip(btn, action);
-    btn.innerHTML = `<span class="switcher-title"></span><button class="switcher-close" type="button" aria-label="Close ${escapeHtml(title)}">×</button>`;
+    btn.innerHTML = '<span class="switcher-title"></span>';
     btn.querySelector('.switcher-title').textContent = title;
-    btn.querySelector('.switcher-close').onclick = e => { e.preventDefault(); e.stopPropagation(); requestClosePanel(id); };
+    const close = document.createElement('button');
+    close.className = 'switcher-close';
+    close.type = 'button';
+    close.setAttribute('aria-label', `Close ${title}`);
+    close.textContent = '×';
+    close.onclick = e => { e.preventDefault(); e.stopPropagation(); requestClosePanel(id); };
     const activate = () => {
       if (state.minimized.has(id)) restorePanel(id);
       else if (id === state.activeId) minimizePanel(id);
       else selectPanel(id);
     };
     btn.onclick = activate;
-    btn.onkeydown = e => {
-      if (!['Enter', ' '].includes(e.key)) return;
-      e.preventDefault();
-      activate();
-    };
-    switcher.appendChild(btn);
+    wrapper.append(btn, close);
+    switcher.appendChild(wrapper);
   }
 }
 
@@ -2211,11 +2248,11 @@ function selectPanel(id, opts = {}) {
   if (opts.persist !== false) saveUiState();
 }
 
-async function closePanel(id) {
-  await api('DELETE', `/api/sessions/${id}`).catch(() => {});
+function discardPanel(id) {
   const entry = state.sessions.get(id);
   if (entry) {
     try { entry.ro.disconnect(); } catch {}
+    try { entry.dragSelectionCleanup?.(); } catch {}
     try { entry.ws.close(); } catch {}
     try { entry.term.dispose(); } catch {}
     clearTimeout(entry.snapshotTimer);
@@ -2224,14 +2261,35 @@ async function closePanel(id) {
     state.sessions.delete(id);
     state.order = state.order.filter(existing => existing !== id);
   }
+  state.responsiveMinimized.delete(id);
   state.minimized.delete(id);
-  if (state.activeId === id) state.activeId = state.order[0] || null;
+  if (state.activeId === id) {
+    state.activeId = state.order.find(existing => state.responsiveMinimized.has(existing)) ||
+      state.order.find(existing => !state.minimized.has(existing)) || state.order[0] || null;
+    if (state.activeId && state.responsiveMinimized.delete(state.activeId)) {
+      state.minimized.delete(state.activeId);
+      state.sessions.get(state.activeId)?.el.classList.remove('minimized');
+    }
+  }
   updateEmpty();
   renderSwitcher();
   updateMinimizedBar();
   if (state.activeId) selectPanel(state.activeId, { persist: false });
+  responsiveMinimizeForViewport();
+  applyLayoutVisibility();
   savePanePrefs();
   saveUiState();
+}
+
+async function closePanel(id) {
+  try {
+    await api('DELETE', `/api/sessions/${id}`);
+  } catch (err) {
+    showToast(`Close failed: ${err.message}`, 'error');
+    return false;
+  }
+  discardPanel(id);
+  return true;
 }
 
 async function launch(command) {
@@ -2245,6 +2303,9 @@ async function launch(command) {
     createPanel(session, { replaceId, autoPlace: true });
     applyLayoutVisibility();
     savePanePrefs();
+  } catch (err) {
+    showToast(`Launch failed: ${err.message}`, 'error');
+    return null;
   } finally {
     setTimeout(() => { state.launchBusy = false; }, 250);
   }
@@ -2393,15 +2454,17 @@ function installTerminalRightClickGuards(termEl, id) {
 
 function installTerminalDragSelectionMemory(termEl, id) {
   let drag = null;
+  const controller = new AbortController();
+  const capture = { capture: true, signal: controller.signal };
   const point = e => ({ x: e.clientX, y: e.clientY });
   termEl.addEventListener('pointerdown', e => {
     if (e.button !== 0) return;
     drag = { start: point(e), end: point(e) };
-  }, true);
-  termEl.addEventListener('pointermove', e => {
+  }, capture);
+  document.addEventListener('pointermove', e => {
     if (!drag || (e.buttons & 1) !== 1) return;
     drag.end = point(e);
-  }, true);
+  }, capture);
   const finish = e => {
     if (!drag) return;
     drag.end = point(e);
@@ -2409,12 +2472,13 @@ function installTerminalDragSelectionMemory(termEl, id) {
     if (d >= 6) {
       const entry = state.sessions.get(id);
       const text = terminalTextBetweenPoints(entry, termEl, drag.start, drag.end);
-      if (text.trim()) entry.lastSelection = text;
+      if (entry && text.trim()) entry.lastSelection = text;
     }
     drag = null;
   };
-  termEl.addEventListener('pointerup', finish, true);
-  termEl.addEventListener('pointercancel', () => { drag = null; }, true);
+  document.addEventListener('pointerup', finish, capture);
+  document.addEventListener('pointercancel', () => { drag = null; }, capture);
+  return () => controller.abort();
 }
 
 function terminalTextBetweenPoints(entry, termEl, a, b) {
@@ -2435,6 +2499,7 @@ function terminalTextBetweenPoints(entry, termEl, a, b) {
   const end = toCell(b);
   const first = start.row < end.row || (start.row === end.row && start.col <= end.col) ? start : end;
   const last = first === start ? end : start;
+  term.select?.(first.col, (buffer.viewportY || 0) + first.row, (last.row - first.row) * cols + last.col - first.col + 1);
   const out = [];
   for (let row = first.row; row <= last.row; row += 1) {
     const line = buffer.getLine((buffer.viewportY || 0) + row);
@@ -2786,6 +2851,7 @@ function clearClipboardPasteMode() {
 
 async function uploadClipboardImage() {
   if (state.uploadBusy) return;
+  const targetId = state.activeId;
   if (!navigator.clipboard?.read || !window.isSecureContext) {
     armClipboardPasteMode();
     return;
@@ -2807,7 +2873,7 @@ async function uploadClipboardImage() {
       armClipboardPasteMode();
       return;
     }
-    await uploadFile(file, { pasteIntoTerminal: true, keepBusy: true });
+    await uploadFile(file, { pasteIntoTerminal: true, keepBusy: true, targetId });
   } catch (err) {
     console.warn(err);
     armClipboardPasteMode();
@@ -2818,11 +2884,12 @@ async function uploadClipboardImage() {
 
 async function uploadFile(file, opts = {}) {
   if (!file || (state.uploadBusy && !opts.keepBusy)) return null;
+  const targetId = opts.targetId || state.activeId;
   if (!opts.keepBusy) state.uploadBusy = true;
   try {
     const data = await readFileAsDataUrl(file);
     const upload = await uploadBlob({ name: file.name, type: file.type || 'application/octet-stream', data });
-    if (opts.pasteIntoTerminal) pasteIntoActiveTerminal(formatUploadInsertion(upload));
+    if (opts.pasteIntoTerminal) pasteIntoTerminalEntry(state.sessions.get(targetId), formatUploadInsertion(upload));
     return upload;
   } catch (err) {
     console.error(err);
@@ -2851,8 +2918,9 @@ async function handlePassiDeckDrop(e) {
   e.stopImmediatePropagation?.();
   const target = e.target?.nodeType === Node.ELEMENT_NODE ? e.target : e.target?.parentElement;
   const panel = target?.closest?.('.term-panel');
-  if (panel?.dataset?.paneId) selectPanel(panel.dataset.paneId, { persist: false });
-  for (const file of [...e.dataTransfer.files]) await uploadFile(file, { pasteIntoTerminal: true });
+  const targetId = panel?.dataset?.paneId || state.activeId;
+  if (panel?.dataset?.paneId) selectPanel(targetId, { persist: false });
+  for (const file of [...e.dataTransfer.files]) await uploadFile(file, { pasteIntoTerminal: true, targetId });
 }
 
 function showToast(text, type = 'ok') {
@@ -2908,19 +2976,28 @@ function escapeHtml(str) {
 }
 
 document.querySelectorAll('[data-command]').forEach(btn => btn.onclick = () => launch(btn.dataset.command));
-document.getElementById('settingsToggle').onclick = () => {
+function setSettingsOpen(open, restoreFocus = false) {
   const panel = document.getElementById('settingsPanel');
-  panel.hidden = !panel.hidden;
-  panel.classList.toggle('open', !panel.hidden);
-  document.getElementById('settingsToggle').setAttribute('aria-expanded', String(!panel.hidden));
-};
+  const toggle = document.getElementById('settingsToggle');
+  panel.hidden = !open;
+  panel.classList.toggle('open', open);
+  toggle.setAttribute('aria-expanded', String(open));
+  if (open) setTimeout(() => document.getElementById('themeSelect')?.focus(), 0);
+  else if (restoreFocus) setTimeout(() => toggle.focus(), 0);
+}
+document.getElementById('settingsToggle').onclick = () => setSettingsOpen(document.getElementById('settingsPanel').hidden);
 document.getElementById('chromeToggle').onclick = toggleChrome;
 document.getElementById('chromePeek').onclick = toggleChrome;
-document.getElementById('uploadFileBtn').onclick = () => document.getElementById('fileInput').click();
+document.getElementById('uploadFileBtn').onclick = () => {
+  const input = document.getElementById('fileInput');
+  input.dataset.targetPaneId = state.activeId || '';
+  input.click();
+};
 document.getElementById('fileInput').onchange = e => {
   const file = e.target.files?.[0];
+  const targetId = e.target.dataset.targetPaneId || state.activeId;
   e.target.value = '';
-  uploadFile(file, { pasteIntoTerminal: true });
+  uploadFile(file, { pasteIntoTerminal: true, targetId });
 };
 document.getElementById('clipboardImageBtn').onclick = () => uploadClipboardImage();
 document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
@@ -3039,15 +3116,14 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     const settingsPanel = document.getElementById('settingsPanel');
     if (!settingsPanel.hidden) {
-      settingsPanel.hidden = true;
-      settingsPanel.classList.remove('open');
-      document.getElementById('settingsToggle').setAttribute('aria-expanded', 'false');
+      e.preventDefault();
+      setSettingsOpen(false, true);
     }
   }
   if (e.altKey && /^[1-9]$/.test(e.key)) {
     e.preventDefault();
     const id = state.order[Number(e.key) - 1];
-    if (id) selectPanel(id);
+    if (id) state.minimized.has(id) ? restorePanel(id) : selectPanel(id);
   }
   if (e.altKey && e.key === '0') {
     e.preventDefault();
