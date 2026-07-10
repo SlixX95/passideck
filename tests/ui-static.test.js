@@ -51,5 +51,6 @@ assert.ok(app.includes("state.minimized.has(id) ? restorePanel(id) : selectPanel
 assert.ok(app.includes('pasteIntoTerminalEntry(state.sessions.get(targetId)'), 'async uploads must retain their original target pane');
 assert.ok(installer.includes('PASSIDECK_ROOT=$(quote_env "$ROOT")'), 'installer must persist its actual checkout root for systemd');
 assert.ok(service.includes('npm --prefix ${PASSIDECK_ROOT} start') && !service.includes('projects/passideck-dev'), 'user service must start the installed checkout, not a hardcoded dev repo');
+assert.ok(service.includes('Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin'), 'user service must provide PATH for npm and node');
 
 console.log('ui-static ok');
