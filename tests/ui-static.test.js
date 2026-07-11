@@ -49,7 +49,7 @@ assert.ok(app.includes("document.addEventListener('paste', handleTerminalPaste, 
 assert.ok(html.includes('id="uploadFileBtn"') && html.includes('id="clipboardImageBtn"') && html.includes('id="fileInput"'), 'upload, clipboard image, and file picker controls must stay available');
 assert.ok(!app.includes("document.addEventListener('keydown', handleTerminalCopyShortcut") && !app.includes('handlePassiDeckContextMenu'), 'copy and right-click interception must stay removed');
 assert.ok(installer.includes('PASSIDECK_ROOT=$(quote_env "$ROOT")'), 'installer must persist its actual checkout root for systemd');
-assert.ok(service.includes('npm --prefix ${PASSIDECK_ROOT} start') && !service.includes('projects/passideck-dev'), 'user service must start the installed checkout, not a hardcoded dev repo');
+assert.ok(service.includes("ExecStart=/bin/sh -c 'exec node \"$PASSIDECK_ROOT/packages/cli/src/index.js\" --no-open'"), 'user service must exec Node directly from the installed checkout');
 assert.ok(service.includes('Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin'), 'user service must provide PATH for npm and node');
 assert.ok(service.includes('KillMode=process'), 'service restart must preserve detached tmux sessions');
 
