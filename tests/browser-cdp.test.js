@@ -551,7 +551,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.deepStrictEqual(scrubbedAuthToken, { token: 'secret-token', search: '', hash: '#keep' }, 'auth token must move to session storage and be removed from browser history/address bar');
 
     const socketCloseLifecycle = await evalExpr(cdp, sid, `(async () => {
-      const entry = activeTerminalEntry();
+      const entry = state.sessions.get(state.activeId);
       const currentSocket = entry.ws;
       const originalReconnect = reconnect;
       let reconnects = 0;
