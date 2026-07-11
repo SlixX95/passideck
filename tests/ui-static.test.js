@@ -29,6 +29,7 @@ for (const needle of [
 
 assert.ok(session.includes('randomUUID()'), 'session ids should use stdlib crypto.randomUUID');
 assert.ok(html.includes('vendor/xterm.js') && !html.includes('cdn.jsdelivr.net'), 'client assets must stay local');
+assert.ok(html.includes("location.port === '8792' ? 'PassiDeck Dev' : 'PassiDeck'"), 'browser tab title must distinguish dev port 8792 from normal/live');
 assert.ok(!html.includes('minimizedBar'), 'unused minimized bar markup should stay deleted');
 assert.ok(!app.includes('function authQuery'), 'unused authQuery should stay deleted');
 assert.ok(!app.includes('function desktopWindowIds'), 'unused desktopWindowIds should stay deleted');
