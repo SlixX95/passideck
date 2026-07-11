@@ -2654,7 +2654,7 @@ document.addEventListener('paste', handleTerminalPaste, true);
 document.addEventListener('dragover', handleUploadDragOver, true);
 document.addEventListener('drop', handleUploadDrop, true);
 window.addEventListener('resize', () => { responsiveMinimizeForViewport(); applyLayoutVisibility(); scheduleTerminalFit(); });
-window.addEventListener('beforeunload', () => { savePanePrefs(); flushUiState(); saveAllTerminalSnapshots(); });
+window.addEventListener('beforeunload', saveAllTerminalSnapshots);
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveAllTerminalSnapshots(); });
 document.addEventListener('keydown', e => {
   const key = e.key.toLowerCase();

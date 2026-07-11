@@ -239,8 +239,19 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       { x: 111, y: 112, w: 777, h: 444 },
       `mobile browser must never overwrite authoritative desktop geometry: ${JSON.stringify(afterMobile.panePrefs)}`
     );
+    await evalExpr(cdp, peerSid, `(() => {
+      Object.assign(windowPrefs()['${madeSessions[0]}'], { x: 9, y: 8, w: 333, h: 222 });
+    })()`);
     await cdp.send('Page.navigate', { url: `${base}/?peer-reload=1` }, peerSid);
     await waitEval(cdp, peerSid, 'location.search === "?peer-reload=1" && document.readyState === "complete" && typeof windowPrefs === "function" && document.querySelectorAll(".term-panel").length >= 11');
+    await sleep(300);
+    const afterPeerReload = await requestJson(base, 'GET', '/api/ui-state');
+    const reloadRect = afterPeerReload.panePrefs?.windows?.desktop?.[madeSessions[0]];
+    assert.deepStrictEqual(
+      reloadRect && { x: reloadRect.x, y: reloadRect.y, w: reloadRect.w, h: reloadRect.h },
+      { x: 111, y: 112, w: 777, h: 444 },
+      'reloading one client must not publish its unsaved local pane geometry'
+    );
     const reloadedPeer = await evalExpr(cdp, peerSid, `(() => ({ ...windowPrefs()['${madeSessions[0]}'] }))()`);
     assert.deepStrictEqual({ x: reloadedPeer.x, y: reloadedPeer.y, w: reloadedPeer.w, h: reloadedPeer.h }, { x: 111, y: 112, w: 777, h: 444 }, 'reload must reconstruct latest server-confirmed geometry');
     await cdp.send('Target.closeTarget', { targetId: peerTarget.targetId });
