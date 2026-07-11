@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+KillMode=process
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=%h/.passideck/passideck.env
 ExecStart=/usr/bin/env npm --prefix ${PASSIDECK_ROOT} start -- --no-open

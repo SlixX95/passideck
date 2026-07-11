@@ -39,6 +39,7 @@ const state = {
   responsiveMinimized: new Set(),
   saveTimer: null,
   launchBusy: false,
+  uploadBusy: false,
   systemMonitorTimer: null,
   codexLimitsTimer: null,
   fitFrame: null,
@@ -49,6 +50,8 @@ const state = {
   sharedResizeDrag: null,
   zCounter: 10,
   hydrating: false,
+  uiRevision: 0,
+  uiEvents: null,
   panePrefs: { titles: {}, order: [], windows: {} },
   saveState: 'saved'
 };
@@ -223,7 +226,12 @@ async function api(method, path, body) {
   if (token) opts.headers['X-PassiDeck-Token'] = token;
   if (body !== undefined) opts.body = JSON.stringify(body);
   const res = await fetch(`${API}${path}`, opts);
-  if (!res.ok) throw new Error(`${method} ${path} -> ${res.status}`);
+  if (!res.ok) {
+    const error = new Error(`${method} ${path} -> ${res.status}`);
+    error.status = res.status;
+    try { error.data = await res.json(); } catch {}
+    throw error;
+  }
   return res.json();
 }
 
@@ -247,15 +255,19 @@ function scaleWindowPrefsToViewport() {
   const old = state.panePrefs.viewport;
   const now = desktopSize();
   const prefs = windowPrefs();
+  let changed = false;
   if (old?.w > 0 && old?.h > 0 && (Math.abs(old.w - now.w) > 2 || Math.abs(old.h - now.h) > 2)) {
     const sx = now.w / old.w;
     const sy = now.h / old.h;
     for (const p of Object.values(prefs)) {
       p.x *= sx; p.y *= sy; p.w *= sx; p.h *= sy;
     }
+    changed = true;
   }
+  const before = JSON.stringify(prefs);
   clampWindowPrefs(prefs);
   state.panePrefs.viewport = now;
+  return changed || before !== JSON.stringify(prefs);
 }
 
 function responsiveMinimizeForViewport() {
@@ -418,7 +430,6 @@ function applyFreeWindow(id) {
   const p = windowPrefs()[id];
   if (!entry || !p) return;
   const rect = clampWindowRect(p);
-  Object.assign(p, rect);
   entry.el.classList.add('free-window');
   entry.el.classList.remove('layout-hidden');
   entry.el.style.gridColumn = '';
@@ -907,6 +918,7 @@ function persistentMinimizedIds() {
 
 function uiPayload() {
   return {
+    revision: state.uiRevision,
     layout: state.activeLayout,
     baseLayout: state.layout,
     activeId: state.activeId,
@@ -924,7 +936,23 @@ function saveUiState() {
   if (state.hydrating) return;
   setSaveState('saving');
   clearTimeout(state.saveTimer);
-  state.saveTimer = setTimeout(() => api('PUT', '/api/ui-state', uiPayload()).then(() => setSaveState('saved')).catch(() => setSaveState('offline')), 150);
+  state.saveTimer = setTimeout(async () => {
+    const local = uiPayload();
+    try {
+      let saved;
+      try {
+        saved = await api('PUT', '/api/ui-state', local);
+      } catch (error) {
+        if (error.status !== 409 || !error.data) throw error;
+        saved = await api('PUT', '/api/ui-state', { ...local, revision: error.data.revision });
+      }
+      state.uiRevision = saved.revision;
+      setSaveState('saved');
+    } catch (error) {
+      if (error.status === 409 && error.data) applyAuthoritativeUiState(error.data);
+      else setSaveState('offline');
+    }
+  }, 150);
 }
 
 function flushUiState() {
@@ -1413,18 +1441,67 @@ function loadPanePrefs(prefs = {}) {
   };
 }
 
+async function syncSessionsFromServer() {
+  const sessions = await api('GET', '/api/sessions');
+  const currentIds = new Set(sessions.map(session => session.id));
+  sessions.forEach(createPanel);
+  for (const id of [...state.sessions.keys()]) {
+    if (!currentIds.has(id)) discardPanel(id, { persist: false });
+  }
+}
+
+function applyAuthoritativeUiState(ui) {
+  if (!ui || Number(ui.revision) <= state.uiRevision) return;
+  const wasHydrating = state.hydrating;
+  state.hydrating = true;
+  state.uiRevision = Number(ui.revision) || 0;
+  loadPanePrefs(ui.panePrefs || {});
+  setTheme(ui.theme || 'green', { persist: false });
+  setSkin(ui.skin || 'neon', { persist: false });
+  setFontSize(ui.fontSize || state.fontSize, { persist: false });
+  setChromeHidden(Boolean(ui.chromeHidden), { persist: false });
+  setSystemMonitorVisible(Boolean(ui.systemMonitor), { persist: false });
+  restorePanelOrder();
+  state.minimized = new Set((state.panePrefs.minimized || []).filter(id => state.sessions.has(id)));
+  for (const [id, entry] of state.sessions) {
+    entry.el.classList.toggle('minimized', state.minimized.has(id));
+    if (windowPrefs()[id]) applyFreeWindow(id);
+  }
+  responsiveMinimizeForViewport();
+  applyLayoutVisibility();
+  updateMinimizedBar();
+  if (ui.activeId && state.sessions.has(ui.activeId) && !state.minimized.has(ui.activeId)) selectPanel(ui.activeId, { persist: false });
+  renderSwitcher();
+  scheduleTerminalFit();
+  state.hydrating = wasHydrating;
+  setSaveState('saved');
+}
+
+function connectUiEvents() {
+  state.uiEvents?.close?.();
+  const token = authToken();
+  const events = new EventSource(`/api/ui-events${token ? `?token=${encodeURIComponent(token)}` : ''}`);
+  events.onmessage = async event => {
+    try {
+      const ui = JSON.parse(event.data);
+      await syncSessionsFromServer();
+      applyAuthoritativeUiState(ui);
+    } catch {}
+  };
+  state.uiEvents = events;
+}
+
 function savePanePrefs() {
   if (state.hydrating) return;
   state.order = state.order.filter(id => state.sessions.has(id));
   state.panePrefs.order = state.order.slice();
   state.panePrefs.minimized = persistentMinimizedIds().filter(id => state.sessions.has(id));
   state.panePrefs.windows = state.panePrefs.windows && typeof state.panePrefs.windows === 'object' ? state.panePrefs.windows : {};
-  state.panePrefs.viewport = desktopSize();
+  if (innerWidth > 900) state.panePrefs.viewport = desktopSize();
   const prefs = windowPrefs();
   for (const id of Object.keys(prefs)) {
     if (!state.sessions.has(id)) delete prefs[id];
   }
-  clampWindowPrefs(prefs);
   saveUiState();
 }
 
@@ -1994,7 +2071,7 @@ function createPanel(session, opts = {}) {
 
   const ro = new ResizeObserver(() => {
     const p = windowPrefs()[id];
-    if (!state.hydrating && p && el.classList.contains('free-window') && !state.minimized.has(id) && !el.classList.contains('layout-hidden') && el.offsetParent) {
+    if (innerWidth > 900 && !state.hydrating && p && el.classList.contains('free-window') && !state.minimized.has(id) && !el.classList.contains('layout-hidden') && el.offsetParent) {
       const r = el.getBoundingClientRect();
       if (r.width >= 300 && r.height >= 190) { p.w = r.width; p.h = r.height; savePanePrefs(); }
     }
@@ -2217,7 +2294,7 @@ function selectPanel(id, opts = {}) {
   if (opts.persist !== false) saveUiState();
 }
 
-function discardPanel(id) {
+function discardPanel(id, opts = {}) {
   const entry = state.sessions.get(id);
   if (entry) {
     try { entry.ro.disconnect(); } catch {}
@@ -2245,8 +2322,7 @@ function discardPanel(id) {
   if (state.activeId) selectPanel(state.activeId, { persist: false });
   responsiveMinimizeForViewport();
   applyLayoutVisibility();
-  savePanePrefs();
-  saveUiState();
+  if (opts.persist !== false) savePanePrefs();
 }
 
 async function closePanel(id) {
@@ -2279,6 +2355,128 @@ async function launch(command) {
   }
 }
 
+function activeTerminalEntry() {
+  const id = state.activeId || state.order[0];
+  return id ? state.sessions.get(id) : null;
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error('file read failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function isHermesTuiEntry(entry) {
+  const meta = entry?.session?.meta || {};
+  return /\bhermes\b[^\n]*\s--tui\b/i.test(String(meta.command || meta.label || ''));
+}
+
+function uploadInsertion(upload, entry) {
+  const path = upload?.insert || upload?.path || '';
+  if (String(upload?.type || '').startsWith('image/') && isHermesTuiEntry(entry)) return `\x01/image ${path}\r`;
+  return `\x1b[200~${String(path).replace(/\x1b/g, '')} \x1b[201~`;
+}
+
+function sendUploadToEntry(entry, upload) {
+  if (!entry?.ws || entry.ws.readyState !== WebSocket.OPEN) throw new Error('active terminal is offline');
+  entry.ws.send(JSON.stringify({ type: 'input', data: uploadInsertion(upload, entry) }));
+  entry.term.focus();
+}
+
+async function uploadFile(file, targetId = state.activeId) {
+  if (!file) return null;
+  const data = await readFileAsDataUrl(file);
+  const upload = await api('POST', '/api/uploads', { name: file.name, type: file.type || 'application/octet-stream', data });
+  sendUploadToEntry(state.sessions.get(targetId), upload);
+  return upload;
+}
+
+async function uploadFiles(files, targetId = state.activeId) {
+  if (state.uploadBusy || !files?.length) return;
+  state.uploadBusy = true;
+  try {
+    for (const file of files) await uploadFile(file, targetId);
+  } catch (err) {
+    showToast(`Upload failed: ${err.message}`, 'error');
+  } finally {
+    state.uploadBusy = false;
+  }
+}
+
+function clipboardFiles(data) {
+  const files = [...(data?.files || [])];
+  for (const item of data?.items || []) {
+    const file = item.kind === 'file' ? item.getAsFile() : null;
+    if (file && !files.includes(file)) files.push(file);
+  }
+  return files;
+}
+
+function bracketedPastePayload(text) {
+  return `\x1b[200~${String(text || '').replace(/\x1b/g, '')}\x1b[201~`;
+}
+
+function insertIntoTerminalEntry(entry, text) {
+  if (!entry?.ws || entry.ws.readyState !== WebSocket.OPEN || !text) return false;
+  entry.ws.send(JSON.stringify({ type: 'input', data: bracketedPastePayload(text) }));
+  entry.term.focus();
+  return true;
+}
+
+function shouldLetBrowserHandlePaste(target) {
+  const el = target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
+  if (!el || el.closest('.terminal, .xterm')) return false;
+  return Boolean(el.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])'));
+}
+
+function handleTerminalPaste(event) {
+  if (shouldLetBrowserHandlePaste(event.target)) return;
+  const files = clipboardFiles(event.clipboardData);
+  if (files.length && activeTerminalEntry()) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    void uploadFiles(files);
+    return;
+  }
+  const text = event.clipboardData?.getData('text/plain');
+  if (text && insertIntoTerminalEntry(activeTerminalEntry(), text)) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+}
+
+function letBrowserOwnTerminalPasteShortcut(event) {
+  const key = String(event.key || '').toLowerCase();
+  if (key !== 'v' || !(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey) return;
+  const target = event.target?.nodeType === Node.ELEMENT_NODE ? event.target : event.target?.parentElement;
+  if (!target?.closest('.terminal, .xterm')) return;
+  // xterm would consume Ctrl+V as raw ^V. Keep browser default so it emits paste.
+  event.stopImmediatePropagation();
+}
+
+function handleUploadPaste(event) {
+  handleTerminalPaste(event);
+}
+
+function handleUploadDragOver(event) {
+  if (!event.dataTransfer?.files?.length) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'copy';
+}
+
+function handleUploadDrop(event) {
+  if (!event.dataTransfer?.files?.length) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  const panel = event.target?.closest?.('.term-panel');
+  const targetId = panel?.dataset?.paneId || state.activeId;
+  if (panel) selectPanel(targetId, { persist: false });
+  void uploadFiles([...event.dataTransfer.files], targetId);
+}
+
 function showToast(text, type = 'ok') {
   const el = document.getElementById('toast');
   if (!el) return;
@@ -2297,8 +2495,9 @@ async function init() {
     api('GET', '/api/ui-state').catch(() => null)
   ]);
 
+  state.uiRevision = Number(ui?.revision) || 0;
   loadPanePrefs(ui?.panePrefs || {});
-  scaleWindowPrefsToViewport();
+  const normalizedDesktopPrefs = innerWidth > 900 && scaleWindowPrefsToViewport();
   setTheme(ui?.theme || 'green', { persist: false });
   setSkin(ui?.skin || 'neon', { persist: false });
   setFontSize(ui?.fontSize || state.fontSize, { persist: false });
@@ -2324,7 +2523,8 @@ async function init() {
   updateEmpty();
   renderSwitcher();
   state.hydrating = false;
-  savePanePrefs();
+  if (normalizedDesktopPrefs) savePanePrefs();
+  connectUiEvents();
 }
 
 function escapeHtml(str) {
@@ -2342,6 +2542,15 @@ function setSettingsOpen(open, restoreFocus = false) {
   else if (restoreFocus) setTimeout(() => toggle.focus(), 0);
 }
 document.getElementById('settingsToggle').onclick = () => setSettingsOpen(document.getElementById('settingsPanel').hidden);
+document.getElementById('uploadFileBtn').onclick = () => document.getElementById('fileInput').click();
+document.getElementById('fileInput').onchange = event => {
+  void uploadFiles([...event.target.files]);
+  event.target.value = '';
+};
+document.getElementById('clipboardImageBtn').onclick = () => {
+  activeTerminalEntry()?.term.focus();
+  showToast('Press Ctrl+V to paste an image');
+};
 document.getElementById('chromeToggle').onclick = toggleChrome;
 document.getElementById('chromePeek').onclick = toggleChrome;
 document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
@@ -2440,7 +2649,11 @@ document.getElementById('closeModal').addEventListener('click', e => {
 });
 
 document.addEventListener('keydown', handleCloseModalKeydown, true);
-window.addEventListener('resize', () => { scaleWindowPrefsToViewport(); responsiveMinimizeForViewport(); applyLayoutVisibility(); savePanePrefs(); scheduleTerminalFit(); });
+document.addEventListener('keydown', letBrowserOwnTerminalPasteShortcut, true);
+document.addEventListener('paste', handleTerminalPaste, true);
+document.addEventListener('dragover', handleUploadDragOver, true);
+document.addEventListener('drop', handleUploadDrop, true);
+window.addEventListener('resize', () => { responsiveMinimizeForViewport(); applyLayoutVisibility(); scheduleTerminalFit(); });
 window.addEventListener('beforeunload', () => { savePanePrefs(); flushUiState(); saveAllTerminalSnapshots(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveAllTerminalSnapshots(); });
 document.addEventListener('keydown', e => {

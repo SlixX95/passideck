@@ -8,7 +8,7 @@ class Session {
     this.id = options.id || randomUUID();
     this.pty = null;
     this.pid = null;
-    this.ws = null;
+    this.clients = new Set();
     this._outputBuffer = '';
     this.meta = {
       label: options.label || options.command || 'Terminal',
@@ -35,6 +35,12 @@ class Session {
     return this._outputBuffer.slice(-OUTPUT_REPLAY_LIMIT);
   }
 
+  broadcast(message) {
+    const payload = typeof message === 'string' ? message : JSON.stringify(message);
+    for (const ws of this.clients) {
+      if (ws.readyState === 1) ws.send(payload);
+    }
+  }
 
   toJSON() {
     return {
@@ -62,7 +68,7 @@ class SessionManager {
 
   getAll() {
     for (const [id, session] of this.sessions) {
-      if (session.meta.status === 'exited' && !session.ws) this.sessions.delete(id);
+      if (session.meta.status === 'exited' && session.clients.size === 0) this.sessions.delete(id);
     }
     return Array.from(this.sessions.values()).map(s => s.toJSON());
   }
@@ -70,7 +76,8 @@ class SessionManager {
   remove(id) {
     const session = this.sessions.get(id);
     if (!session) return null;
-    try { session.ws?.close(4000, 'closed'); } catch {}
+    for (const ws of session.clients) { try { ws.close(4000, 'closed'); } catch {} }
+    session.clients.clear();
     try { session.pty?.kill(); } catch {}
     this.sessions.delete(id);
     return session;

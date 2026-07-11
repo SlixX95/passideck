@@ -9,7 +9,7 @@ Install from a Git checkout and run without the live PassiDeck service or extern
 ## Requirements
 
 - Linux
-- Node.js 18+
+- Node.js 20+
 - npm
 - tmux
 - bash

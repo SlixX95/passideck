@@ -41,7 +41,10 @@
         </section>
         <span class="command-divider"></span>
         <button id="settingsToggle" class="chrome-btn" data-tooltip="Settings" aria-label="Settings" aria-expanded="false" aria-controls="settingsPanel">⚙ settings</button>
+        <button id="uploadFileBtn" class="chrome-btn" data-tooltip="Upload file into active terminal" aria-label="Upload file">⇧ upload</button>
+        <button id="clipboardImageBtn" class="chrome-btn" data-tooltip="Paste a clipboard image into active terminal" aria-label="Paste clipboard image">▧ image</button>
         <button id="chromeToggle" class="chrome-btn" data-tooltip="Hide UI · Alt+0" aria-label="Hide UI">hide</button>
+        <input id="fileInput" type="file" hidden multiple>
       </div>
     </div>
   </header>
@@ -112,6 +115,6 @@
   <script src="vendor/addon-web-links.js"></script>
   <script src="vendor/addon-serialize.js"></script>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="app.js?v=20260711-normal-hermes-wheel" defer></script>
+  <script src="app.js?v=20260711-normal-hermes-paste" defer></script>
 </body>
 </html>

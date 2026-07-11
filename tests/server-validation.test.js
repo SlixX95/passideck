@@ -54,17 +54,43 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
     const first = new WebSocket(`ws://127.0.0.1:${port}/ws?session=validation`);
     await opened(first);
-    const firstClosed = new Promise(resolve => first.once('close', (code, reason) => resolve([code, reason.toString()])));
     const second = new WebSocket(`ws://127.0.0.1:${port}/ws?session=validation`);
     await opened(second);
-    assert.deepStrictEqual(await firstClosed, [4000, 'superseded'], 'a newer client must explicitly supersede the old session socket');
-    second.send(JSON.stringify({ type: 'input', data: 'current-client' }));
     await delay(20);
-    assert.deepStrictEqual(writes, ['current-client'], 'the current WebSocket must retain terminal input control');
+    assert.strictEqual(first.readyState, WebSocket.OPEN, 'opening the same session elsewhere must not disconnect the first browser');
+    first.send(JSON.stringify({ type: 'input', data: 'first-client' }));
+    second.send(JSON.stringify({ type: 'input', data: 'second-client' }));
+    await delay(20);
+    assert.deepStrictEqual(writes, ['first-client', 'second-client'], 'all connected browsers must retain terminal input control');
+
+    const initialUi = await fetch(`${base}/api/ui-state`).then(res => res.json());
+    const uiEvents = await fetch(`${base}/api/ui-events`);
+    assert.strictEqual(uiEvents.status, 200, 'UI state event stream must be available');
+    const reader = uiEvents.body.getReader();
+    const saved = await fetch(`${base}/api/ui-state`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...initialUi, revision: initialUi.revision, activeId: 'validation' })
+    });
+    assert.strictEqual(saved.status, 200);
+    const savedUi = await saved.json();
+    assert.ok(savedUi.revision > initialUi.revision, 'accepted UI changes must advance the server revision');
+    const eventChunk = new TextDecoder().decode((await reader.read()).value || new Uint8Array());
+    assert.ok(eventChunk.includes('"activeId":"validation"') && eventChunk.includes(`"revision":${savedUi.revision}`), 'accepted UI changes must broadcast to every browser');
+    const stale = await fetch(`${base}/api/ui-state`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...initialUi, revision: initialUi.revision, activeId: 'stale-client' })
+    });
+    assert.strictEqual(stale.status, 409, 'stale browser state must not overwrite newer layout');
+    assert.strictEqual((await stale.json()).activeId, 'validation', 'conflict response must return current authoritative state');
+    await reader.cancel();
 
     await app.close();
     app = null;
-    assert.strictEqual(second.readyState, WebSocket.CLOSED, 'shutdown must close active WebSocket clients');
+    await delay(20);
+    assert.strictEqual(first.readyState, WebSocket.CLOSED, 'shutdown must close first WebSocket client');
+    assert.strictEqual(second.readyState, WebSocket.CLOSED, 'shutdown must close second WebSocket client');
     console.log('server-validation ok');
   } finally {
     if (app) await app.close();

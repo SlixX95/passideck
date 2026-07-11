@@ -56,7 +56,7 @@ const CODEX_OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 const CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 300;
 const UPLOAD_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
-const UI_STATE_DEFAULT = { layout: 'auto', baseLayout: 'auto', focusedId: null, primaryId: null, activeId: null, minimized: [], theme: 'blue', skin: 'neon', fontSize: 13, chromeHidden: false, systemMonitor: false, panePrefs: { titles: {}, order: [], minimized: [], windows: {}, viewport: null }, updatedAt: null };
+const UI_STATE_DEFAULT = { revision: 0, layout: 'auto', baseLayout: 'auto', focusedId: null, primaryId: null, activeId: null, minimized: [], theme: 'blue', skin: 'neon', fontSize: 13, chromeHidden: false, systemMonitor: false, panePrefs: { titles: {}, order: [], minimized: [], windows: {}, viewport: null }, updatedAt: null };
 
 function uiStatePath() {
   return path.join(configDir(), 'ui-state.json');
@@ -99,6 +99,7 @@ function sanitizePanePrefs(input) {
 function sanitizeUiState(input) {
   const src = input && typeof input === 'object' ? input : {};
   const out = { ...UI_STATE_DEFAULT };
+  out.revision = Math.max(0, Math.floor(Number(src.revision) || 0));
   if (UI_LAYOUTS.has(src.layout)) out.layout = src.layout;
   if (UI_LAYOUTS.has(src.baseLayout) && !['focus', 'half'].includes(src.baseLayout)) out.baseLayout = src.baseLayout;
   else if (!['focus', 'half'].includes(out.layout)) out.baseLayout = out.layout;
@@ -123,6 +124,7 @@ function readUiState() {
 
 function writeUiState(input) {
   const state = sanitizeUiState(input);
+  state.revision += 1;
   state.updatedAt = new Date().toISOString();
   const file = uiStatePath();
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -169,7 +171,7 @@ function sameOrigin(req) {
 }
 
 function tokenFromRequest(req, urlObj = null) {
-  return req.headers['x-passideck-token'] || urlObj?.searchParams?.get('token') || '';
+  return req.headers['x-passideck-token'] || req.query?.token || urlObj?.searchParams?.get('token') || '';
 }
 
 function authTokenRequired() {
@@ -577,7 +579,7 @@ function attachTmux(session) {
   term.onData((data) => {
     const normalized = normalizeTerminalOutput(data);
     session.appendOutput(normalized);
-    if (session.ws?.readyState === 1) session.ws.send(JSON.stringify({ type: 'output', data: normalized }));
+    session.broadcast({ type: 'output', data: normalized });
   });
   term.onExit(({ exitCode, signal }) => {
     session.pty = null;
@@ -587,7 +589,7 @@ function attachTmux(session) {
       session.meta.exitCode = exitCode;
       session.meta.statusDetail = `Exited ${exitCode}${signal ? ` ${signal}` : ''}`;
       if (db && dbModule) dbModule.markSessionExited(db, session.id, exitCode, signal || '');
-      if (session.ws?.readyState === 1) session.ws.send(JSON.stringify({ type: 'exit', exitCode, signal }));
+      session.broadcast({ type: 'exit', exitCode, signal });
     }
   });
   return term;
@@ -613,6 +615,7 @@ function createServer(config = loadConfig()) {
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: '/ws', maxPayload: TERMINAL_MAX_INPUT_BYTES });
   const sessions = new SessionManager();
+  const uiEventClients = new Set();
   const uploadCleanupTimer = setInterval(() => {
     try { cleanupOldUploads(); }
     catch (err) { console.warn(`[uploads] cleanup failed: ${err.message}`); }
@@ -645,8 +648,24 @@ function createServer(config = loadConfig()) {
     catch (err) { res.status(503).json({ ok: false, error: err.message }); }
   });
   app.get('/api/ui-state', (_req, res) => res.json(readUiState()));
+  app.get('/api/ui-events', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+    uiEventClients.add(res);
+    req.on('close', () => uiEventClients.delete(res));
+  });
   function saveUiStateHandler(req, res) {
-    try { res.json(writeUiState(req.body || {})); }
+    try {
+      const current = readUiState();
+      const revision = Math.max(0, Math.floor(Number(req.body?.revision) || 0));
+      if (revision !== current.revision) return res.status(409).json(current);
+      const saved = writeUiState(req.body || {});
+      const event = `data: ${JSON.stringify(saved)}\n\n`;
+      for (const client of uiEventClients) client.write(event);
+      res.json(saved);
+    }
     catch (err) { res.status(500).json({ error: err.message }); }
   }
   app.put('/api/ui-state', saveUiStateHandler);
@@ -720,13 +739,11 @@ function createServer(config = loadConfig()) {
     if (!websocketAllowed(req, url)) return ws.close(4003, 'Unauthorized');
     const session = sessions.get(url.searchParams.get('session'));
     if (!session) return ws.close(4001, 'Session not found');
-    if (session.ws && session.ws !== ws) session.ws.close(4000, 'superseded');
-    session.ws = ws;
+    session.clients.add(ws);
     ws.send(JSON.stringify({ type: 'meta', session: session.toJSON() }));
     ws.send(JSON.stringify({ type: 'replay', data: '\r\n[PassiDeck reconnect: output replay disabled; live session still running]\r\n' }));
 
     ws.on('message', (raw) => {
-      if (session.ws !== ws) return;
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (msg.type === 'input' && session.pty) session.pty.write(String(msg.data || ''));
@@ -740,13 +757,15 @@ function createServer(config = loadConfig()) {
     });
 
     ws.on('close', () => {
-      if (session.ws === ws) session.ws = null;
+      session.clients.delete(ws);
     });
   });
 
   async function close() {
     clearInterval(uploadCleanupTimer);
     for (const client of wss.clients) client.terminate();
+    for (const client of uiEventClients) client.end();
+    uiEventClients.clear();
     for (const session of sessions.sessions.values()) {
       if (session.pid) try { process.kill(session.pid, 'SIGTERM'); } catch {}
     }

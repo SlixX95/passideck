@@ -142,9 +142,9 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
 
 (async () => {
   const madeSessions = [];
-  let server, cdp, chrome;
+  let appServer, server, cdp, chrome;
   try {
-    const appServer = createServer({ host: '127.0.0.1', port: 0, shell: '/bin/bash' });
+    appServer = createServer({ host: '127.0.0.1', port: 0, shell: '/bin/bash' });
     server = appServer.server;
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
     const port = server.address().port;
@@ -203,6 +203,47 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     const savedUi = await requestJson(base, 'GET', '/api/ui-state');
     const savedRect = savedUi.panePrefs?.windows?.desktop?.[madeSessions[0]];
     assert.ok(savedRect && savedRect.x + savedRect.w <= clampedWindow.grid.width + 1 && savedRect.y + savedRect.h <= clampedWindow.grid.height + 1, `clamped window rect must persist server-side: ${JSON.stringify(savedRect)}`);
+
+    const peerTarget = await cdp.send('Target.createTarget', { url: 'about:blank' });
+    const peerAttached = await cdp.send('Target.attachToTarget', { targetId: peerTarget.targetId, flatten: true });
+    const peerSid = peerAttached.sessionId;
+    await cdp.send('Page.enable', {}, peerSid);
+    await cdp.send('Runtime.enable', {}, peerSid);
+    await cdp.send('Page.navigate', { url: base }, peerSid);
+    await waitEval(cdp, peerSid, 'document.readyState === "complete" && document.querySelectorAll(".term-panel").length >= 11');
+    await sleep(400);
+    await evalExpr(cdp, sid, `(() => {
+      const p = windowPrefs()['${madeSessions[0]}'];
+      Object.assign(p, { x: 111, y: 112, w: 777, h: 444, z: 90 });
+      applyFreeWindow('${madeSessions[0]}');
+      savePanePrefs();
+    })()`);
+    await waitEval(cdp, peerSid, `(() => {
+      const p = windowPrefs()['${madeSessions[0]}'];
+      return p?.x === 111 && p?.y === 112 && p?.w === 777 && p?.h === 444;
+    })()`, 4000);
+    const peerLive = await evalExpr(cdp, peerSid, `(() => ({
+      rect: { ...windowPrefs()['${madeSessions[0]}'] },
+      live: [...state.sessions.values()].every(entry => entry.el.dataset.connectionStatus === 'live')
+    }))()`);
+    assert.deepStrictEqual({ x: peerLive.rect.x, y: peerLive.rect.y, w: peerLive.rect.w, h: peerLive.rect.h }, { x: 111, y: 112, w: 777, h: 444 }, 'second browser must apply live authoritative window geometry');
+    assert.strictEqual(peerLive.live, true, 'opening a second browser must not disconnect terminal sessions');
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, peerSid);
+    await waitEval(cdp, peerSid, 'innerWidth === 390');
+    await evalExpr(cdp, peerSid, `(() => { responsiveMinimizeForViewport(); applyLayoutVisibility(); savePanePrefs(); })()`);
+    await sleep(300);
+    const afterMobile = await requestJson(base, 'GET', '/api/ui-state');
+    const mobileRect = afterMobile.panePrefs?.windows?.desktop?.[madeSessions[0]];
+    assert.deepStrictEqual(
+      mobileRect && { x: mobileRect.x, y: mobileRect.y, w: mobileRect.w, h: mobileRect.h },
+      { x: 111, y: 112, w: 777, h: 444 },
+      `mobile browser must never overwrite authoritative desktop geometry: ${JSON.stringify(afterMobile.panePrefs)}`
+    );
+    await cdp.send('Page.navigate', { url: `${base}/?peer-reload=1` }, peerSid);
+    await waitEval(cdp, peerSid, 'location.search === "?peer-reload=1" && document.readyState === "complete" && typeof windowPrefs === "function" && document.querySelectorAll(".term-panel").length >= 11');
+    const reloadedPeer = await evalExpr(cdp, peerSid, `(() => ({ ...windowPrefs()['${madeSessions[0]}'] }))()`);
+    assert.deepStrictEqual({ x: reloadedPeer.x, y: reloadedPeer.y, w: reloadedPeer.w, h: reloadedPeer.h }, { x: 111, y: 112, w: 777, h: 444 }, 'reload must reconstruct latest server-confirmed geometry');
+    await cdp.send('Target.closeTarget', { targetId: peerTarget.targetId });
 
     const titleDragProbe = await evalExpr(cdp, sid, `(() => {
       document.activeElement?.blur?.();
@@ -466,6 +507,55 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.deepStrictEqual(altScreenWheel, { scrollCalls: 0, baseY: 0, canceled: true, capturePrevented: true }, 'Hermes TUI alternate-screen wheel must not scroll xterm/browser chrome when no scrollback exists');
 
+    const uploadInteraction = await evalExpr(cdp, sid, `(async () => {
+      const entry = activeTerminalEntry();
+      const sent = [];
+      entry.ws = { readyState: WebSocket.OPEN, send: message => { const frame = JSON.parse(message); if (frame.type === 'input') sent.push(frame.data); } };
+      entry.term.focus = () => {};
+      const oldApi = api;
+      api = async (_method, path, body) => ({ insert: '/tmp/' + body.name, type: body.type });
+      entry.session.meta.command = 'hermes';
+      let textPrevented = false;
+      let textStopped = false;
+      handleTerminalPaste({
+        target: entry.el.querySelector('.xterm-helper-textarea'),
+        clipboardData: { files: [], items: [], getData: type => type === 'text/plain' ? 'normal Hermes paste' : '' },
+        preventDefault(){ textPrevented = true; },
+        stopImmediatePropagation(){ textStopped = true; }
+      });
+      let keyStopped = false;
+      let keyPrevented = false;
+      letBrowserOwnTerminalPasteShortcut({
+        key: 'v', ctrlKey: true, metaKey: false, shiftKey: false, altKey: false,
+        target: entry.el.querySelector('.xterm-helper-textarea'),
+        preventDefault(){ keyPrevented = true; },
+        stopImmediatePropagation(){ keyStopped = true; }
+      });
+      entry.session.meta.command = 'hermes --tui';
+      handleTerminalPaste({ clipboardData: { files: [
+        new File(['png'], 'clip.png', { type: 'image/png' }),
+        new File(['text'], 'pasted.txt', { type: 'text/plain' })
+      ], items: [] }, preventDefault(){}, stopImmediatePropagation(){} });
+      while (state.uploadBusy) await new Promise(resolve => setTimeout(resolve, 0));
+      entry.session.meta.command = 'hermes';
+      handleUploadDrop({ dataTransfer: { files: [new File(['text'], 'notes.txt', { type: 'text/plain' })] }, target: entry.el, preventDefault(){}, stopImmediatePropagation(){} });
+      while (state.uploadBusy) await new Promise(resolve => setTimeout(resolve, 0));
+      api = oldApi;
+      return { sent, textPrevented, textStopped, keyStopped, keyPrevented };
+    })()`);
+    assert.deepStrictEqual(uploadInteraction, {
+      sent: [
+        '\u001b[200~normal Hermes paste\u001b[201~',
+        '\u0001/image /tmp/clip.png\r',
+        '\u001b[200~/tmp/pasted.txt \u001b[201~',
+        '\u001b[200~/tmp/notes.txt \u001b[201~'
+      ],
+      textPrevented: true,
+      textStopped: true,
+      keyStopped: true,
+      keyPrevented: false
+    }, 'Ctrl+V text, clipboard files, and file drop must reach normal Hermes/TUI through the terminal bridge');
+
     const minimizeProbe = await evalExpr(cdp, sid, `(() => {
       const panel = document.querySelector('.term-panel.active');
       const actionRects = [...panel.querySelectorAll('.term-actions button')].map(btn => {
@@ -642,7 +732,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     }
     if (cdp) { try { await cdp.send('Browser.close'); } catch {} cdp.close(); }
     if (chrome?.child && !chrome.child.killed) { try { chrome.child.kill('SIGTERM'); } catch {} }
-    if (server) await new Promise(resolve => server.close(resolve));
+    if (appServer) await appServer.close();
     try { execFileSync('tmux', ['-L', socket, 'kill-server'], { stdio: 'ignore' }); } catch {}
     try { fs.rmSync(tmp, { recursive: true, force: true }); } catch {}
   }

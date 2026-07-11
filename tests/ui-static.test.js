@@ -45,9 +45,12 @@ assert.ok(html.includes('role="region" aria-labelledby="settingsTitle"'), 'setti
 assert.ok(html.includes('aria-controls="settingsPanel"'), 'settings toggle must identify its controlled region');
 assert.ok(app.includes("'X-PassiDeck-Token': token") && app.includes('keepalive: true'), 'authenticated unload persistence must retain its auth header');
 assert.ok(app.includes("state.minimized.has(id) ? restorePanel(id) : selectPanel(id)"), 'Alt+number must restore minimized panes');
-assert.ok(!app.includes("document.addEventListener('paste', handleTerminalPaste") && !app.includes("document.addEventListener('keydown', handleTerminalCopyShortcut") && !app.includes("document.addEventListener('drop', handlePassiDeckDrop"), 'terminal interaction must stay on native xterm/browser defaults');
+assert.ok(app.includes("document.addEventListener('paste', handleTerminalPaste, true)") && app.includes("document.addEventListener('keydown', letBrowserOwnTerminalPasteShortcut, true)") && app.includes("document.addEventListener('drop', handleUploadDrop, true)"), 'text/file paste and file drop terminal bridges must stay enabled');
+assert.ok(html.includes('id="uploadFileBtn"') && html.includes('id="clipboardImageBtn"') && html.includes('id="fileInput"'), 'upload, clipboard image, and file picker controls must stay available');
+assert.ok(!app.includes("document.addEventListener('keydown', handleTerminalCopyShortcut") && !app.includes('handlePassiDeckContextMenu'), 'copy and right-click interception must stay removed');
 assert.ok(installer.includes('PASSIDECK_ROOT=$(quote_env "$ROOT")'), 'installer must persist its actual checkout root for systemd');
 assert.ok(service.includes('npm --prefix ${PASSIDECK_ROOT} start') && !service.includes('projects/passideck-dev'), 'user service must start the installed checkout, not a hardcoded dev repo');
 assert.ok(service.includes('Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin'), 'user service must provide PATH for npm and node');
+assert.ok(service.includes('KillMode=process'), 'service restart must preserve detached tmux sessions');
 
 console.log('ui-static ok');
