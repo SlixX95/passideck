@@ -1213,6 +1213,54 @@ function scheduleTerminalFit(opts = {}) {
   });
 }
 
+function installTerminalWheelScroll(termEl, term, session = null) {
+  let wheelRemainder = 0;
+  term.attachCustomWheelEventHandler?.(e => {
+    const command = String(session?.meta?.command || session?.meta?.label || '').toLowerCase();
+    const isHermes = /\bhermes\b/.test(command);
+    if (e.ctrlKey) return true;
+    const buffer = term.buffer?.active;
+    if (!buffer || buffer.baseY <= 0) {
+      if (isHermes) e.preventDefault();
+      return true;
+    }
+    const forceScrollback = isHermes;
+    const unit = e.deltaMode === 1 ? 1 : e.deltaMode === 2 ? term.rows : 1 / Math.max(8, state.fontSize * 1.2);
+    wheelRemainder += e.deltaY * unit;
+    const lines = Math.trunc(wheelRemainder);
+    if (!lines) {
+      if (forceScrollback) e.preventDefault();
+      return !forceScrollback;
+    }
+    wheelRemainder -= lines;
+    term.scrollLines(lines);
+    e.preventDefault();
+    return false;
+  });
+  termEl.addEventListener('wheel', e => {
+    const command = String(session?.meta?.command || session?.meta?.label || '').toLowerCase();
+    const isHermes = /\bhermes\b/.test(command);
+    if (!isHermes || e.ctrlKey) return;
+    const buffer = term.buffer?.active;
+    if (!buffer || buffer.baseY <= 0) {
+      e.preventDefault();
+      return;
+    }
+    const unit = e.deltaMode === 1 ? 1 : e.deltaMode === 2 ? term.rows : 1 / Math.max(8, state.fontSize * 1.2);
+    wheelRemainder += e.deltaY * unit;
+    const lines = Math.trunc(wheelRemainder);
+    if (!lines) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
+    }
+    wheelRemainder -= lines;
+    term.scrollLines(lines);
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }, { capture: true, passive: false });
+}
+
 function updateEmpty() {
   document.getElementById('emptyState').style.display = state.sessions.size ? 'none' : 'grid';
   document.getElementById('stat-active').textContent = String(state.sessions.size);
@@ -1933,6 +1981,7 @@ function createPanel(session, opts = {}) {
   term.loadAddon(new WebLinksAddon.WebLinksAddon());
   const termEl = el.querySelector('.terminal');
   term.open(termEl);
+  installTerminalWheelScroll(termEl, term, session);
   // Auto-detect terminal title (vim, Codex, Hermes TUI, etc.)
   term.onTitleChange(title => {
     const entry = state.sessions.get(id);

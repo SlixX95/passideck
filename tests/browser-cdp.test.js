@@ -417,6 +417,55 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.deepStrictEqual(switchDescriptions, { ok: true }, 'taskbar active item must follow active session switches');
 
+    const wheelScroll = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const oldCommand = entry.session.meta.command;
+      entry.session.meta.command = 'hermes';
+      await new Promise(resolve => entry.term.write(Array.from({ length: 80 }, (_, i) => 'wheel-' + i + '\\r\\n').join(''), resolve));
+      await new Promise(resolve => entry.term.write('\\x1b[?1000h', resolve));
+      entry.term.scrollToBottom();
+      const before = entry.term.buffer.active.viewportY;
+      const target = entry.el.querySelector('.xterm-viewport') || entry.el.querySelector('.terminal');
+      const r = target.getBoundingClientRect();
+      let tinyLeaked = false;
+      target.addEventListener('wheel', () => { tinyLeaked = true; }, { once: true });
+      const tinyEvent = new WheelEvent('wheel', { deltaY: -4, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 });
+      const tinyDispatched = target.dispatchEvent(tinyEvent);
+      target.dispatchEvent(new WheelEvent('wheel', { deltaY: -480, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 }));
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      await new Promise(resolve => entry.term.write('\\x1b[?1000l', resolve));
+      entry.session.meta.command = oldCommand;
+      return { before, after: entry.term.buffer.active.viewportY, tinyCanceled: !tinyDispatched || tinyEvent.defaultPrevented, tinyLeaked };
+    })()`);
+    assert.ok(wheelScroll.after < wheelScroll.before, `normal Hermes wheel must scroll xterm history even when app mouse mode is active: ${JSON.stringify(wheelScroll)}`);
+    assert.strictEqual(wheelScroll.tinyCanceled, true, `normal Hermes tiny wheel deltas must be canceled while accumulating: ${JSON.stringify(wheelScroll)}`);
+    assert.strictEqual(wheelScroll.tinyLeaked, false, `normal Hermes tiny wheel deltas must not reach xterm/Hermes app mouse handling: ${JSON.stringify(wheelScroll)}`);
+
+    const altScreenWheel = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const oldCommand = entry.session.meta.command;
+      entry.session.meta.command = 'hermes --tui';
+      let scrollCalls = 0;
+      const oldScrollLines = entry.term.scrollLines.bind(entry.term);
+      entry.term.scrollLines = n => { scrollCalls += 1; return oldScrollLines(n); };
+      await new Promise(resolve => entry.term.write('\\x1b[?1049h\\x1b[?1000h', resolve));
+      const target = entry.el.querySelector('.xterm-viewport') || entry.el.querySelector('.terminal');
+      const termEl = entry.el.querySelector('.terminal');
+      let capturePrevented = null;
+      const captureProbe = e => { capturePrevented = e.defaultPrevented; };
+      termEl.addEventListener('wheel', captureProbe, { capture: true, once: true });
+      const r = target.getBoundingClientRect();
+      const event = new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 });
+      const dispatched = target.dispatchEvent(event);
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const out = { scrollCalls, baseY: entry.term.buffer.active.baseY, canceled: !dispatched || event.defaultPrevented, capturePrevented };
+      await new Promise(resolve => entry.term.write('\\x1b[?1000l\\x1b[?1049l', resolve));
+      entry.term.scrollLines = oldScrollLines;
+      entry.session.meta.command = oldCommand;
+      return out;
+    })()`);
+    assert.deepStrictEqual(altScreenWheel, { scrollCalls: 0, baseY: 0, canceled: true, capturePrevented: true }, 'Hermes TUI alternate-screen wheel must not scroll xterm/browser chrome when no scrollback exists');
+
     const minimizeProbe = await evalExpr(cdp, sid, `(() => {
       const panel = document.querySelector('.term-panel.active');
       const actionRects = [...panel.querySelectorAll('.term-actions button')].map(btn => {
