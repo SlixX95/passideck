@@ -2003,16 +2003,6 @@ function createPanel(session, opts = {}) {
   term.loadAddon(new WebLinksAddon.WebLinksAddon());
   const termEl = el.querySelector('.terminal');
   term.open(termEl);
-  term.onSelectionChange?.(() => {
-    const entry = state.sessions.get(id);
-    const selected = term.getSelection?.() || '';
-    if (entry && selected) entry.lastSelection = selected;
-  });
-  installTerminalRightClickGuards(termEl, id);
-  const dragSelectionCleanup = installTerminalDragSelectionMemory(termEl, id);
-  installTerminalTouchScroll(termEl, term);
-  installTerminalWheelScroll(termEl, term, session);
-
   // Auto-detect terminal title (vim, Codex, Hermes TUI, etc.)
   term.onTitleChange(title => {
     const entry = state.sessions.get(id);
@@ -2039,7 +2029,7 @@ function createPanel(session, opts = {}) {
   });
 
   const hasSnapshot = hasTerminalSnapshot(id);
-  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, dragSelectionCleanup, restored: hasSnapshot, snapshotTimer: null, lastSelection: '', titleSource: '', lastSentCols: 0, lastSentRows: 0 });
+  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, restored: hasSnapshot, snapshotTimer: null, titleSource: '', lastSentCols: 0, lastSentRows: 0 });
   term.onWriteParsed?.(() => refreshTitleFromTerminal(id));
   if (state.minimized.has(id)) el.classList.add('minimized');
   const replaceId = opts.replaceId;
@@ -2252,7 +2242,6 @@ function discardPanel(id) {
   const entry = state.sessions.get(id);
   if (entry) {
     try { entry.ro.disconnect(); } catch {}
-    try { entry.dragSelectionCleanup?.(); } catch {}
     try { entry.ws.close(); } catch {}
     try { entry.term.dispose(); } catch {}
     clearTimeout(entry.snapshotTimer);
@@ -2988,18 +2977,6 @@ function setSettingsOpen(open, restoreFocus = false) {
 document.getElementById('settingsToggle').onclick = () => setSettingsOpen(document.getElementById('settingsPanel').hidden);
 document.getElementById('chromeToggle').onclick = toggleChrome;
 document.getElementById('chromePeek').onclick = toggleChrome;
-document.getElementById('uploadFileBtn').onclick = () => {
-  const input = document.getElementById('fileInput');
-  input.dataset.targetPaneId = state.activeId || '';
-  input.click();
-};
-document.getElementById('fileInput').onchange = e => {
-  const file = e.target.files?.[0];
-  const targetId = e.target.dataset.targetPaneId || state.activeId;
-  e.target.value = '';
-  uploadFile(file, { pasteIntoTerminal: true, targetId });
-};
-document.getElementById('clipboardImageBtn').onclick = () => uploadClipboardImage();
 document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
 document.getElementById('skinSelect').onchange = e => setSkin(e.target.value);
 document.getElementById('fontSizeSlider').oninput = e => setFontSize(Number(e.target.value));
@@ -3095,19 +3072,7 @@ document.getElementById('closeModal').addEventListener('click', e => {
   }
 });
 
-document.addEventListener('paste', handleTerminalPaste, true);
-document.addEventListener('pointerdown', handleDocumentTerminalRightClickGuard, true);
-document.addEventListener('mousedown', handleDocumentTerminalRightClickGuard, true);
-document.addEventListener('mouseup', handleDocumentTerminalRightClickGuard, true);
-document.addEventListener('auxclick', handleDocumentTerminalRightClickGuard, true);
-document.addEventListener('contextmenu', handleDocumentTerminalRightClickGuard, true);
-document.addEventListener('contextmenu', handlePassiDeckContextMenu, true);
-document.addEventListener('dragover', handlePassiDeckDragOver, true);
-document.addEventListener('drop', handlePassiDeckDrop, true);
 document.addEventListener('keydown', handleCloseModalKeydown, true);
-document.addEventListener('keydown', letBrowserOwnTerminalPasteShortcut, true);
-document.addEventListener('keydown', handleTerminalCopyShortcut, true);
-document.addEventListener('selectionchange', rememberDocumentTerminalSelection);
 window.addEventListener('resize', () => { scaleWindowPrefsToViewport(); responsiveMinimizeForViewport(); applyLayoutVisibility(); savePanePrefs(); scheduleTerminalFit(); });
 window.addEventListener('beforeunload', () => { savePanePrefs(); flushUiState(); saveAllTerminalSnapshots(); });
 document.addEventListener('visibilitychange', () => { if (document.hidden) saveAllTerminalSnapshots(); });
@@ -3132,14 +3097,6 @@ document.addEventListener('keydown', e => {
   if (e.ctrlKey && e.shiftKey && key === 'n') {
     e.preventDefault();
     launch('/bin/bash');
-  }
-  if (e.ctrlKey && e.shiftKey && key === 'u') {
-    e.preventDefault();
-    document.getElementById('fileInput').click();
-  }
-  if (e.ctrlKey && e.shiftKey && key === 'v') {
-    e.preventDefault();
-    uploadClipboardImage();
   }
 });
 

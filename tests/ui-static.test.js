@@ -14,12 +14,8 @@ const pkg = JSON.parse(read('package.json'));
 
 for (const needle of [
   'function makeFreeWindow',
-  'function installTerminalRightClickGuards',
-  'function handleTerminalCopyShortcut',
   'function savePanePrefs',
   'function pollSystemMonitor',
-  'window.__passideckGetSelection = activeTerminalSelectionText',
-  "document.addEventListener('keydown', handleTerminalCopyShortcut, true)",
 ]) assert.ok(app.includes(needle), `missing app guard: ${needle}`);
 
 for (const needle of [
@@ -48,7 +44,7 @@ assert.ok(html.includes('role="region" aria-labelledby="settingsTitle"'), 'setti
 assert.ok(html.includes('aria-controls="settingsPanel"'), 'settings toggle must identify its controlled region');
 assert.ok(app.includes("'X-PassiDeck-Token': token") && app.includes('keepalive: true'), 'authenticated unload persistence must retain its auth header');
 assert.ok(app.includes("state.minimized.has(id) ? restorePanel(id) : selectPanel(id)"), 'Alt+number must restore minimized panes');
-assert.ok(app.includes('pasteIntoTerminalEntry(state.sessions.get(targetId)'), 'async uploads must retain their original target pane');
+assert.ok(!app.includes("document.addEventListener('paste', handleTerminalPaste") && !app.includes("document.addEventListener('keydown', handleTerminalCopyShortcut") && !app.includes("document.addEventListener('drop', handlePassiDeckDrop"), 'terminal interaction must stay on native xterm/browser defaults');
 assert.ok(installer.includes('PASSIDECK_ROOT=$(quote_env "$ROOT")'), 'installer must persist its actual checkout root for systemd');
 assert.ok(service.includes('npm --prefix ${PASSIDECK_ROOT} start') && !service.includes('projects/passideck-dev'), 'user service must start the installed checkout, not a hardcoded dev repo');
 assert.ok(service.includes('Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin'), 'user service must provide PATH for npm and node');
