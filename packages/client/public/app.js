@@ -155,7 +155,8 @@ function installTooltips() {
   }, true);
   document.addEventListener('pointermove', e => {
     const target = e.target.closest?.('[data-tooltip]');
-    if (target && !document.getElementById('appTooltip')?.hidden) placeTooltip(target);
+    if (!target) return hideTooltip();
+    if (!document.getElementById('appTooltip')?.hidden) placeTooltip(target);
   }, true);
   document.addEventListener('pointerout', e => {
     if (e.target.closest?.('[data-tooltip]') && !e.relatedTarget?.closest?.('[data-tooltip]')) hideTooltip();
@@ -2360,6 +2361,41 @@ function activeTerminalEntry() {
   return id ? state.sessions.get(id) : null;
 }
 
+function terminalEntryForTarget(target) {
+  const panel = target?.closest?.('.term-panel');
+  return panel ? state.sessions.get(panel.dataset.paneId) : null;
+}
+
+function copyTextToClipboard(text) {
+  if (!text) return false;
+  const previousFocus = document.activeElement;
+  const helper = document.createElement('textarea');
+  helper.value = text;
+  helper.readOnly = true;
+  helper.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+  document.body.appendChild(helper);
+  helper.select();
+  let copied = false;
+  try { copied = document.execCommand('copy'); } catch {}
+  helper.remove();
+  previousFocus?.focus?.({ preventScroll: true });
+  return copied;
+}
+
+function clearCopiedSelection(entry) {
+  if (entry?.term) entry.term.clearSelection();
+  window.getSelection?.()?.removeAllRanges();
+}
+
+async function handleTerminalContextMenu(event) {
+  const entry = terminalEntryForTarget(event.target);
+  const text = entry?.term?.getSelection?.() || window.getSelection?.()?.toString() || '';
+  if (!entry || !text) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (await copyTextToClipboard(text)) clearCopiedSelection(entry);
+}
+
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -2542,6 +2578,11 @@ function setSettingsOpen(open, restoreFocus = false) {
   else if (restoreFocus) setTimeout(() => toggle.focus(), 0);
 }
 document.getElementById('settingsToggle').onclick = () => setSettingsOpen(document.getElementById('settingsPanel').hidden);
+document.addEventListener('pointerdown', event => {
+  const panel = document.getElementById('settingsPanel');
+  const toggle = document.getElementById('settingsToggle');
+  if (!panel.hidden && !panel.contains(event.target) && !toggle.contains(event.target)) setSettingsOpen(false);
+}, true);
 document.getElementById('uploadFileBtn').onclick = () => document.getElementById('fileInput').click();
 document.getElementById('fileInput').onchange = event => {
   void uploadFiles([...event.target.files]);
@@ -2651,6 +2692,7 @@ document.getElementById('closeModal').addEventListener('click', e => {
 document.addEventListener('keydown', handleCloseModalKeydown, true);
 document.addEventListener('keydown', letBrowserOwnTerminalPasteShortcut, true);
 document.addEventListener('paste', handleTerminalPaste, true);
+document.addEventListener('contextmenu', handleTerminalContextMenu, true);
 document.addEventListener('dragover', handleUploadDragOver, true);
 document.addEventListener('drop', handleUploadDrop, true);
 window.addEventListener('resize', () => { responsiveMinimizeForViewport(); applyLayoutVisibility(); scheduleTerminalFit(); });

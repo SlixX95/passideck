@@ -211,7 +211,8 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await cdp.send('Runtime.enable', {}, peerSid);
     await cdp.send('Page.navigate', { url: base }, peerSid);
     await waitEval(cdp, peerSid, 'document.readyState === "complete" && document.querySelectorAll(".term-panel").length >= 11');
-    await sleep(400);
+    await waitEval(cdp, sid, `!state.hydrating && state.saveState === 'saved'`);
+    await waitEval(cdp, peerSid, `!state.hydrating && state.saveState === 'saved'`);
     await evalExpr(cdp, sid, `(() => {
       const p = windowPrefs()['${madeSessions[0]}'];
       Object.assign(p, { x: 111, y: 112, w: 777, h: 444, z: 90 });
@@ -567,6 +568,32 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       keyPrevented: false
     }, 'Ctrl+V text, clipboard files, and file drop must reach normal Hermes/TUI through the terminal bridge');
 
+    const rightClickCopy = await evalExpr(cdp, sid, `(async () => {
+      const entry = activeTerminalEntry();
+      const oldGetSelection = entry.term.getSelection;
+      const oldClearSelection = entry.term.clearSelection;
+      const oldCopy = copyTextToClipboard;
+      let copied = '';
+      let clears = 0;
+      let prevented = false;
+      let stopped = false;
+      entry.term.getSelection = () => 'POWERSHELL_STYLE_COPY';
+      entry.term.clearSelection = () => { clears += 1; };
+      copyTextToClipboard = async text => { copied = text; return true; };
+      await handleTerminalContextMenu({
+        target: entry.el.querySelector('.xterm-screen'),
+        preventDefault(){ prevented = true; },
+        stopImmediatePropagation(){ stopped = true; }
+      });
+      entry.term.getSelection = oldGetSelection;
+      entry.term.clearSelection = oldClearSelection;
+      copyTextToClipboard = oldCopy;
+      return { copied, clears, prevented, stopped };
+    })()`);
+    assert.deepStrictEqual(rightClickCopy, {
+      copied: 'POWERSHELL_STYLE_COPY', clears: 1, prevented: true, stopped: true
+    }, 'right-click must copy and immediately clear terminal selection like Windows PowerShell');
+
     const minimizeProbe = await evalExpr(cdp, sid, `(() => {
       const panel = document.querySelector('.term-panel.active');
       const actionRects = [...panel.querySelectorAll('.term-actions button')].map(btn => {
@@ -628,6 +655,8 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await sleep(500);
     const delayedTip = await evalExpr(cdp, sid, `!!document.querySelector('#appTooltip.visible') && !document.getElementById('appTooltip')?.hidden`);
     assert.strictEqual(delayedTip, true, 'tooltip should appear after 300ms delay');
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 120 }, sid);
+    await waitEval(cdp, sid, `document.getElementById('appTooltip').hidden && !document.getElementById('appTooltip').classList.contains('visible')`);
 
     const failedCloseKeepsPane = await evalExpr(cdp, sid, `(async () => {
       const id = [...state.sessions.keys()][0];
@@ -652,6 +681,11 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.deepStrictEqual(failedLaunchIsVisible, { threw: false, toast: 'Launch failed: backend unavailable' }, 'failed launch must show an actionable error instead of an unhandled promise rejection');
 
+    await evalExpr(cdp, sid, `document.getElementById('settingsToggle').click()`);
+    await waitEval(cdp, sid, `document.activeElement?.id === 'themeSelect'`);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 12, y: 120, button: 'left', clickCount: 1 }, sid);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 12, y: 120, button: 'left', clickCount: 1 }, sid);
+    await waitEval(cdp, sid, `document.getElementById('settingsPanel').hidden`);
     await evalExpr(cdp, sid, `document.getElementById('settingsToggle').click()`);
     await waitEval(cdp, sid, `document.activeElement?.id === 'themeSelect'`);
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }, sid);
@@ -729,6 +763,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       if (e.method === 'Log.entryAdded') {
         const entry = e.params?.entry || {};
         if (entry.url?.endsWith('/favicon.ico') && entry.text?.includes('404')) return false;
+        if (entry.url?.endsWith('/api/ui-state') && entry.text?.includes('409 (Conflict)')) return false;
         return ['error', 'violation'].includes(entry.level);
       }
       return e.method === 'Runtime.exceptionThrown' ||
