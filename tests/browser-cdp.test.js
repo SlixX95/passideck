@@ -492,6 +492,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       selectPanel(active.session.id, { persist: false });
       setResponseSoundMode('background');
       setResponseSoundTone('chime');
+      setResponseSoundVolume(25);
       const decisions = {
         activeFocused: shouldPlayResponseSound(active.session.id, true, false),
         otherFocused: shouldPlayResponseSound(other.session.id, true, false),
@@ -501,28 +502,35 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       decisions.off = shouldPlayResponseSound(other.session.id, false, true);
       setResponseSoundMode('always');
       decisions.always = shouldPlayResponseSound(active.session.id, true, false);
-      const tones = [];
+      const played = [];
       const originalBell = playBell;
-      playBell = tone => { tones.push(tone); };
+      playBell = (tone, volume) => { played.push({ tone, volume }); };
+      document.getElementById('responseSoundTest').click();
       await new Promise(resolve => active.term.write('\\u0007', resolve));
       await new Promise(resolve => setTimeout(resolve, 20));
       playBell = originalBell;
       const persisted = JSON.parse(localStorage.getItem('passideck:response-sound'));
       return {
         decisions,
-        tones,
+        played,
         mode: document.getElementById('responseSoundModeSelect')?.value || '',
         tone: document.getElementById('responseSoundToneSelect')?.value || '',
+        toneOptions: [...document.getElementById('responseSoundToneSelect').options].map(option => option.textContent),
+        volume: Number(document.getElementById('responseSoundVolume')?.value),
+        volumeLabel: document.getElementById('responseSoundVolumeLabel')?.textContent || '',
         persisted,
         serverPayloadHasSound: Object.keys(uiPayload()).some(key => key.startsWith('responseSound'))
       };
     })()`);
     assert.deepStrictEqual(responseSound, {
       decisions: { activeFocused: false, otherFocused: true, activeHidden: true, off: false, always: true },
-      tones: ['chime'],
+      played: [{ tone: 'chime', volume: 25 }, { tone: 'chime', volume: 25 }],
       mode: 'always',
       tone: 'chime',
-      persisted: { mode: 'always', tone: 'chime' },
+      toneOptions: ['Soft', 'Ping', 'Chime'],
+      volume: 25,
+      volumeLabel: '25%',
+      persisted: { mode: 'always', tone: 'chime', volume: 25 },
       serverPayloadHasSound: false
     }, 'response sounds must be backend-local, configurable, and driven by terminal BEL');
 

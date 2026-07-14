@@ -225,6 +225,8 @@ button, select { font: inherit; }
 .settings-panel select:focus-visible, .settings-panel input:focus-visible { border-color: var(--tg-accent); outline: 1px solid var(--tg-accent); outline-offset: 1px; }
 .settings-panel input[type="range"] { width: 84px; accent-color: var(--tg-accent); cursor: pointer; }
 .font-size-label { color: var(--tg-text-dim); font-family: var(--tg-mono); font-size: 10px; min-width: 36px; }
+.settings-action { padding: 4px 9px; border: 1px solid var(--tg-border-active); background: var(--tg-bg); color: var(--tg-accent); cursor: pointer; }
+.settings-action:hover, .settings-action:focus-visible { border-color: var(--tg-accent); outline: 1px solid var(--tg-accent); outline-offset: 1px; }
 .monitor-toggle { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; text-transform: none !important; letter-spacing: 0 !important; color: var(--tg-text) !important; }
 .monitor-toggle input { accent-color: var(--tg-accent); }
 

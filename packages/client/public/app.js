@@ -37,6 +37,7 @@ const state = {
   fontSize: 13,
   responseSoundMode: 'background',
   responseSoundTone: 'soft',
+  responseSoundVolume: 60,
   minimized: new Set(),
   responsiveMinimized: new Set(),
   saveTimer: null,
@@ -1071,7 +1072,8 @@ function saveResponseSoundPrefs() {
   try {
     localStorage.setItem('passideck:response-sound', JSON.stringify({
       mode: state.responseSoundMode,
-      tone: state.responseSoundTone
+      tone: state.responseSoundTone,
+      volume: state.responseSoundVolume
     }));
   } catch {}
 }
@@ -1090,11 +1092,21 @@ function setResponseSoundTone(tone, opts = {}) {
   if (opts.persist !== false) saveResponseSoundPrefs();
 }
 
+function setResponseSoundVolume(volume, opts = {}) {
+  state.responseSoundVolume = Math.max(0, Math.min(100, Math.round(Number(volume) || 0)));
+  const slider = document.getElementById('responseSoundVolume');
+  const label = document.getElementById('responseSoundVolumeLabel');
+  if (slider) slider.value = String(state.responseSoundVolume);
+  if (label) label.textContent = `${state.responseSoundVolume}%`;
+  if (opts.persist !== false) saveResponseSoundPrefs();
+}
+
 function loadResponseSoundPrefs() {
   let prefs = {};
   try { prefs = JSON.parse(localStorage.getItem('passideck:response-sound')) || {}; } catch {}
   setResponseSoundMode(prefs.mode, { persist: false });
   setResponseSoundTone(prefs.tone, { persist: false });
+  setResponseSoundVolume(prefs.volume ?? 60, { persist: false });
 }
 
 function shouldPlayResponseSound(id, hasDocumentFocus = document.hasFocus(), hidden = document.hidden) {
@@ -1104,7 +1116,7 @@ function shouldPlayResponseSound(id, hasDocumentFocus = document.hasFocus(), hid
 }
 
 function notifyResponseComplete(id) {
-  if (shouldPlayResponseSound(id)) playBell(state.responseSoundTone);
+  if (shouldPlayResponseSound(id)) playBell(state.responseSoundTone, state.responseSoundVolume);
 }
 
 function setChromeHidden(hidden, opts = {}) {
@@ -2193,8 +2205,10 @@ function flashPaneExit(el) {
   setTimeout(() => el.classList.remove('flash-exit'), 2000);
 }
 
-function playBell(tone = state.responseSoundTone) {
+function playBell(tone = state.responseSoundTone, volume = state.responseSoundVolume) {
   try {
+    const level = Math.max(0, Math.min(100, Number(volume) || 0)) / 500;
+    if (!level) return;
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const notes = {
       soft: [[660, 0, 0.28, 'sine']],
@@ -2208,7 +2222,7 @@ function playBell(tone = state.responseSoundTone) {
       gain.connect(ctx.destination);
       osc.frequency.value = frequency;
       osc.type = type;
-      gain.gain.setValueAtTime(0.12, ctx.currentTime + delay);
+      gain.gain.setValueAtTime(level, ctx.currentTime + delay);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + duration);
       osc.start(ctx.currentTime + delay);
       osc.stop(ctx.currentTime + delay + duration);
@@ -2669,6 +2683,8 @@ document.getElementById('skinSelect').onchange = e => setSkin(e.target.value);
 document.getElementById('fontSizeSlider').oninput = e => setFontSize(Number(e.target.value));
 document.getElementById('responseSoundModeSelect').onchange = e => setResponseSoundMode(e.target.value);
 document.getElementById('responseSoundToneSelect').onchange = e => setResponseSoundTone(e.target.value);
+document.getElementById('responseSoundVolume').oninput = e => setResponseSoundVolume(e.target.value);
+document.getElementById('responseSoundTest').onclick = () => playBell(state.responseSoundTone, state.responseSoundVolume);
 document.getElementById('systemMonitorToggle').onchange = e => setSystemMonitorVisible(e.target.checked);
 
 // ── Close Confirmation Modal ──

@@ -85,6 +85,10 @@
       <option value="ping">Ping</option>
       <option value="chime">Chime</option>
     </select>
+    <label for="responseSoundVolume">Volume</label>
+    <input type="range" id="responseSoundVolume" min="0" max="100" value="60" step="1" aria-label="Response sound volume">
+    <span id="responseSoundVolumeLabel" class="font-size-label">60%</span>
+    <button id="responseSoundTest" class="settings-action" type="button">Test sound</button>
     <label class="monitor-toggle" for="systemMonitorToggle">
       <input id="systemMonitorToggle" type="checkbox">
       <span>Show top monitor</span>
@@ -127,6 +131,6 @@
   <script src="vendor/addon-web-links.js"></script>
   <script src="vendor/addon-serialize.js"></script>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="app.js?v=20260714-response-sound" defer></script>
+  <script src="app.js?v=20260714-response-sound-volume" defer></script>
 </body>
 </html>
