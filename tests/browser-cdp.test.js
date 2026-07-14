@@ -485,6 +485,47 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.strictEqual(terminalFocusVisual.reactivated.textareaFocused, true, 'reactivating PassiDeck must focus the last selected terminal for immediate typing');
     assert.deepStrictEqual(terminalFocusVisual.modalFocus, { buttonFocused: true, inputFocused: false }, 'reactivating PassiDeck must not steal focus from an open modal');
 
+    const responseSound = await evalExpr(cdp, sid, `(async () => {
+      const entries = [...state.sessions.values()];
+      const active = entries[0];
+      const other = entries[1];
+      selectPanel(active.session.id, { persist: false });
+      setResponseSoundMode('background');
+      setResponseSoundTone('chime');
+      const decisions = {
+        activeFocused: shouldPlayResponseSound(active.session.id, true, false),
+        otherFocused: shouldPlayResponseSound(other.session.id, true, false),
+        activeHidden: shouldPlayResponseSound(active.session.id, false, true)
+      };
+      setResponseSoundMode('off', { persist: false });
+      decisions.off = shouldPlayResponseSound(other.session.id, false, true);
+      setResponseSoundMode('always');
+      decisions.always = shouldPlayResponseSound(active.session.id, true, false);
+      const tones = [];
+      const originalBell = playBell;
+      playBell = tone => { tones.push(tone); };
+      await new Promise(resolve => active.term.write('\\u0007', resolve));
+      await new Promise(resolve => setTimeout(resolve, 20));
+      playBell = originalBell;
+      const persisted = JSON.parse(localStorage.getItem('passideck:response-sound'));
+      return {
+        decisions,
+        tones,
+        mode: document.getElementById('responseSoundModeSelect')?.value || '',
+        tone: document.getElementById('responseSoundToneSelect')?.value || '',
+        persisted,
+        serverPayloadHasSound: Object.keys(uiPayload()).some(key => key.startsWith('responseSound'))
+      };
+    })()`);
+    assert.deepStrictEqual(responseSound, {
+      decisions: { activeFocused: false, otherFocused: true, activeHidden: true, off: false, always: true },
+      tones: ['chime'],
+      mode: 'always',
+      tone: 'chime',
+      persisted: { mode: 'always', tone: 'chime' },
+      serverPayloadHasSound: false
+    }, 'response sounds must be backend-local, configurable, and driven by terminal BEL');
+
     const generatedTitle = await evalExpr(cdp, sid, `(() => {
       const entry = [...state.sessions.values()][0];
       selectPanel(entry.session.id);

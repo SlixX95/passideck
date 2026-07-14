@@ -35,6 +35,8 @@ const state = {
   theme: 'blue',
   skin: 'neon',
   fontSize: 13,
+  responseSoundMode: 'background',
+  responseSoundTone: 'soft',
   minimized: new Set(),
   responsiveMinimized: new Set(),
   saveTimer: null,
@@ -1065,6 +1067,46 @@ function setSkin(skin, opts = {}) {
   if (opts.persist !== false) saveUiState();
 }
 
+function saveResponseSoundPrefs() {
+  try {
+    localStorage.setItem('passideck:response-sound', JSON.stringify({
+      mode: state.responseSoundMode,
+      tone: state.responseSoundTone
+    }));
+  } catch {}
+}
+
+function setResponseSoundMode(mode, opts = {}) {
+  state.responseSoundMode = ['off', 'background', 'always'].includes(mode) ? mode : 'background';
+  const select = document.getElementById('responseSoundModeSelect');
+  if (select) select.value = state.responseSoundMode;
+  if (opts.persist !== false) saveResponseSoundPrefs();
+}
+
+function setResponseSoundTone(tone, opts = {}) {
+  state.responseSoundTone = ['soft', 'ping', 'chime'].includes(tone) ? tone : 'soft';
+  const select = document.getElementById('responseSoundToneSelect');
+  if (select) select.value = state.responseSoundTone;
+  if (opts.persist !== false) saveResponseSoundPrefs();
+}
+
+function loadResponseSoundPrefs() {
+  let prefs = {};
+  try { prefs = JSON.parse(localStorage.getItem('passideck:response-sound')) || {}; } catch {}
+  setResponseSoundMode(prefs.mode, { persist: false });
+  setResponseSoundTone(prefs.tone, { persist: false });
+}
+
+function shouldPlayResponseSound(id, hasDocumentFocus = document.hasFocus(), hidden = document.hidden) {
+  if (state.responseSoundMode === 'off') return false;
+  if (state.responseSoundMode === 'always') return true;
+  return hidden || !hasDocumentFocus || state.activeId !== id;
+}
+
+function notifyResponseComplete(id) {
+  if (shouldPlayResponseSound(id)) playBell(state.responseSoundTone);
+}
+
 function setChromeHidden(hidden, opts = {}) {
   document.body.classList.toggle('chrome-hidden', Boolean(hidden));
   scheduleTerminalFit();
@@ -2092,6 +2134,7 @@ function createPanel(session, opts = {}) {
   const hasSnapshot = hasTerminalSnapshot(id);
   state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, restored: hasSnapshot, snapshotTimer: null, titleSource: '', lastSentCols: 0, lastSentRows: 0 });
   term.onWriteParsed?.(() => refreshTitleFromTerminal(id));
+  term.onBell?.(() => notifyResponseComplete(id));
   if (state.minimized.has(id)) el.classList.add('minimized');
   const replaceId = opts.replaceId;
   const replaceIndex = replaceId ? state.order.indexOf(replaceId) : -1;
@@ -2150,19 +2193,27 @@ function flashPaneExit(el) {
   setTimeout(() => el.classList.remove('flash-exit'), 2000);
 }
 
-function playBell() {
+function playBell(tone = state.responseSoundTone) {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.frequency.value = 800;
-    osc.type = 'sine';
-    gain.gain.setValueAtTime(0.15, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
-    osc.start(ctx.currentTime);
-    osc.stop(ctx.currentTime + 0.3);
+    const notes = {
+      soft: [[660, 0, 0.28, 'sine']],
+      ping: [[880, 0, 0.16, 'triangle']],
+      chime: [[660, 0, 0.18, 'sine'], [990, 0.12, 0.28, 'sine']]
+    }[tone] || [[660, 0, 0.28, 'sine']];
+    for (const [frequency, delay, duration, type] of notes) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.frequency.value = frequency;
+      osc.type = type;
+      gain.gain.setValueAtTime(0.12, ctx.currentTime + delay);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + delay + duration);
+      osc.start(ctx.currentTime + delay);
+      osc.stop(ctx.currentTime + delay + duration);
+    }
+    setTimeout(() => ctx.close?.(), 500);
   } catch {}
 }
 
@@ -2545,6 +2596,7 @@ function showToast(text, type = 'ok') {
 
 async function init() {
   installTooltips();
+  loadResponseSoundPrefs();
   state.hydrating = true;
   const [sessions, ui] = await Promise.all([
     api('GET', '/api/sessions').catch(() => []),
@@ -2615,6 +2667,8 @@ document.getElementById('chromePeek').onclick = toggleChrome;
 document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
 document.getElementById('skinSelect').onchange = e => setSkin(e.target.value);
 document.getElementById('fontSizeSlider').oninput = e => setFontSize(Number(e.target.value));
+document.getElementById('responseSoundModeSelect').onchange = e => setResponseSoundMode(e.target.value);
+document.getElementById('responseSoundToneSelect').onchange = e => setResponseSoundTone(e.target.value);
 document.getElementById('systemMonitorToggle').onchange = e => setSystemMonitorVisible(e.target.checked);
 
 // ── Close Confirmation Modal ──
