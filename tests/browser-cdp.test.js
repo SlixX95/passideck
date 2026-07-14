@@ -202,23 +202,59 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await sleep(250);
     const savedUi = await requestJson(base, 'GET', '/api/ui-state');
     const savedRect = savedUi.panePrefs?.windows?.desktop?.[madeSessions[0]];
-    assert.ok(savedRect && savedRect.x + savedRect.w <= clampedWindow.grid.width + 1 && savedRect.y + savedRect.h <= clampedWindow.grid.height + 1, `clamped window rect must persist server-side: ${JSON.stringify(savedRect)}`);
+    assert.ok(savedRect && savedRect.x > clampedWindow.grid.width && savedRect.y > clampedWindow.grid.height && savedRect.w === 1600 && savedRect.h === 900, `local viewport clamp must not rewrite authoritative server geometry: ${JSON.stringify(savedRect)}`);
 
-    const peerTarget = await cdp.send('Target.createTarget', { url: 'about:blank' });
-    const peerAttached = await cdp.send('Target.attachToTarget', { targetId: peerTarget.targetId, flatten: true });
-    const peerSid = peerAttached.sessionId;
-    await cdp.send('Page.enable', {}, peerSid);
-    await cdp.send('Runtime.enable', {}, peerSid);
-    await cdp.send('Page.navigate', { url: base }, peerSid);
-    await waitEval(cdp, peerSid, 'document.readyState === "complete" && document.querySelectorAll(".term-panel").length >= 11');
-    await waitEval(cdp, sid, `!state.hydrating && state.saveState === 'saved'`);
-    await waitEval(cdp, peerSid, `!state.hydrating && state.saveState === 'saved'`);
+    const sixSlotAutoPlacement = await evalExpr(cdp, sid, `(() => {
+      const ids = state.order.slice(0, 6);
+      const prefs = windowPrefs();
+      const before = structuredClone(prefs);
+      const beforeMinimized = new Set(state.minimized);
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      const cell = { w: grid.width / 3, h: grid.height / 2 };
+      const occupied = [[0, 0], [1, 0], [2, 0], [0, 1], [1, 1]];
+      state.minimized = new Set(state.order.slice(5));
+      occupied.forEach(([col, row], index) => {
+        prefs[ids[index]] = { x: col * cell.w, y: row * cell.h, w: cell.w, h: cell.h, z: 20 + index };
+      });
+      const free = freeSpaceWindowRect(ids[5]);
+      state.minimized = new Set(state.order);
+      const emptyDesktop = freeSpaceWindowRect();
+      const expectedEmpty = desktopCandidates()[0];
+      state.panePrefs.windows.desktop = before;
+      state.minimized = beforeMinimized;
+      return { free, expected: { x: cell.w * 2, y: cell.h, w: cell.w, h: cell.h }, emptyDesktop, expectedEmpty };
+    })()`);
+    assert.ok(sixSlotAutoPlacement.free, `new window must find the open bottom-right cell in a 3x2 desktop: ${JSON.stringify(sixSlotAutoPlacement)}`);
+    for (const key of ['x', 'y', 'w', 'h']) {
+      assert.ok(Math.abs(sixSlotAutoPlacement.free[key] - sixSlotAutoPlacement.expected[key]) < 2, `3x2 auto-placement ${key} mismatch: ${JSON.stringify(sixSlotAutoPlacement)}`);
+      assert.ok(Math.abs(sixSlotAutoPlacement.emptyDesktop[key] - sixSlotAutoPlacement.expectedEmpty[key]) < 2, `first-window placement ${key} must keep existing default: ${JSON.stringify(sixSlotAutoPlacement)}`);
+    }
+
     await evalExpr(cdp, sid, `(() => {
       const p = windowPrefs()['${madeSessions[0]}'];
       Object.assign(p, { x: 111, y: 112, w: 777, h: 444, z: 90 });
       applyFreeWindow('${madeSessions[0]}');
       savePanePrefs();
     })()`);
+    await waitEval(cdp, sid, `state.saveState === 'saved'`);
+
+    const peerTarget = await cdp.send('Target.createTarget', { url: 'about:blank' });
+    const peerAttached = await cdp.send('Target.attachToTarget', { targetId: peerTarget.targetId, flatten: true });
+    const peerSid = peerAttached.sessionId;
+    await cdp.send('Page.enable', {}, peerSid);
+    await cdp.send('Runtime.enable', {}, peerSid);
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1024, height: 768, deviceScaleFactor: 1, mobile: false }, peerSid);
+    await cdp.send('Page.navigate', { url: base }, peerSid);
+    await waitEval(cdp, peerSid, 'document.readyState === "complete" && document.querySelectorAll(".term-panel").length >= 11');
+    await waitEval(cdp, sid, `!state.hydrating && state.saveState === 'saved'`);
+    await waitEval(cdp, peerSid, `!state.hydrating && state.saveState === 'saved'`);
+    const afterDesktopPeerInit = await requestJson(base, 'GET', '/api/ui-state');
+    const desktopPeerRect = afterDesktopPeerInit.panePrefs?.windows?.desktop?.[madeSessions[0]];
+    assert.deepStrictEqual(
+      desktopPeerRect && { x: desktopPeerRect.x, y: desktopPeerRect.y, w: desktopPeerRect.w, h: desktopPeerRect.h },
+      { x: 111, y: 112, w: 777, h: 444 },
+      'opening a differently sized desktop peer must not rescale shared window geometry'
+    );
     await waitEval(cdp, peerSid, `(() => {
       const p = windowPrefs()['${madeSessions[0]}'];
       return p?.x === 111 && p?.y === 112 && p?.w === 777 && p?.h === 444;
@@ -728,6 +764,29 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       return { visible, expectedVisible: state.sessions.size - window.__mobileUserMinimized.length, transient: state.responsiveMinimized.size, minimized: persistentMinimizedIds(), expectedMinimized: window.__mobileUserMinimized };
     })()`);
     assert.deepStrictEqual(restoredDesktop, { visible: restoredDesktop.expectedVisible, expectedVisible: restoredDesktop.expectedVisible, transient: 0, minimized: restoredDesktop.expectedMinimized, expectedMinimized: restoredDesktop.expectedMinimized }, 'widening must restore only responsive-minimized panes and preserve user minimization');
+
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 760, height: 700, deviceScaleFactor: 1, mobile: false }, sid);
+    await waitEval(cdp, sid, 'innerWidth === 760');
+    const remoteMinimizeId = await evalExpr(cdp, sid, `(() => {
+      responsiveMinimizeForViewport();
+      applyLayoutVisibility();
+      const id = [...state.responsiveMinimized][0];
+      const ui = uiPayload();
+      ui.revision = state.uiRevision + 1;
+      ui.panePrefs = structuredClone(state.panePrefs);
+      ui.panePrefs.minimized = [...new Set([...persistentMinimizedIds(), id])];
+      applyAuthoritativeUiState(ui);
+      return id;
+    })()`);
+    assert.ok(remoteMinimizeId, 'narrow peer must have a responsive-minimized pane for remote user-minimize regression');
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false }, sid);
+    await waitEval(cdp, sid, 'innerWidth === 1280');
+    const remoteMinimizeAfterWiden = await evalExpr(cdp, sid, `(() => {
+      responsiveMinimizeForViewport();
+      applyLayoutVisibility();
+      return { minimized: state.minimized.has('${remoteMinimizeId}'), persistent: persistentMinimizedIds().includes('${remoteMinimizeId}'), transient: state.responsiveMinimized.has('${remoteMinimizeId}') };
+    })()`);
+    assert.deepStrictEqual(remoteMinimizeAfterWiden, { minimized: true, persistent: true, transient: false }, 'remote user minimization must survive narrow-client responsive state and widening');
 
     await cdp.send('Page.navigate', { url: `${base}/?token=secret-token#keep` }, sid);
     await waitEval(cdp, sid, 'document.readyState === "complete"');

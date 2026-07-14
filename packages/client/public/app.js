@@ -252,25 +252,6 @@ function desktopSize() {
   return { w: Math.max(1, Math.round(r.width)), h: Math.max(1, Math.round(r.height)) };
 }
 
-function scaleWindowPrefsToViewport() {
-  const old = state.panePrefs.viewport;
-  const now = desktopSize();
-  const prefs = windowPrefs();
-  let changed = false;
-  if (old?.w > 0 && old?.h > 0 && (Math.abs(old.w - now.w) > 2 || Math.abs(old.h - now.h) > 2)) {
-    const sx = now.w / old.w;
-    const sy = now.h / old.h;
-    for (const p of Object.values(prefs)) {
-      p.x *= sx; p.y *= sy; p.w *= sx; p.h *= sy;
-    }
-    changed = true;
-  }
-  const before = JSON.stringify(prefs);
-  clampWindowPrefs(prefs);
-  state.panePrefs.viewport = now;
-  return changed || before !== JSON.stringify(prefs);
-}
-
 function responsiveMinimizeForViewport() {
   const { w, h } = desktopSize();
   if (Math.min(w, window.innerWidth || w) > 760 && h >= 420) {
@@ -324,7 +305,8 @@ function desktopCandidates() {
 
 function freeSpaceWindowRect(id = null) {
   const occupied = occupiedWindowRects(id);
-  for (const c of desktopCandidates()) {
+  const gaps = occupied.length ? desktopGapSlotRects(occupied.map(rect => ({ rect }))) : [];
+  for (const c of [...gaps, ...desktopCandidates()]) {
     const area = c.w * c.h;
     const overlap = occupied.reduce((sum, r) => sum + rectOverlap(c, r), 0);
     if (overlap / Math.max(1, area) < 0.08) return { ...c, z: nextWindowZ() };
@@ -1463,6 +1445,7 @@ function applyAuthoritativeUiState(ui) {
   setChromeHidden(Boolean(ui.chromeHidden), { persist: false });
   setSystemMonitorVisible(Boolean(ui.systemMonitor), { persist: false });
   restorePanelOrder();
+  state.responsiveMinimized.clear();
   state.minimized = new Set((state.panePrefs.minimized || []).filter(id => state.sessions.has(id)));
   for (const [id, entry] of state.sessions) {
     entry.el.classList.toggle('minimized', state.minimized.has(id));
@@ -1735,7 +1718,6 @@ function endPointerDrag(event) {
   else if (slot?.type === 'swap') swapWindowSlots(d.sourceId, slot.targetId, d.swapOriginRect);
   else if (slot?.type === 'free') applyFreeSlotSnap(d.sourceId, slot.rect);
   savePanePrefs();
-  saveUiState();
   scheduleTerminalFit();
   renderSharedResizeHandles();
 }
@@ -1791,7 +1773,6 @@ function endWindowResize(event) {
   document.body.classList.remove('window-resizing');
   document.getElementById(`panel-${d.sourceId}`)?.classList.remove('resizing');
   savePanePrefs();
-  saveUiState();
   scheduleTerminalFit();
   renderSharedResizeHandles();
 }
@@ -1896,7 +1877,6 @@ function endSharedResize(event) {
   document.body.classList.remove('shared-resizing-x', 'shared-resizing-y');
   state.sharedResizeDrag = null;
   savePanePrefs();
-  saveUiState();
   scheduleTerminalFit();
   renderSharedResizeHandles();
 }
@@ -1917,8 +1897,6 @@ function startWindowResize(id, event) {
     x: event.clientX,
     y: event.clientY,
     startRect: { x: p.x, y: p.y, w: p.w, h: p.h },
-    startW: p.w,
-    startH: p.h,
     z: p.z
   };
   clearSharedResizeHandles();
@@ -2071,11 +2049,6 @@ function createPanel(session, opts = {}) {
   });
 
   const ro = new ResizeObserver(() => {
-    const p = windowPrefs()[id];
-    if (innerWidth > 900 && !state.hydrating && p && el.classList.contains('free-window') && !state.minimized.has(id) && !el.classList.contains('layout-hidden') && el.offsetParent) {
-      const r = el.getBoundingClientRect();
-      if (r.width >= 300 && r.height >= 190) { p.w = r.width; p.h = r.height; savePanePrefs(); }
-    }
     scheduleTerminalFit();
   });
   ro.observe(el.querySelector('.terminal'));
@@ -2342,10 +2315,8 @@ async function launch(command) {
   state.launchBusy = true;
   try {
     const cmd = String(command || '').trim() || '/bin/bash';
-    const wasActive = state.activeId;
-    const replaceId = null;
     const session = await api('POST', '/api/sessions', { command: cmd, label: cmd });
-    createPanel(session, { replaceId, autoPlace: true });
+    createPanel(session, { autoPlace: true });
     applyLayoutVisibility();
     savePanePrefs();
   } catch (err) {
@@ -2533,7 +2504,6 @@ async function init() {
 
   state.uiRevision = Number(ui?.revision) || 0;
   loadPanePrefs(ui?.panePrefs || {});
-  const normalizedDesktopPrefs = innerWidth > 900 && scaleWindowPrefsToViewport();
   setTheme(ui?.theme || 'green', { persist: false });
   setSkin(ui?.skin || 'neon', { persist: false });
   setFontSize(ui?.fontSize || state.fontSize, { persist: false });
@@ -2559,7 +2529,6 @@ async function init() {
   updateEmpty();
   renderSwitcher();
   state.hydrating = false;
-  if (normalizedDesktopPrefs) savePanePrefs();
   connectUiEvents();
 }
 
