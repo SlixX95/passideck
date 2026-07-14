@@ -13,10 +13,11 @@ try { pty = require('@homebridge/node-pty-prebuilt-multiarch'); } catch {}
 const { SessionManager } = require('./session');
 const { loadConfig, configDir } = require('./config');
 
+let Database = null;
 let db = null;
 let dbModule = null;
 try {
-  const Database = require('better-sqlite3');
+  Database = require('better-sqlite3');
   dbModule = require('./database');
   db = dbModule.initDatabase(Database);
 } catch (err) {
@@ -539,6 +540,40 @@ function tmuxName(id) {
   return `passideck_${String(id).replace(/[^a-zA-Z0-9_]/g, '')}`;
 }
 
+function hermesSource(id) {
+  return `passideck:${id}`;
+}
+
+function openHermesStateDb(dbPath) {
+  const file = dbPath || path.join(process.env.HERMES_HOME || path.join(os.homedir(), '.hermes'), 'state.db');
+  if (!Database || !fs.existsSync(file)) return null;
+  try { return new Database(file, { readonly: true, fileMustExist: true }); }
+  catch (err) { console.warn('[hermes-title] state DB unavailable:', err.message); return null; }
+}
+
+function syncHermesTitles(sessions, hermesDb) {
+  if (!hermesDb) return 0;
+  let findLatest;
+  try {
+    findLatest = hermesDb.prepare('SELECT id, title FROM sessions WHERE source = ? ORDER BY started_at DESC LIMIT 1');
+  } catch (err) {
+    console.warn('[hermes-title] title query unavailable:', err.message);
+    return 0;
+  }
+  let changed = 0;
+  for (const session of sessions.sessions.values()) {
+    const row = findLatest.get(hermesSource(session.id));
+    if (!row) continue;
+    const title = String(row.title || '').trim().slice(0, 160);
+    if (session.meta.hermesSessionId === row.id && session.meta.title === title) continue;
+    session.meta.hermesSessionId = row.id;
+    session.meta.title = title;
+    session.broadcast({ type: 'meta', session: session.toJSON() });
+    changed += 1;
+  }
+  return changed;
+}
+
 function tmuxHas(name) {
   try { execFileSync(TMUX_CMD, tmuxArgs(['has-session', '-t', name]), { stdio: 'ignore' }); return true; }
   catch { return false; }
@@ -551,9 +586,9 @@ function tmuxSetDefaults(name = '') {
   }
 }
 
-function tmuxNew(name, cwd, launch) {
+function tmuxNew(name, cwd, launch, sessionId) {
   if (tmuxHas(name)) { tmuxSetDefaults(name); return; }
-  execFileSync(TMUX_CMD, tmuxArgs(['new-session', '-d', '-s', name, '-c', cwd, launch.file, ...launch.args]), { stdio: 'ignore' });
+  execFileSync(TMUX_CMD, tmuxArgs(['new-session', '-d', '-s', name, '-c', cwd, 'env', `PASSIDECK_SESSION=${sessionId}`, `HERMES_SESSION_SOURCE=${hermesSource(sessionId)}`, launch.file, ...launch.args]), { stdio: 'ignore' });
   tmuxSetDefaults(name);
 }
 
@@ -615,6 +650,9 @@ function createServer(config = loadConfig()) {
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: '/ws', maxPayload: TERMINAL_MAX_INPUT_BYTES });
   const sessions = new SessionManager();
+  const hermesDb = openHermesStateDb(config.hermesStateDb);
+  const hermesTitleTimer = setInterval(() => syncHermesTitles(sessions, hermesDb), Math.max(250, Number(config.hermesTitlePollMs) || 1000));
+  hermesTitleTimer.unref?.();
   const uiEventClients = new Set();
   const uploadCleanupTimer = setInterval(() => {
     try { cleanupOldUploads(); }
@@ -693,7 +731,7 @@ function createServer(config = loadConfig()) {
 
     try {
       const name = tmuxName(session.id);
-      tmuxNew(name, resolvedCwd, launch);
+      tmuxNew(name, resolvedCwd, launch, session.id);
       attachTmux(session);
       if (db && dbModule) dbModule.upsertSession(db, session);
       if (launch.initialInput) setTimeout(() => session.pty?.write(launch.initialInput), 250);
@@ -762,6 +800,7 @@ function createServer(config = loadConfig()) {
   });
 
   async function close() {
+    clearInterval(hermesTitleTimer);
     clearInterval(uploadCleanupTimer);
     for (const client of wss.clients) client.terminate();
     for (const client of uiEventClients) client.end();
@@ -771,12 +810,13 @@ function createServer(config = loadConfig()) {
     }
     await new Promise(resolve => wss.close(() => resolve()));
     if (server.listening) await new Promise(resolve => server.close(() => resolve()));
+    try { hermesDb?.close(); } catch {}
   }
 
   return { app, server, wss, sessions, close };
 }
 
-module.exports = { createServer, loadConfig, readCodexLimits, saveUploadedBlob, normalizeMime, UPLOAD_MIME_ALLOWLIST };
+module.exports = { createServer, loadConfig, readCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, UPLOAD_MIME_ALLOWLIST };
 
 if (require.main === module) {
   const config = loadConfig();

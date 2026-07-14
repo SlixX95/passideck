@@ -154,6 +154,10 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const session = await requestJson(base, 'POST', '/api/sessions', { command: '/bin/bash', label: `smoke-${i}`, cols: 120, rows: 30 });
       madeSessions.push(session.id);
     }
+    const firstTmux = `passideck_${madeSessions[0].replace(/[^a-zA-Z0-9_]/g, '')}`;
+    const firstPanePid = execFileSync('tmux', ['-L', socket, 'list-panes', '-t', firstTmux, '-F', '#{pane_pid}'], { encoding: 'utf8' }).trim();
+    const firstPaneEnv = fs.readFileSync(`/proc/${firstPanePid}/environ`, 'utf8').split('\0');
+    assert.ok(firstPaneEnv.includes(`HERMES_SESSION_SOURCE=passideck:${madeSessions[0]}`), 'tmux pane must tag Hermes sessions with its stable PassiDeck id');
     await requestJson(base, 'PUT', '/api/ui-state', {
       baseLayout: 'auto',
       layout: 'auto',
@@ -211,7 +215,10 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const beforeMinimized = new Set(state.minimized);
       const grid = document.getElementById('termGrid').getBoundingClientRect();
       const cell = { w: grid.width / 3, h: grid.height / 2 };
-      const occupied = [[0, 0], [1, 0], [2, 0], [0, 1], [1, 1]];
+      const occupied = [
+        [0, 0], [1, 0], [2, 0],
+        [0, 1], [1, 1]
+      ];
       state.minimized = new Set(state.order.slice(5));
       occupied.forEach(([col, row], index) => {
         prefs[ids[index]] = { x: col * cell.w, y: row * cell.h, w: cell.w, h: cell.h, z: 20 + index };
@@ -229,6 +236,37 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       assert.ok(Math.abs(sixSlotAutoPlacement.free[key] - sixSlotAutoPlacement.expected[key]) < 2, `3x2 auto-placement ${key} mismatch: ${JSON.stringify(sixSlotAutoPlacement)}`);
       assert.ok(Math.abs(sixSlotAutoPlacement.emptyDesktop[key] - sixSlotAutoPlacement.expectedEmpty[key]) < 2, `first-window placement ${key} must keep existing default: ${JSON.stringify(sixSlotAutoPlacement)}`);
     }
+
+    const viewportClampPersistence = await evalExpr(cdp, sid, `(async () => {
+      const id = '${madeSessions[1]}';
+      const prefs = windowPrefs();
+      const before = structuredClone(prefs[id]);
+      const wasHydrating = state.hydrating;
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      prefs[id] = { x: grid.width - 100, y: grid.height - 80, w: grid.width + 200, h: grid.height + 120, z: 40 };
+      state.hydrating = false;
+      applyFreeWindow(id);
+      await new Promise(resolve => setTimeout(resolve, 80));
+      const stored = structuredClone(prefs[id]);
+      const panel = state.sessions.get(id).el.getBoundingClientRect();
+      state.hydrating = true;
+      prefs[id] = before;
+      applyFreeWindow(id);
+      state.hydrating = wasHydrating;
+      clearTimeout(state.saveTimer);
+      state.saveTimer = null;
+      return {
+        stored,
+        requested: { w: grid.width + 200, h: grid.height + 120 },
+        renderedInside: panel.width <= grid.width + 1 && panel.height <= grid.height + 1
+      };
+    })()`);
+    assert.strictEqual(viewportClampPersistence.renderedInside, true, `oversized window must render inside viewport: ${JSON.stringify(viewportClampPersistence)}`);
+    assert.deepStrictEqual(
+      { w: viewportClampPersistence.stored.w, h: viewportClampPersistence.stored.h },
+      viewportClampPersistence.requested,
+      `temporary viewport clamp must not overwrite authoritative window size: ${JSON.stringify(viewportClampPersistence)}`
+    );
 
     await evalExpr(cdp, sid, `(() => {
       const p = windowPrefs()['${madeSessions[0]}'];
@@ -345,12 +383,84 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.deepStrictEqual(edgeResize, { x: 40, w: 560, edges: 8 }, `left edge resize must grow window without bottom-right-only lock: ${JSON.stringify(edgeResize)}`);
 
+    const sharedResizeOcclusion = await evalExpr(cdp, sid, `(() => {
+      const ids = ${JSON.stringify(madeSessions.slice(0, 3))};
+      const prefs = windowPrefs();
+      const savedPrefs = JSON.parse(JSON.stringify(prefs));
+      const savedMinimized = [...state.minimized];
+      state.sessions.forEach((entry, id) => {
+        state.minimized.add(id);
+        entry.el.classList.add('layout-hidden');
+      });
+      ids.forEach(id => {
+        state.minimized.delete(id);
+        state.sessions.get(id)?.el.classList.remove('layout-hidden');
+      });
+      Object.assign(prefs[ids[0]], { x: 0, y: 0, w: 400, h: 500, z: 10 });
+      Object.assign(prefs[ids[1]], { x: 400, y: 0, w: 400, h: 500, z: 11 });
+      Object.assign(prefs[ids[2]], { x: 250, y: 100, w: 300, h: 200, z: 50 });
+      ids.forEach(applyFreeWindow);
+      renderSharedResizeHandles();
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      const covered = document.elementFromPoint(grid.left + 400, grid.top + 150);
+      const visible = document.elementFromPoint(grid.left + 400, grid.top + 400);
+      const result = {
+        coveredPane: covered?.closest('.term-panel')?.dataset?.paneId || '',
+        coveredClass: covered?.className || '',
+        visibleShared: Boolean(visible?.classList?.contains('shared-resize-handle'))
+      };
+      prefs[ids[2]].z = 5;
+      applyFreeWindow(ids[2]);
+      renderSharedResizeHandles();
+      result.beforeBringShared = document.elementFromPoint(grid.left + 400, grid.top + 150)?.classList?.contains('shared-resize-handle') || false;
+      const persistPanePrefs = savePanePrefs;
+      savePanePrefs = () => {};
+      bringWindowToFront(ids[2]);
+      savePanePrefs = persistPanePrefs;
+      result.afterBringPane = document.elementFromPoint(grid.left + 400, grid.top + 150)?.closest('.term-panel')?.dataset?.paneId || '';
+      state.panePrefs.windows.desktop = savedPrefs;
+      state.minimized.clear();
+      savedMinimized.forEach(id => state.minimized.add(id));
+      restorePanelOrder();
+      return result;
+    })()`);
+    assert.strictEqual(sharedResizeOcclusion.coveredPane, madeSessions[2], `a higher window must own pointer hit-testing above covered shared resize edges: ${JSON.stringify(sharedResizeOcclusion)}`);
+    assert.strictEqual(sharedResizeOcclusion.visibleShared, true, `uncovered shared resize edge must remain interactive: ${JSON.stringify(sharedResizeOcclusion)}`);
+    assert.strictEqual(sharedResizeOcclusion.beforeBringShared, true, `shared edge should be interactive while the crossing pane is behind it: ${JSON.stringify(sharedResizeOcclusion)}`);
+    assert.strictEqual(sharedResizeOcclusion.afterBringPane, madeSessions[2], `bringing a crossing pane forward must immediately refresh shared resize hit-testing: ${JSON.stringify(sharedResizeOcclusion)}`);
+
     const counts = await evalExpr(cdp, sid, `(() => ({
       panels: document.querySelectorAll('.term-panel').length,
       activeTitle: document.getElementById('activeSessionDescription')?.textContent || ''
     }))()`);
     assert.strictEqual(counts.panels, 11, 'all panels should render');
     assert.notStrictEqual(counts.activeTitle, 'No title', `topbar should show session info, not the generated-title fallback: ${JSON.stringify(counts)}`);
+
+    const terminalFocusVisual = await evalExpr(cdp, sid, `(() => {
+      const entry = state.sessions.get('${madeSessions[0]}');
+      selectPanel(entry.session.id, { persist: false });
+      const textarea = entry.el.querySelector('.xterm-helper-textarea');
+      textarea.focus();
+      syncTerminalInputFocus(true);
+      const focused = {
+        selected: entry.el.classList.contains('active'),
+        inputFocused: entry.el.classList.contains('input-focused'),
+        shadow: getComputedStyle(entry.el).boxShadow
+      };
+      window.dispatchEvent(new Event('blur'));
+      const background = {
+        selected: entry.el.classList.contains('active'),
+        inputFocused: entry.el.classList.contains('input-focused'),
+        shadow: getComputedStyle(entry.el).boxShadow
+      };
+      syncTerminalInputFocus(true);
+      return { focused, background };
+    })()`);
+    assert.strictEqual(terminalFocusVisual.focused.selected, true, 'selected pane state must remain independent from keyboard focus');
+    assert.strictEqual(terminalFocusVisual.focused.inputFocused, true, 'focused xterm pane must show keyboard-input focus');
+    assert.strictEqual(terminalFocusVisual.background.selected, true, 'backgrounding PassiDeck must not change selected pane/session state');
+    assert.strictEqual(terminalFocusVisual.background.inputFocused, false, 'backgrounded PassiDeck must remove keyboard-input focus styling');
+    assert.notStrictEqual(terminalFocusVisual.background.shadow, terminalFocusVisual.focused.shadow, 'backgrounded selected pane must not retain the focused neon frame');
 
     const generatedTitle = await evalExpr(cdp, sid, `(() => {
       const entry = [...state.sessions.values()][0];
@@ -371,10 +481,10 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     const placeholderCustomDoesNotBlock = await evalExpr(cdp, sid, `(() => {
       const entry = [...state.sessions.values()][0];
       state.panePrefs.titles[entry.session.id] = 'Titel';
-      applyGeneratedTitle(entry.session.id, 'Generated After Placeholder', { source: 'terminal' });
-      return { pane: entry.el.querySelector('.term-title')?.textContent || '', stored: state.panePrefs.titles[entry.session.id] || '', osc: titleFromOsc('\\u001b]0;OSC Generated Title\\u0007') };
+      applySessionMeta(entry.session.id, { id: entry.session.id, meta: { ...entry.session.meta, title: 'Canonical Hermes Title', hermesSessionId: 'hermes-1' } });
+      return { pane: entry.el.querySelector('.term-title')?.textContent || '', stored: state.panePrefs.titles[entry.session.id] || '', source: entry.titleSource };
     })()`);
-    assert.deepStrictEqual(placeholderCustomDoesNotBlock, { pane: 'Generated After Placeholder', stored: 'Titel', osc: 'OSC Generated Title' }, 'placeholder custom titles must not block later generated/OSC titles');
+    assert.deepStrictEqual(placeholderCustomDoesNotBlock, { pane: 'Canonical Hermes Title', stored: 'Titel', source: 'server' }, 'placeholder custom titles must not block canonical server titles');
 
     const oscTitleEvent = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
@@ -383,10 +493,21 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       await new Promise(resolve => setTimeout(resolve, 20));
       return entry.el.querySelector('.term-title')?.textContent || '';
     })()`);
-    assert.strictEqual(oscTitleEvent, 'OSC Event Title', 'xterm OSC title events must update the pane header');
+    assert.strictEqual(oscTitleEvent, 'No title', 'generic OSC window titles must not become session titles');
+
+    const garbageVisibleTitle = await evalExpr(cdp, sid, `(() => {
+      const entry = [...state.sessions.values()][0];
+      entry.session.meta.command = '/bin/bash';
+      clearGeneratedTitle(entry.session.id);
+      const inferred = inferHermesVisibleTitle(['Title: /home/maeve/projects/passideck-dev', 'loaded session: npm test']);
+      refreshTitleFromTerminal(entry.session.id);
+      return { inferred, pane: entry.el.querySelector('.term-title')?.textContent || '' };
+    })()`);
+    assert.deepStrictEqual(garbageVisibleTitle, { inferred: '', pane: 'No title' }, 'shell output and generic Title lines must not poison pane titles');
 
     const tuiSelectedTitle = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
+      entry.session.meta.command = 'hermes --tui';
       delete entry.autoTitle;
       delete entry.session.meta.title;
       entry.el.querySelector('.term-title').textContent = panelTitle(entry.session);
@@ -407,7 +528,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     const tuiLoadedVisibleTitle = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
       clearGeneratedTitle(entry.session.id);
-      await new Promise(resolve => entry.term.write('\\r\\nSession title: Loaded TUI Session Title\\r\\n', resolve));
+      await new Promise(resolve => entry.term.write('\\r\\nHermes CLI Status\\r\\n\\r\\nTitle: Loaded TUI Session Title\\r\\n', resolve));
       refreshTitleFromTerminal(entry.session.id);
       return { inferred: inferHermesVisibleTitle(terminalViewportRows(entry.term)), pane: entry.el.querySelector('.term-title')?.textContent || '' };
     })()`);
@@ -491,6 +612,11 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       return inferHermesSessionTitle(rows);
     })()`);
     assert.strictEqual(unnumberedCurrentRowTitle, 'Real Visible Title', 'Hermes TUI selected current row may omit numeric index; still infer title');
+
+    const fakeSessionListTitle = await evalExpr(cdp, sid, `inferHermesSessionTitle(['Sessions', '▸ 1. current  gpt-5.5  npm run dev'])`);
+    assert.strictEqual(fakeSessionListTitle, '', 'ordinary Hermes output resembling a session row must not become a locked pane title');
+
+    await evalExpr(cdp, sid, `(() => { [...state.sessions.values()][0].session.meta.command = '/bin/bash'; return true; })()`);
 
     const switchDescriptions = await evalExpr(cdp, sid, `(async () => {
       const ids = [...state.sessions.keys()];

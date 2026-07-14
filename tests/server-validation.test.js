@@ -3,6 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const WebSocket = require('ws');
+const Database = require('better-sqlite3');
 
 const tmpRoot = path.join(os.homedir(), 'tmp');
 fs.mkdirSync(tmpRoot, { recursive: true });
@@ -18,7 +19,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 (async () => {
   try {
-    const { createServer } = require('../packages/server/src/index');
+    const { createServer, syncHermesTitles } = require('../packages/server/src/index');
     const oldToken = process.env.PASSIDECK_AUTH_TOKEN;
     delete process.env.PASSIDECK_AUTH_TOKEN;
     const remoteWithoutAuth = createServer({ host: '0.0.0.0', shell: '/bin/bash' });
@@ -31,6 +32,17 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     const resizes = [];
     const session = app.sessions.create({ id: 'validation' });
     session.pty = { write: text => writes.push(text), resize: (cols, rows) => resizes.push([cols, rows]) };
+    const hermesDb = new Database(path.join(home, 'hermes-state.db'));
+    hermesDb.exec('CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, started_at REAL, title TEXT)');
+    hermesDb.prepare('INSERT INTO sessions (id, source, started_at, title) VALUES (?, ?, ?, ?)').run('hermes-1', 'passideck:validation', 1, 'Canonical Hermes Title');
+    assert.strictEqual(syncHermesTitles(app.sessions, hermesDb), 1, 'Hermes DB title must update the matching PassiDeck pane');
+    assert.strictEqual(session.meta.title, 'Canonical Hermes Title');
+    assert.strictEqual(session.meta.hermesSessionId, 'hermes-1');
+    hermesDb.prepare('INSERT INTO sessions (id, source, started_at, title) VALUES (?, ?, ?, ?)').run('hermes-2', 'passideck:validation', 2, null);
+    assert.strictEqual(syncHermesTitles(app.sessions, hermesDb), 1, 'a newer untitled Hermes session must clear the stale title');
+    assert.strictEqual(session.meta.title, '');
+    assert.strictEqual(session.meta.hermesSessionId, 'hermes-2');
+    hermesDb.close();
     await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
     const port = app.server.address().port;
     const base = `http://127.0.0.1:${port}`;

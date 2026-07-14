@@ -429,6 +429,7 @@ function bringWindowToFront(id) {
   if (!p) return;
   p.z = nextWindowZ();
   applyFreeWindow(id);
+  renderSharedResizeHandles();
   savePanePrefs();
 }
 
@@ -506,6 +507,30 @@ function sharedResizeGroups() {
   return [...vertical.values(), ...horizontal.values()].filter(g => g.beforeIds.size && g.afterIds.size && g.end - g.start >= minSegment);
 }
 
+function visibleSharedResizeSegments(group, rects = visibleWindowRects()) {
+  const participantIds = new Set([...group.beforeIds, ...group.afterIds]);
+  const participantZ = Math.max(...rects.filter(item => participantIds.has(item.id)).map(item => item.rect.z || 0));
+  let segments = [{ start: group.start, end: group.end }];
+  for (const item of rects) {
+    const rect = item.rect;
+    if (participantIds.has(item.id) || (rect.z || 0) <= participantZ) continue;
+    const crossesHandle = group.axis === 'vertical'
+      ? rect.x < group.pos + 5 && rect.x + rect.w > group.pos - 5
+      : rect.y < group.pos + 5 && rect.y + rect.h > group.pos - 5;
+    if (!crossesHandle) continue;
+    const cutStart = group.axis === 'vertical' ? rect.y : rect.x;
+    const cutEnd = group.axis === 'vertical' ? rect.y + rect.h : rect.x + rect.w;
+    segments = segments.flatMap(segment => {
+      if (cutEnd <= segment.start || cutStart >= segment.end) return [segment];
+      return [
+        { start: segment.start, end: Math.max(segment.start, cutStart) },
+        { start: Math.min(segment.end, cutEnd), end: segment.end }
+      ].filter(part => part.end > part.start);
+    });
+  }
+  return segments;
+}
+
 function renderSharedResizeHandles() {
   const grid = document.getElementById('termGrid');
   if (!grid || state.pointerDrag || state.resizeDrag || state.sharedResizeDrag) return;
@@ -516,22 +541,24 @@ function renderSharedResizeHandles() {
   wrap.id = 'sharedResizeHandles';
   wrap.className = 'shared-resize-handles';
   for (const group of groups) {
-    const handle = document.createElement('div');
-    handle.className = `shared-resize-handle ${group.axis}`;
-    handle.setAttribute('aria-hidden', 'true');
-    if (group.axis === 'vertical') {
-      handle.style.left = `${group.pos - 5}px`;
-      handle.style.top = `${group.start}px`;
-      handle.style.width = '10px';
-      handle.style.height = `${group.end - group.start}px`;
-    } else {
-      handle.style.left = `${group.start}px`;
-      handle.style.top = `${group.pos - 5}px`;
-      handle.style.width = `${group.end - group.start}px`;
-      handle.style.height = '10px';
+    for (const segment of visibleSharedResizeSegments(group)) {
+      const handle = document.createElement('div');
+      handle.className = `shared-resize-handle ${group.axis}`;
+      handle.setAttribute('aria-hidden', 'true');
+      if (group.axis === 'vertical') {
+        handle.style.left = `${group.pos - 5}px`;
+        handle.style.top = `${segment.start}px`;
+        handle.style.width = '10px';
+        handle.style.height = `${segment.end - segment.start}px`;
+      } else {
+        handle.style.left = `${segment.start}px`;
+        handle.style.top = `${group.pos - 5}px`;
+        handle.style.width = `${segment.end - segment.start}px`;
+        handle.style.height = '10px';
+      }
+      handle.addEventListener('pointerdown', e => startSharedResize(group, e));
+      wrap.appendChild(handle);
     }
-    handle.addEventListener('pointerdown', e => startSharedResize(group, e));
-    wrap.appendChild(handle);
   }
   grid.appendChild(wrap);
 }
@@ -1590,9 +1617,11 @@ function extractHermesSessionTitleCandidate(rowText) {
 }
 
 function inferHermesVisibleTitle(rowsOrLines) {
-  for (const raw of Array.isArray(rowsOrLines) ? rowsOrLines : []) {
+  const rows = Array.isArray(rowsOrLines) ? rowsOrLines : [];
+  if (!rows.some(raw => /^Hermes CLI Status$/i.test(cleanHermesSessionLine(raw)))) return '';
+  for (const raw of rows) {
     const clean = cleanHermesSessionLine(raw).replace(/\s+/g, ' ').trim();
-    const m = clean.match(/\b(?:session\s+title|title|loaded\s+session)\s*[:=]\s*(.+)$/i);
+    const m = clean.match(/^Title\s*:\s*(.+)$/i);
     const candidate = m ? extractHermesSessionTitleCandidate(m[1]) || m[1].trim() : '';
     if (candidate && !isPlaceholderTitle(candidate)) return candidate.slice(0, 160);
   }
@@ -1607,8 +1636,16 @@ function hermesSessionRowFromCleanLine(clean) {
   return '';
 }
 
+function hasHermesSessionPickerSignature(rowsOrLines) {
+  const lines = (Array.isArray(rowsOrLines) ? rowsOrLines : []).map(cleanHermesSessionLine);
+  return lines.some(line => /\b\d+\s+live\b.*\b\d+\s+resumable\b/i.test(line))
+    || lines.some(line => /Start a new live session|New row: type prompt/i.test(line))
+    || lines.some(line => /\bcurrent\b.*\b(?:idle|draft)\b.*\b(?:gpt|claude|gemini|codex|qwen|deepseek)\b/i.test(line));
+}
+
 function inferHermesSessionTitle(rowsOrLines) {
   const visible = Array.isArray(rowsOrLines) ? rowsOrLines : [];
+  if (!hasHermesSessionPickerSignature(visible)) return '';
   const hasSessionsHeader = visible.some(row => /\bSessions\b/.test(terminalLineText(row)));
   const rows = [];
   let selectedMarkerSeen = false;
@@ -1633,7 +1670,7 @@ function inferHermesSessionTitle(rowsOrLines) {
 
 function selectedHermesSessionTitleIsEmpty(rowsOrLines) {
   const visible = Array.isArray(rowsOrLines) ? rowsOrLines : [];
-  if (!visible.some(row => /\bSessions\b/.test(terminalLineText(row)))) return false;
+  if (!visible.some(row => /\bSessions\b/.test(terminalLineText(row))) || !hasHermesSessionPickerSignature(visible)) return false;
   if (visible.some(row => /\bprompt\s*›|New row: type prompt/i.test(terminalLineText(row)))) return true;
   for (const raw of visible) {
     const clean = cleanHermesSessionLine(raw);
@@ -1677,17 +1714,20 @@ function applyGeneratedTitle(id, title, opts = {}) {
   return true;
 }
 
-function titleFromOsc(data) {
-  const text = String(data || '');
-  const matches = [...text.matchAll(/\x1b\](?:0|1|2);([^\x07\x1b]*)(?:\x07|\x1b\\)/g)];
-  const title = matches.at(-1)?.[1]?.replace(/\s+/g, ' ').trim() || '';
-  if (!title || isPlaceholderTitle(title)) return '';
-  if (/^(?:bash|zsh|fish|sh|pwsh|powershell|cmd|\/bin\/(?:bash|zsh|sh))$/i.test(title)) return '';
-  return title.slice(0, 160);
+function applySessionMeta(id, session) {
+  const entry = state.sessions.get(id);
+  if (!entry || !session?.meta) return false;
+  const meta = { ...(entry.session.meta || {}), ...session.meta };
+  Object.assign(entry.session, session, { meta });
+  const title = String(session.meta.title || '').trim();
+  if (title) return applyGeneratedTitle(id, title, { source: 'server' });
+  if (!Object.prototype.hasOwnProperty.call(session.meta, 'title')) return false;
+  return clearGeneratedTitle(id);
 }
 
 function refreshTitleFromTerminal(id) {
   const entry = state.sessions.get(id);
+  if (!isHermesTuiEntry(entry)) return;
   const rows = terminalViewportRows(entry?.term);
   const inferred = inferHermesVisibleTitle(rows) || inferHermesSessionTitle(rows);
   if (inferred) applyGeneratedTitle(id, inferred, { source: 'hermes-session' });
@@ -2038,15 +2078,6 @@ function createPanel(session, opts = {}) {
   const termEl = el.querySelector('.terminal');
   term.open(termEl);
   installTerminalWheelScroll(termEl, term, session);
-  // Auto-detect terminal title (vim, Codex, Hermes TUI, etc.)
-  term.onTitleChange(title => {
-    const entry = state.sessions.get(id);
-    if (!entry) return;
-    // Ignore generic/empty titles
-    if (!title || /^(?:\s*|bash|zsh|\/bin\/bash|\/bin\/zsh)$/.test(title)) return;
-    // Only update if user hasn't set a custom title
-    applyGeneratedTitle(id, title);
-  });
 
   const ro = new ResizeObserver(() => {
     scheduleTerminalFit();
@@ -2172,8 +2203,7 @@ function attachSocket(id, term, el) {
     let msg;
     try { msg = JSON.parse(event.data); } catch { return; }
     const entry = state.sessions.get(id);
-    const oscTitle = titleFromOsc(msg.data);
-    if (oscTitle) applyGeneratedTitle(id, oscTitle, { source: 'terminal' });
+    if (msg.type === 'meta') applySessionMeta(id, msg.session);
     if (msg.type === 'replay') {
       // The server intentionally does not replay PTY history anymore. Do not print its
       // reconnect marker into the terminal: that visibly changes shell contents on every
@@ -2254,6 +2284,14 @@ function renderSwitcher() {
   }
 }
 
+function syncTerminalInputFocus(hasDocumentFocus = document.hasFocus()) {
+  document.querySelectorAll('.term-panel.input-focused').forEach(panel => panel.classList.remove('input-focused'));
+  if (!hasDocumentFocus || document.hidden) return;
+  const entry = state.sessions.get(state.activeId);
+  const focused = document.activeElement;
+  if (entry?.el.contains(focused) && focused?.closest?.('.xterm')) entry.el.classList.add('input-focused');
+}
+
 function selectPanel(id, opts = {}) {
   const entry = state.sessions.get(id);
   if (!entry) return;
@@ -2263,6 +2301,7 @@ function selectPanel(id, opts = {}) {
   applyLayoutVisibility();
   if (!state.minimized.has(id)) bringWindowToFront(id);
   entry.term.focus();
+  syncTerminalInputFocus();
   scheduleTerminalFit();
   renderSwitcher();
   if (opts.persist !== false) saveUiState();
@@ -2664,9 +2703,13 @@ document.addEventListener('paste', handleTerminalPaste, true);
 document.addEventListener('contextmenu', handleTerminalContextMenu, true);
 document.addEventListener('dragover', handleUploadDragOver, true);
 document.addEventListener('drop', handleUploadDrop, true);
+window.addEventListener('focus', () => requestAnimationFrame(() => syncTerminalInputFocus()));
+window.addEventListener('blur', () => syncTerminalInputFocus(false));
+document.addEventListener('focusin', () => syncTerminalInputFocus());
+document.addEventListener('focusout', () => queueMicrotask(() => syncTerminalInputFocus()));
 window.addEventListener('resize', () => { responsiveMinimizeForViewport(); applyLayoutVisibility(); scheduleTerminalFit(); });
 window.addEventListener('beforeunload', saveAllTerminalSnapshots);
-document.addEventListener('visibilitychange', () => { if (document.hidden) saveAllTerminalSnapshots(); });
+document.addEventListener('visibilitychange', () => { syncTerminalInputFocus(); if (document.hidden) saveAllTerminalSnapshots(); });
 document.addEventListener('keydown', e => {
   const key = e.key.toLowerCase();
   if (e.key === 'Escape') {
