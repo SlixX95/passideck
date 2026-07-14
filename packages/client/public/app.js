@@ -2292,6 +2292,16 @@ function syncTerminalInputFocus(hasDocumentFocus = document.hasFocus()) {
   if (entry?.el.contains(focused) && focused?.closest?.('.xterm')) entry.el.classList.add('input-focused');
 }
 
+function focusActiveTerminalOnWindowActivation() {
+  const entry = state.sessions.get(state.activeId);
+  if (document.hidden || document.getElementById('closeModal')?.classList.contains('open') || !entry || state.minimized.has(entry.session.id) || entry.el.classList.contains('layout-hidden')) {
+    syncTerminalInputFocus();
+    return;
+  }
+  entry.term.focus();
+  syncTerminalInputFocus(true);
+}
+
 function selectPanel(id, opts = {}) {
   const entry = state.sessions.get(id);
   if (!entry) return;
@@ -2703,7 +2713,7 @@ document.addEventListener('paste', handleTerminalPaste, true);
 document.addEventListener('contextmenu', handleTerminalContextMenu, true);
 document.addEventListener('dragover', handleUploadDragOver, true);
 document.addEventListener('drop', handleUploadDrop, true);
-window.addEventListener('focus', () => requestAnimationFrame(() => syncTerminalInputFocus()));
+window.addEventListener('focus', () => requestAnimationFrame(focusActiveTerminalOnWindowActivation));
 window.addEventListener('blur', () => syncTerminalInputFocus(false));
 document.addEventListener('focusin', () => syncTerminalInputFocus());
 document.addEventListener('focusout', () => queueMicrotask(() => syncTerminalInputFocus()));

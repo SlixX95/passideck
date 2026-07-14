@@ -436,7 +436,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.strictEqual(counts.panels, 11, 'all panels should render');
     assert.notStrictEqual(counts.activeTitle, 'No title', `topbar should show session info, not the generated-title fallback: ${JSON.stringify(counts)}`);
 
-    const terminalFocusVisual = await evalExpr(cdp, sid, `(() => {
+    const terminalFocusVisual = await evalExpr(cdp, sid, `(async () => {
       const entry = state.sessions.get('${madeSessions[0]}');
       selectPanel(entry.session.id, { persist: false });
       const textarea = entry.el.querySelector('.xterm-helper-textarea');
@@ -448,19 +448,42 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         shadow: getComputedStyle(entry.el).boxShadow
       };
       window.dispatchEvent(new Event('blur'));
+      document.getElementById('settingsToggle').focus();
       const background = {
         selected: entry.el.classList.contains('active'),
         inputFocused: entry.el.classList.contains('input-focused'),
         shadow: getComputedStyle(entry.el).boxShadow
       };
-      syncTerminalInputFocus(true);
-      return { focused, background };
+      window.dispatchEvent(new Event('focus'));
+      await new Promise(requestAnimationFrame);
+      const reactivated = {
+        selected: entry.el.classList.contains('active'),
+        inputFocused: entry.el.classList.contains('input-focused'),
+        textareaFocused: document.activeElement === textarea
+      };
+      const modal = document.getElementById('closeModal');
+      showCloseConfirm(entry.session.id, 'Focus guard');
+      await new Promise(resolve => setTimeout(resolve, 0));
+      window.dispatchEvent(new Event('blur'));
+      window.dispatchEvent(new Event('focus'));
+      await new Promise(requestAnimationFrame);
+      const modalFocus = {
+        buttonFocused: modal.contains(document.activeElement),
+        inputFocused: entry.el.classList.contains('input-focused')
+      };
+      hideCloseConfirm();
+      focusActiveTerminalOnWindowActivation();
+      return { focused, background, reactivated, modalFocus };
     })()`);
     assert.strictEqual(terminalFocusVisual.focused.selected, true, 'selected pane state must remain independent from keyboard focus');
     assert.strictEqual(terminalFocusVisual.focused.inputFocused, true, 'focused xterm pane must show keyboard-input focus');
     assert.strictEqual(terminalFocusVisual.background.selected, true, 'backgrounding PassiDeck must not change selected pane/session state');
     assert.strictEqual(terminalFocusVisual.background.inputFocused, false, 'backgrounded PassiDeck must remove keyboard-input focus styling');
     assert.notStrictEqual(terminalFocusVisual.background.shadow, terminalFocusVisual.focused.shadow, 'backgrounded selected pane must not retain the focused neon frame');
+    assert.strictEqual(terminalFocusVisual.reactivated.selected, true, 'reactivating PassiDeck must preserve the last selected pane');
+    assert.strictEqual(terminalFocusVisual.reactivated.inputFocused, true, 'reactivating PassiDeck must restore terminal input styling');
+    assert.strictEqual(terminalFocusVisual.reactivated.textareaFocused, true, 'reactivating PassiDeck must focus the last selected terminal for immediate typing');
+    assert.deepStrictEqual(terminalFocusVisual.modalFocus, { buttonFocused: true, inputFocused: false }, 'reactivating PassiDeck must not steal focus from an open modal');
 
     const generatedTitle = await evalExpr(cdp, sid, `(() => {
       const entry = [...state.sessions.values()][0];
