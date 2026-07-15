@@ -1117,6 +1117,7 @@ function shouldPlayResponseSound(id, hasDocumentFocus = document.hasFocus(), hid
 
 function notifyResponseComplete(id) {
   if (shouldPlayResponseSound(id)) playBell(state.responseSoundTone, state.responseSoundVolume);
+  window.passideckDesktop?.notifyResponseComplete?.();
 }
 
 function setChromeHidden(hidden, opts = {}) {

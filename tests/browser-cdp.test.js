@@ -485,6 +485,18 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.strictEqual(terminalFocusVisual.reactivated.textareaFocused, true, 'reactivating PassiDeck must focus the last selected terminal for immediate typing');
     assert.deepStrictEqual(terminalFocusVisual.modalFocus, { buttonFocused: true, inputFocused: false }, 'reactivating PassiDeck must not steal focus from an open modal');
 
+    const responseAttentionBridge = await evalExpr(cdp, sid, `(() => {
+      const calls = [];
+      Object.defineProperty(window, 'passideckDesktop', {
+        configurable: true,
+        value: { notifyResponseComplete: () => calls.push('complete') }
+      });
+      setResponseSoundMode('off');
+      notifyResponseComplete([...state.sessions.keys()][0]);
+      return calls;
+    })()`);
+    assert.deepStrictEqual(responseAttentionBridge, ['complete'], 'response completion must notify the desktop bridge even when sound is off');
+
     const responseSound = await evalExpr(cdp, sid, `(async () => {
       const entries = [...state.sessions.values()];
       const active = entries[0];
