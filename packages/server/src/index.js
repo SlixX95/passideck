@@ -306,25 +306,45 @@ function codexAuthPath() {
   return process.env.PASSIDECK_HERMES_AUTH_PATH || path.join(hermesHome(), 'auth.json');
 }
 
-function readHermesCodexAuth() {
-  const authPath = codexAuthPath();
-  let store;
-  try {
-    store = JSON.parse(fs.readFileSync(authPath, 'utf8'));
-  } catch (err) {
-    throw new Error(`Hermes Codex auth unavailable at ${authPath}: ${err.message}`);
-  }
-  const state = store.providers?.['openai-codex'] || store['openai-codex'];
+function legacyCodexAuthPath() {
+  return process.env.PASSIDECK_CODEX_AUTH_PATH || path.join(os.homedir(), '.codex', 'auth.json');
+}
+
+function readAuthFile(authPath, label) {
+  try { return JSON.parse(fs.readFileSync(authPath, 'utf8')); }
+  catch (err) { throw new Error(`${label} unavailable at ${authPath}: ${err.message}`); }
+}
+
+function authResult(store, state, authPath, source) {
   const tokens = state?.tokens;
   const accessToken = typeof tokens?.access_token === 'string' ? tokens.access_token.trim() : '';
   const refreshToken = typeof tokens?.refresh_token === 'string' ? tokens.refresh_token.trim() : '';
-  if (!accessToken) throw new Error(`Hermes Codex auth at ${authPath} is missing access_token`);
-  if (!refreshToken) throw new Error(`Hermes Codex auth at ${authPath} is missing refresh_token`);
-  return { store, state, tokens: { ...tokens, access_token: accessToken, refresh_token: refreshToken }, authPath };
+  return accessToken && refreshToken
+    ? { store, state, tokens: { ...tokens, access_token: accessToken, refresh_token: refreshToken }, authPath, source }
+    : null;
+}
+
+function readHermesCodexAuth() {
+  const authPath = codexAuthPath();
+  const store = readAuthFile(authPath, 'Hermes Codex auth');
+  const state = store.providers?.['openai-codex'] || store['openai-codex'];
+  const hermesAuth = authResult(store, state, authPath, 'hermes');
+  if (hermesAuth) return hermesAuth;
+
+  const fallbackPath = legacyCodexAuthPath();
+  const fallbackStore = readAuthFile(fallbackPath, 'Codex auth');
+  const fallbackAuth = authResult(fallbackStore, fallbackStore, fallbackPath, 'codex');
+  if (fallbackAuth) return fallbackAuth;
+  throw new Error(`Codex auth at ${fallbackPath} is missing access_token or refresh_token`);
 }
 
 function saveHermesCodexAuth(auth, tokens) {
   const now = new Date().toISOString();
+  if (auth.source === 'codex') {
+    const nextStore = { ...auth.store, tokens: { ...(auth.state?.tokens || {}), ...tokens }, last_refresh: now, auth_mode: 'chatgpt' };
+    fs.writeFileSync(auth.authPath, `${JSON.stringify(nextStore, null, 2)}\n`, { mode: 0o600 });
+    return;
+  }
   const nextState = { ...(auth.state || {}), tokens: { ...(auth.state?.tokens || {}), ...tokens }, last_refresh: now, auth_mode: 'chatgpt' };
   if (!auth.store.providers || typeof auth.store.providers !== 'object') auth.store.providers = {};
   auth.store.providers['openai-codex'] = nextState;
@@ -422,20 +442,34 @@ function parseWhamWindow(window) {
   };
 }
 
+function normalizeCodexWindows(primary, secondary) {
+  const windows = [primary, secondary].filter(Boolean);
+  if (!windows.length || windows.some(window => !(Number(window.windowDurationMins) > 0))) return { primary, secondary };
+  windows.sort((a, b) => Number(a.windowDurationMins) - Number(b.windowDurationMins));
+  if (windows.length === 1) {
+    return Number(windows[0].windowDurationMins) >= 1440
+      ? { primary: null, secondary: windows[0] }
+      : { primary: windows[0], secondary: null };
+  }
+  return { primary: windows[0], secondary: windows[windows.length - 1] };
+}
+
 function parseCodexLimits(body, cached) {
   if (body.error) throw new Error(body.error.message || 'Codex rate limit error');
   const rl = body.rate_limit || body.result?.rateLimits || {};
-  const primary = body.rate_limit ? parseWhamWindow(rl.primary_window) : (rl.primary || null);
-  const secondary = body.rate_limit ? parseWhamWindow(rl.secondary_window) : (rl.secondary || null);
+  const windows = normalizeCodexWindows(
+    body.rate_limit ? parseWhamWindow(rl.primary_window) : (rl.primary || null),
+    body.rate_limit ? parseWhamWindow(rl.secondary_window) : (rl.secondary || null)
+  );
   return {
     ok: true,
     at: new Date().toISOString(),
     cached,
     source: body.rate_limit ? 'hermes-openai-codex-auth' : 'codex-app-server',
     planType: body.plan_type || rl.planType || null,
-    rateLimitReachedType: rl.rateLimitReachedType || (rl.limit_reached ? 'primary' : null),
-    primary,
-    secondary,
+    rateLimitReachedType: rl.rateLimitReachedType || (rl.limit_reached ? (windows.primary ? 'primary' : 'secondary') : null),
+    primary: windows.primary,
+    secondary: windows.secondary,
     credits: rl.credits || null
   };
 }
@@ -555,7 +589,7 @@ function syncHermesTitles(sessions, hermesDb) {
   if (!hermesDb) return 0;
   let findLatest;
   try {
-    findLatest = hermesDb.prepare('SELECT id, title FROM sessions WHERE source = ? ORDER BY started_at DESC LIMIT 1');
+    findLatest = hermesDb.prepare("SELECT id, title FROM sessions WHERE source = ? AND TRIM(COALESCE(title, '')) <> '' ORDER BY started_at DESC LIMIT 1");
   } catch (err) {
     console.warn('[hermes-title] title query unavailable:', err.message);
     return 0;
@@ -565,6 +599,7 @@ function syncHermesTitles(sessions, hermesDb) {
     const row = findLatest.get(hermesSource(session.id));
     if (!row) continue;
     const title = String(row.title || '').trim().slice(0, 160);
+    if (!title) continue;
     if (session.meta.hermesSessionId === row.id && session.meta.title === title) continue;
     session.meta.hermesSessionId = row.id;
     session.meta.title = title;
@@ -816,7 +851,7 @@ function createServer(config = loadConfig()) {
   return { app, server, wss, sessions, close };
 }
 
-module.exports = { createServer, loadConfig, readCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, UPLOAD_MIME_ALLOWLIST };
+module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, saveHermesCodexAuth, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, UPLOAD_MIME_ALLOWLIST };
 
 if (require.main === module) {
   const config = loadConfig();

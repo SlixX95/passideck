@@ -2,6 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const WebSocket = require('ws');
 const Database = require('better-sqlite3');
 
@@ -9,6 +10,8 @@ const tmpRoot = path.join(os.homedir(), 'tmp');
 fs.mkdirSync(tmpRoot, { recursive: true });
 const home = fs.mkdtempSync(path.join(tmpRoot, 'passideck-validation-test-'));
 process.env.PASSIDECK_HOME = home;
+process.env.PASSIDECK_TMUX_SOCKET = `passideck-validation-${process.pid}`;
+const tmux = (...args) => execFileSync('tmux', ['-L', process.env.PASSIDECK_TMUX_SOCKET, ...args], { stdio: 'pipe' });
 
 let app;
 const opened = ws => new Promise((resolve, reject) => {
@@ -19,7 +22,31 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 (async () => {
   try {
-    const { createServer, syncHermesTitles } = require('../packages/server/src/index');
+    const { createServer, syncHermesTitles, parseCodexLimits, readHermesCodexAuth, saveHermesCodexAuth } = require('../packages/server/src/index');
+    const weeklyOnly = parseCodexLimits({
+      rate_limit: {
+        primary_window: { used_percent: 13, limit_window_seconds: 604800, reset_at: 1784672642 }
+      }
+    }, false);
+    assert.strictEqual(weeklyOnly.primary, null, 'a weekly-only window must not be shown as the 5h limit');
+    assert.strictEqual(weeklyOnly.secondary.windowDurationMins, 10080, 'a seven-day window must be shown as weekly');
+
+    const hermesAuthPath = path.join(home, 'hermes-auth.json');
+    const codexAuthPath = path.join(home, 'codex-auth.json');
+    fs.writeFileSync(hermesAuthPath, JSON.stringify({ providers: {} }));
+    fs.writeFileSync(codexAuthPath, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'codex-access', refresh_token: 'codex-refresh' } }));
+    process.env.PASSIDECK_HERMES_AUTH_PATH = hermesAuthPath;
+    process.env.PASSIDECK_CODEX_AUTH_PATH = codexAuthPath;
+    const fallbackAuth = readHermesCodexAuth();
+    assert.strictEqual(fallbackAuth.authPath, codexAuthPath, 'Codex auth must be used when Hermes provider tokens are absent');
+    assert.strictEqual(fallbackAuth.tokens.access_token, 'codex-access');
+    saveHermesCodexAuth(fallbackAuth, { access_token: 'refreshed-access', refresh_token: 'refreshed-refresh' });
+    const refreshedAuth = JSON.parse(fs.readFileSync(codexAuthPath, 'utf8'));
+    assert.strictEqual(refreshedAuth.tokens.access_token, 'refreshed-access', 'fallback refresh must preserve the Codex auth schema');
+    assert.strictEqual(refreshedAuth.providers, undefined, 'fallback refresh must not write Hermes provider fields');
+    delete process.env.PASSIDECK_HERMES_AUTH_PATH;
+    delete process.env.PASSIDECK_CODEX_AUTH_PATH;
+
     const oldToken = process.env.PASSIDECK_AUTH_TOKEN;
     delete process.env.PASSIDECK_AUTH_TOKEN;
     const remoteWithoutAuth = createServer({ host: '0.0.0.0', shell: '/bin/bash' });
@@ -39,13 +66,28 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.strictEqual(session.meta.title, 'Canonical Hermes Title');
     assert.strictEqual(session.meta.hermesSessionId, 'hermes-1');
     hermesDb.prepare('INSERT INTO sessions (id, source, started_at, title) VALUES (?, ?, ?, ?)').run('hermes-2', 'passideck:validation', 2, null);
-    assert.strictEqual(syncHermesTitles(app.sessions, hermesDb), 1, 'a newer untitled Hermes session must clear the stale title');
-    assert.strictEqual(session.meta.title, '');
-    assert.strictEqual(session.meta.hermesSessionId, 'hermes-2');
+    assert.strictEqual(syncHermesTitles(app.sessions, hermesDb), 0, 'a newer untitled Hermes session must not replace a visible title');
+    assert.strictEqual(session.meta.title, 'Canonical Hermes Title');
+    assert.strictEqual(session.meta.hermesSessionId, 'hermes-1');
+    session.meta.title = '';
+    session.meta.hermesSessionId = null;
+    assert.strictEqual(syncHermesTitles(app.sessions, hermesDb), 1, 'restart recovery must restore the latest non-empty title');
+    assert.strictEqual(session.meta.title, 'Canonical Hermes Title');
+    assert.strictEqual(session.meta.hermesSessionId, 'hermes-1');
     hermesDb.close();
     await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
     const port = app.server.address().port;
     const base = `http://127.0.0.1:${port}`;
+
+    const persistentResponse = await fetch(`${base}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: '/bin/bash', cwd: home, label: 'restart-persistence' })
+    });
+    assert.strictEqual(persistentResponse.status, 200);
+    const persistent = await persistentResponse.json();
+    const persistentTmux = `passideck_${persistent.id.replace(/-/g, '')}`;
+    tmux('has-session', '-t', persistentTmux);
 
     const inputResponse = await fetch(`${base}/api/sessions/validation/input`, {
       method: 'POST',
@@ -103,9 +145,11 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     await delay(20);
     assert.strictEqual(first.readyState, WebSocket.CLOSED, 'shutdown must close first WebSocket client');
     assert.strictEqual(second.readyState, WebSocket.CLOSED, 'shutdown must close second WebSocket client');
+    tmux('has-session', '-t', persistentTmux);
     console.log('server-validation ok');
   } finally {
     if (app) await app.close();
+    try { tmux('kill-server'); } catch {}
     fs.rmSync(home, { recursive: true, force: true });
   }
 })().catch(err => {
