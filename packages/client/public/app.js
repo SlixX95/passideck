@@ -840,19 +840,28 @@ function layoutProposalRects(key, ids) {
   if (key === 'columns') return tileRects({ x: 0, y: 0, w: W, h: H }, n).map((a, i) => n > 1 ? { ...a, x: i * W / n, y: 0, w: W / n, h: H } : a);
   if (key === 'rows') return Array.from({ length: n }, (_, i) => ({ x: 0, y: i * H / n, w: W, h: H / n }));
   if (key === 'focus-left') return [{ x: 0, y: 0, w: W / 2, h: H }, ...tileRects({ x: W / 2, y: 0, w: W / 2, h: H }, n - 1)];
+  if (key === 'focus-right') return [{ x: W / 2, y: 0, w: W / 2, h: H }, ...tileRects({ x: 0, y: 0, w: W / 2, h: H }, n - 1)];
   if (key === 'focus-top') return [{ x: 0, y: 0, w: W, h: H / 2 }, ...tileRects({ x: 0, y: H / 2, w: W, h: H / 2 }, n - 1)];
+  if (key === 'focus-bottom') return [{ x: 0, y: H / 2, w: W, h: H / 2 }, ...tileRects({ x: 0, y: 0, w: W, h: H / 2 }, n - 1)];
   return tileRects({ x: 0, y: 0, w: W, h: H }, n);
 }
 
 function layoutProposals(id) {
   const ids = visibleWindowIds(id);
-  const base = [
-    { key: 'grid', label: 'Grid', ids },
-    { key: 'columns', label: 'Columns', ids },
-    { key: 'rows', label: 'Rows', ids }
-  ];
-  if (ids.length > 1) base.push({ key: 'focus-left', label: 'Left + rest', ids }, { key: 'focus-top', label: 'Top + rest', ids });
-  return base.map(p => ({ ...p, rects: layoutProposalRects(p.key, p.ids) }));
+  const proposals = ids.length === 1
+    ? [{ key: 'full', label: 'Full', ids }]
+    : ids.length === 2
+      ? [{ key: 'columns', label: 'Side by side', ids }, { key: 'rows', label: 'Stacked', ids }]
+      : [
+          { key: 'grid', label: 'Grid', ids },
+          { key: 'columns', label: 'Columns', ids },
+          { key: 'rows', label: 'Rows', ids },
+          { key: 'focus-left', label: 'Left + rest', ids },
+          { key: 'focus-right', label: 'Right + rest', ids },
+          { key: 'focus-top', label: 'Top + rest', ids },
+          { key: 'focus-bottom', label: 'Bottom + rest', ids }
+        ];
+  return proposals.map(p => ({ ...p, rects: layoutProposalRects(p.key, p.ids) }));
 }
 
 function clearLayoutAssist() {

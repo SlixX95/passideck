@@ -190,6 +190,20 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await cdp.send('Page.navigate', { url: base }, sid);
     await waitEval(cdp, sid, 'document.readyState === "complete"');
     await waitEval(cdp, sid, 'document.querySelectorAll(".term-panel").length >= 11');
+    const dynamicLayoutProposals = await evalExpr(cdp, sid, `(() => {
+      const beforeMinimized = state.minimized;
+      const proposalsFor = count => {
+        state.minimized = new Set(state.order.slice(count));
+        return layoutProposals(state.order[0]).map(({ key, label, ids, rects }) => ({ key, label, count: ids.length, rects }));
+      };
+      const result = { one: proposalsFor(1), two: proposalsFor(2), three: proposalsFor(3) };
+      state.minimized = beforeMinimized;
+      return result;
+    })()`);
+    assert.deepStrictEqual(dynamicLayoutProposals.one.map(p => p.label), ['Full'], 'one visible window needs one non-duplicate full-screen layout');
+    assert.deepStrictEqual(dynamicLayoutProposals.two.map(p => p.label), ['Side by side', 'Stacked'], 'two visible windows need only the two distinct splits');
+    assert.deepStrictEqual(dynamicLayoutProposals.three.map(p => p.label), ['Grid', 'Columns', 'Rows', 'Left + rest', 'Right + rest', 'Top + rest', 'Bottom + rest'], 'three or more visible windows need all adaptive focus directions');
+    assert.ok(dynamicLayoutProposals.one.every(p => p.count === 1) && dynamicLayoutProposals.two.every(p => p.count === 2) && dynamicLayoutProposals.three.every(p => p.count === 3), 'layout proposals must exclude minimized windows');
     const clampedWindow = await evalExpr(cdp, sid, `(() => {
       const panel = document.querySelector('[data-pane-id="${madeSessions[0]}"]');
       const grid = document.getElementById('termGrid');
