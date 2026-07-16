@@ -51,47 +51,98 @@
   <button id="chromePeek" class="chrome-peek" data-tooltip="Show UI · Alt+0" aria-label="Show UI">ui</button>
 
   <section id="settingsPanel" class="settings-panel" role="region" aria-labelledby="settingsTitle" hidden>
-    <div id="settingsTitle" class="settings-title">⚙ settings</div>
-    <label for="themeSelect">Theme</label>
-    <select id="themeSelect">
-      <option value="blue">Blue</option>
-      <option value="green">Green</option>
-      <option value="emerald">Emerald</option>
-      <option value="cyan">Cyan</option>
-      <option value="amber">Amber</option>
-      <option value="purple">Purple</option>
-      <option value="red">Red</option>
-      <option value="mono">Mono</option>
-    </select>
-    <label for="skinSelect">Chrome</label>
-    <select id="skinSelect">
-      <option value="neon">Neon glass</option>
-      <option value="stealth">Stealth</option>
-      <option value="prism">Prism edge</option>
-    </select>
-    <label for="fontSizeSlider">Font</label>
-    <input type="range" id="fontSizeSlider" name="fontSize" min="10" max="24" value="13" step="1" data-tooltip="Terminal font size" aria-label="Terminal font size">
-    <span id="fontSizeLabel" class="font-size-label">13px</span>
-    <label for="responseSoundModeSelect">Response sound</label>
-    <select id="responseSoundModeSelect">
-      <option value="off">Off</option>
-      <option value="background">Background or other window</option>
-      <option value="always">Always</option>
-    </select>
-    <label for="responseSoundToneSelect">Sound</label>
-    <select id="responseSoundToneSelect">
-      <option value="soft">Soft</option>
-      <option value="ping">Ping</option>
-      <option value="chime">Chime</option>
-    </select>
-    <label for="responseSoundVolume">Volume</label>
-    <input type="range" id="responseSoundVolume" min="0" max="100" value="60" step="1" aria-label="Response sound volume">
-    <span id="responseSoundVolumeLabel" class="font-size-label">60%</span>
-    <button id="responseSoundTest" class="settings-action" type="button">Test sound</button>
-    <label class="monitor-toggle" for="systemMonitorToggle">
-      <input id="systemMonitorToggle" type="checkbox">
-      <span>Show top monitor</span>
-    </label>
+    <header class="settings-header">
+      <div>
+        <span class="settings-eyebrow">Preferences</span>
+        <div id="settingsTitle" class="settings-title">Settings</div>
+      </div>
+      <button id="settingsClose" class="settings-close" type="button" aria-label="Close settings">×</button>
+    </header>
+    <div class="settings-body">
+      <section class="settings-group" aria-labelledby="appearanceSettingsTitle">
+        <h2 id="appearanceSettingsTitle" class="settings-group-title">Appearance</h2>
+        <div class="settings-row">
+          <div class="settings-copy"><label for="themeSelect">Theme</label><small>Accent color</small></div>
+          <select id="themeSelect">
+            <option value="blue">Blue</option>
+            <option value="green">Green</option>
+            <option value="emerald">Emerald</option>
+            <option value="cyan">Cyan</option>
+            <option value="amber">Amber</option>
+            <option value="purple">Purple</option>
+            <option value="red">Red</option>
+            <option value="mono">Mono</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <div class="settings-copy"><label for="skinSelect">Chrome</label><small>Window surface style</small></div>
+          <select id="skinSelect">
+            <option value="neon">Neon glass</option>
+            <option value="stealth">Stealth</option>
+            <option value="prism">Prism edge</option>
+          </select>
+        </div>
+      </section>
+
+      <section class="settings-group" aria-labelledby="terminalSettingsTitle">
+        <h2 id="terminalSettingsTitle" class="settings-group-title">Terminal</h2>
+        <div class="settings-row">
+          <div class="settings-copy"><label for="fontSizeSelect">Text size</label><small>Applies live after a short pause</small></div>
+          <div class="settings-value-control">
+            <select id="fontSizeSelect" aria-describedby="fontSizeLabel">
+              <option value="10">10 px</option>
+              <option value="11">11 px</option>
+              <option value="12">12 px</option>
+              <option value="13" selected>13 px</option>
+              <option value="14">14 px</option>
+              <option value="15">15 px</option>
+              <option value="16">16 px</option>
+              <option value="18">18 px</option>
+              <option value="20">20 px</option>
+              <option value="22">22 px</option>
+              <option value="24">24 px</option>
+            </select>
+            <output id="fontSizeLabel" class="settings-value" for="fontSizeSelect">Live</output>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-group" aria-labelledby="notificationSettingsTitle">
+        <h2 id="notificationSettingsTitle" class="settings-group-title">Notifications</h2>
+        <div class="settings-row">
+          <div class="settings-copy"><label for="responseSoundModeSelect">Response sound</label><small>When a terminal finishes</small></div>
+          <select id="responseSoundModeSelect">
+            <option value="off">Off</option>
+            <option value="background">Background only</option>
+            <option value="always">Always</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <div class="settings-copy"><label for="responseSoundToneSelect">Tone</label><small>Notification sound</small></div>
+          <select id="responseSoundToneSelect">
+            <option value="soft">Soft</option>
+            <option value="ping">Ping</option>
+            <option value="chime">Chime</option>
+          </select>
+        </div>
+        <div class="settings-row">
+          <div class="settings-copy"><label for="responseSoundVolume">Volume</label><small>Preview with Test sound</small></div>
+          <div class="settings-range-control">
+            <input type="range" id="responseSoundVolume" min="0" max="100" value="60" step="1" aria-label="Response sound volume">
+            <output id="responseSoundVolumeLabel" class="settings-value" for="responseSoundVolume">60%</output>
+          </div>
+        </div>
+        <button id="responseSoundTest" class="settings-action" type="button">Test sound</button>
+      </section>
+
+      <section class="settings-group" aria-labelledby="interfaceSettingsTitle">
+        <h2 id="interfaceSettingsTitle" class="settings-group-title">Interface</h2>
+        <label class="settings-toggle" for="systemMonitorToggle">
+          <span class="settings-copy"><span>Top monitor</span><small>CPU, memory, disk and limits</small></span>
+          <input id="systemMonitorToggle" type="checkbox">
+        </label>
+      </section>
+    </div>
   </section>
 
   <main class="grid-container layout-auto" id="termGrid">
@@ -130,6 +181,6 @@
   <script src="vendor/addon-web-links.js"></script>
   <script src="vendor/addon-serialize.js"></script>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="app.js?v=20260716-toolbar-cleanup" defer></script>
+  <script src="app.js?v=20260716-split-gap-docking" defer></script>
 </body>
 </html>

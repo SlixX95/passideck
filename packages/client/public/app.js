@@ -254,6 +254,21 @@ function desktopSize() {
   return { w: Math.max(1, Math.round(r.width)), h: Math.max(1, Math.round(r.height)) };
 }
 
+function resizeWindowsForDesktop(from, to) {
+  if (!from?.w || !from?.h || !to?.w || !to?.h || (from.w === to.w && from.h === to.h)) return;
+  const scaleX = to.w / from.w;
+  const scaleY = to.h / from.h;
+  const prefs = windowPrefs();
+  for (const rect of Object.values(prefs)) {
+    rect.x *= scaleX;
+    rect.y *= scaleY;
+    rect.w *= scaleX;
+    rect.h *= scaleY;
+  }
+  for (const id of state.sessions.keys()) if (prefs[id]) applyFreeWindow(id);
+  renderSharedResizeHandles();
+}
+
 function responsiveMinimizeForViewport() {
   const { w, h } = desktopSize();
   if (Math.min(w, window.innerWidth || w) > 760 && h >= 420) {
@@ -279,6 +294,30 @@ function rectOverlap(a, b) {
   const x = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
   const y = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
   return x * y;
+}
+
+function rectCoveredArea(rect, blockers) {
+  const covered = blockers.map(blocker => ({
+    x: Math.max(rect.x, blocker.x),
+    y: Math.max(rect.y, blocker.y),
+    right: Math.min(rect.x + rect.w, blocker.x + blocker.w),
+    bottom: Math.min(rect.y + rect.h, blocker.y + blocker.h)
+  })).filter(c => c.right > c.x && c.bottom > c.y);
+  const xs = [...new Set(covered.flatMap(c => [c.x, c.right]))].sort((a, b) => a - b);
+  let area = 0;
+  for (let i = 0; i < xs.length - 1; i += 1) {
+    const intervals = covered
+      .filter(c => c.x < xs[i + 1] && c.right > xs[i])
+      .map(c => [c.y, c.bottom])
+      .sort((a, b) => a[0] - b[0]);
+    let height = 0, end = -Infinity;
+    for (const [start, bottom] of intervals) {
+      height += Math.max(0, bottom - Math.max(start, end));
+      end = Math.max(end, bottom);
+    }
+    area += (xs[i + 1] - xs[i]) * height;
+  }
+  return area;
 }
 
 function occupiedWindowRects(excludeId = null) {
@@ -310,7 +349,7 @@ function freeSpaceWindowRect(id = null) {
   const gaps = occupied.length ? desktopGapSlotRects(occupied.map(rect => ({ rect }))) : [];
   for (const c of [...gaps, ...desktopCandidates()]) {
     const area = c.w * c.h;
-    const overlap = occupied.reduce((sum, r) => sum + rectOverlap(c, r), 0);
+    const overlap = rectCoveredArea(c, occupied);
     if (overlap / Math.max(1, area) < 0.08) return { ...c, z: nextWindowZ() };
   }
   return null;
@@ -435,13 +474,8 @@ function bringWindowToFront(id) {
   savePanePrefs();
 }
 
-function clearSnapSuggestions() {
-  document.getElementById('snapSuggestions')?.remove();
-}
-
 function clearDesktopSlotSuggestions() {
   document.getElementById('desktopSlotSuggestions')?.remove();
-  document.querySelectorAll('.term-panel.slot-swap-target').forEach(el => el.classList.remove('slot-swap-target'));
 }
 
 function clearSharedResizeHandles() {
@@ -588,18 +622,46 @@ function similarRect(a, b) {
   return Math.abs(a.x - b.x) < 8 && Math.abs(a.y - b.y) < 8 && Math.abs(a.w - b.w) < 8 && Math.abs(a.h - b.h) < 8;
 }
 
-function slotRectsForDrag(sourceId) {
+function slotRectsForDrag(sourceId, pointerX = null, pointerY = null) {
   const prefs = windowPrefs();
   const occupied = state.order
     .filter(id => id !== sourceId && state.sessions.has(id) && !state.minimized.has(id) && prefs[id])
     .map(id => ({ id, rect: { x: prefs[id].x, y: prefs[id].y, w: prefs[id].w, h: prefs[id].h } }));
-  const candidates = [...desktopGapSlotRects(occupied), ...desktopGridSlotRects(visibleWindowIds().length + 1), ...desktopCandidates()];
+  const occupiedRects = occupied.map(o => o.rect);
+  const gridRect = document.getElementById('termGrid')?.getBoundingClientRect?.() || { width: 0, height: 0 };
+  const hasPointer = Number.isFinite(pointerX) && Number.isFinite(pointerY);
+  const centerX = hasPointer && pointerX >= gridRect.width / 3 && pointerX <= gridRect.width * 2 / 3;
+  const centerY = hasPointer && pointerY >= gridRect.height / 3 && pointerY <= gridRect.height * 2 / 3;
+  let candidates = centerY && !centerX
+    ? [
+        { x: 0, y: 0, w: gridRect.width / 2, h: gridRect.height },
+        { x: gridRect.width / 2, y: 0, w: gridRect.width / 2, h: gridRect.height }
+      ]
+    : centerX && !centerY
+      ? [
+          { x: 0, y: 0, w: gridRect.width, h: gridRect.height / 2 },
+          { x: 0, y: gridRect.height / 2, w: gridRect.width, h: gridRect.height / 2 }
+        ]
+      : centerX && centerY
+        ? []
+        : desktopGridSlotRects(visibleWindowIds().length + 1);
+  const isAvailable = c => {
+    const area = c.w * c.h;
+    const overlap = rectCoveredArea(c, occupiedRects);
+    return area >= 300 * 190 && overlap / Math.max(1, area) <= 0.12;
+  };
+  if (hasPointer && !candidates.some(c => pointInRect(pointerX, pointerY, c) && isAvailable(c))) {
+    const gaps = occupied.length ? desktopGapSlotRects(occupied) : [];
+    const pointed = gaps.filter(c => pointInRect(pointerX, pointerY, c) && isAvailable(c));
+    if (pointed.length) {
+      const distance = c => Math.hypot(pointerX - c.x - c.w / 2, pointerY - c.y - c.h / 2);
+      pointed.sort((a, b) => distance(a) - distance(b) || (b.w * b.h) - (a.w * a.h));
+      candidates = [pointed[0]];
+    }
+  }
   const free = [];
   for (const c of candidates) {
-    const area = c.w * c.h;
-    if (area < 300 * 190) continue;
-    const overlap = occupied.reduce((sum, o) => sum + rectOverlap(c, o.rect), 0);
-    if (overlap / Math.max(1, area) > 0.12) continue;
+    if (!isAvailable(c)) continue;
     const rect = { ...c };
     if (!free.some(existing => similarRect(existing.rect, rect))) free.push({ id: `free-${free.length}`, rect });
   }
@@ -609,6 +671,7 @@ function slotRectsForDrag(sourceId) {
 function desktopGapSlotRects(occupied) {
   const grid = document.getElementById('termGrid');
   const r = grid?.getBoundingClientRect?.() || { width: 1280, height: 720 };
+  const occupiedRects = occupied.map(o => o.rect);
   const xs = [0, r.width];
   const ys = [0, r.height];
   for (const o of occupied) {
@@ -616,26 +679,43 @@ function desktopGapSlotRects(occupied) {
     xs.push(Math.max(0, Math.min(r.width, a.x)), Math.max(0, Math.min(r.width, a.x + a.w)));
     ys.push(Math.max(0, Math.min(r.height, a.y)), Math.max(0, Math.min(r.height, a.y + a.h)));
   }
-  const ux = [...new Set(xs.map(v => Math.round(v)))].sort((a, b) => a - b);
-  const uy = [...new Set(ys.map(v => Math.round(v)))].sort((a, b) => a - b);
-  const rects = [];
+  const normalizeAxis = values => [...new Set(values.map(v => Math.round(v * 1000) / 1000))].sort((a, b) => a - b);
+  const ux = normalizeAxis(xs);
+  const uy = normalizeAxis(ys);
+  const cells = [];
   for (let yi = 0; yi < uy.length - 1; yi += 1) {
     for (let xi = 0; xi < ux.length - 1; xi += 1) {
       const c = { x: ux[xi], y: uy[yi], w: ux[xi + 1] - ux[xi], h: uy[yi + 1] - uy[yi] };
-      if (c.w < 300 || c.h < 190) continue;
-      const overlap = occupied.reduce((sum, o) => sum + rectOverlap(c, o.rect), 0);
-      if (overlap / Math.max(1, c.w * c.h) <= 0.02) rects.push(c);
+      const overlap = rectCoveredArea(c, occupiedRects);
+      if (overlap / Math.max(1, c.w * c.h) <= 0.02) cells.push(c);
     }
   }
-  return rects.sort((a, b) => (b.w * b.h) - (a.w * a.h));
+  const mergeRuns = (items, axis) => {
+    const sorted = [...items].sort(axis === 'x'
+      ? (a, b) => a.y - b.y || a.x - b.x
+      : (a, b) => a.x - b.x || a.y - b.y);
+    const runs = [];
+    for (const c of sorted) {
+      const last = runs.at(-1);
+      const adjacent = axis === 'x'
+        ? last && last.y === c.y && last.h === c.h && last.x + last.w === c.x
+        : last && last.x === c.x && last.w === c.w && last.y + last.h === c.y;
+      if (adjacent) last[axis === 'x' ? 'w' : 'h'] += c[axis === 'x' ? 'w' : 'h'];
+      else runs.push({ ...c });
+    }
+    return runs;
+  };
+  const rows = mergeRuns(cells, 'x');
+  const columns = mergeRuns(cells, 'y');
+  const rects = [];
+  for (const c of [...cells, ...rows, ...columns, ...mergeRuns(rows, 'y'), ...mergeRuns(columns, 'x')]) {
+    if (!rects.some(rect => similarRect(rect, c))) rects.push(c);
+  }
+  return rects.filter(c => c.w >= 300 && c.h >= 190).sort((a, b) => (b.w * b.h) - (a.w * a.h));
 }
 
 function pointInRect(px, py, rect) {
   return px >= rect.x && px <= rect.x + rect.w && py >= rect.y && py <= rect.y + rect.h;
-}
-
-function pointInCenter(px, py, rect) {
-  return px >= rect.x + rect.w * 0.25 && px <= rect.x + rect.w * 0.75 && py >= rect.y + rect.h * 0.25 && py <= rect.y + rect.h * 0.75;
 }
 
 function chooseDesktopSlotAt(x, y, sourceId) {
@@ -644,10 +724,10 @@ function chooseDesktopSlotAt(x, y, sourceId) {
   if (!gr) return null;
   const px = x - gr.left;
   const py = y - gr.top;
-  const slots = slotRectsForDrag(sourceId);
-  const swap = slots.occupied.find(slot => pointInCenter(px, py, slot.rect));
-  if (swap) return { type: 'swap', targetId: swap.id, rect: swap.rect, slots };
-  const free = slots.free.find(slot => pointInRect(px, py, slot.rect));
+  const slots = slotRectsForDrag(sourceId, px, py);
+  const free = slots.free
+    .filter(slot => pointInRect(px, py, slot.rect))
+    .sort((a, b) => (a.rect.w * a.rect.h) - (b.rect.w * b.rect.h))[0];
   if (free) return { type: 'free', rect: free.rect, slots };
   return { type: 'none', slots };
 }
@@ -672,111 +752,23 @@ function showDesktopSlotSuggestions(result) {
     el.style.top = `${slot.rect.y}px`;
     el.style.width = `${slot.rect.w}px`;
     el.style.height = `${slot.rect.h}px`;
-    el.innerHTML = '<span>Free</span>';
+    const fraction = Math.max(1, Math.round(grid.clientWidth * grid.clientHeight / (slot.rect.w * slot.rect.h)));
+    const label = document.createElement('span');
+    label.textContent = `Free · 1/${fraction}`;
+    el.appendChild(label);
     wrap.appendChild(el);
   }
-  document.querySelectorAll('.term-panel.slot-swap-target').forEach(el => el.classList.remove('slot-swap-target'));
-  if (result.type === 'swap') document.getElementById(`panel-${result.targetId}`)?.classList.add('slot-swap-target');
 }
 
 function applyFreeSlotSnap(id, rect) {
   const prefs = windowPrefs();
   const p = ensureFreeWindow(id);
   if (!p) return;
-  Object.assign(prefs[id], { x: rect.x, y: rect.y, z: p.z || nextWindowZ() });
+  Object.assign(prefs[id], { ...rect, z: p.z || nextWindowZ() });
   applyFreeWindow(id);
 }
 
-function swapWindowSlots(sourceId, targetId, sourceSlotRect = null) {
-  if (!sourceId || !targetId || sourceId === targetId) return;
-  const prefs = windowPrefs();
-  const source = ensureFreeWindow(sourceId);
-  const target = ensureFreeWindow(targetId);
-  if (!source || !target) return;
-  const sourceRect = sourceSlotRect || { x: source.x, y: source.y };
-  const targetRect = { x: target.x, y: target.y };
-  Object.assign(prefs[sourceId], { x: targetRect.x, y: targetRect.y, z: nextWindowZ() });
-  Object.assign(prefs[targetId], { x: sourceRect.x, y: sourceRect.y, z: Math.max(1, (prefs[sourceId].z || 10) - 1) });
-  const si = state.order.indexOf(sourceId);
-  const ti = state.order.indexOf(targetId);
-  if (si >= 0 && ti >= 0) [state.order[si], state.order[ti]] = [state.order[ti], state.order[si]];
-  applyFreeWindow(targetId);
-  applyFreeWindow(sourceId);
-  renderSwitcher();
-  renderSharedResizeHandles();
-}
 
-function snapSuggestionsAt(x, y) {
-  const grid = document.getElementById('termGrid');
-  if (!grid) return [];
-  const r = grid.getBoundingClientRect();
-  if (x < r.left || x > r.right || y < r.top || y > r.bottom) return [];
-  const edge = Math.min(42, Math.max(24, Math.min(r.width, r.height) * 0.045));
-  const nearLeft = x - r.left <= edge;
-  const nearRight = r.right - x <= edge;
-  const nearTop = y - r.top <= edge;
-  const nearBottom = r.bottom - y <= edge;
-  const W = r.width;
-  const H = r.height;
-  const suggestions = [];
-  const add = (key, label, rect) => suggestions.push({ key, label, rect });
-  if (nearLeft && nearTop) {
-    add('top-left-quarter', 'Top-left quarter', { x: 0, y: 0, w: W / 2, h: H / 2 });
-    add('left-half', 'Left half', { x: 0, y: 0, w: W / 2, h: H });
-    add('top-half', 'Top half', { x: 0, y: 0, w: W, h: H / 2 });
-  } else if (nearRight && nearTop) {
-    add('top-right-quarter', 'Top-right quarter', { x: W / 2, y: 0, w: W / 2, h: H / 2 });
-    add('right-half', 'Right half', { x: W / 2, y: 0, w: W / 2, h: H });
-    add('top-half', 'Top half', { x: 0, y: 0, w: W, h: H / 2 });
-  } else if (nearLeft && nearBottom) {
-    add('bottom-left-quarter', 'Bottom-left quarter', { x: 0, y: H / 2, w: W / 2, h: H / 2 });
-    add('left-half', 'Left half', { x: 0, y: 0, w: W / 2, h: H });
-    add('bottom-half', 'Bottom half', { x: 0, y: H / 2, w: W, h: H / 2 });
-  } else if (nearRight && nearBottom) {
-    add('bottom-right-quarter', 'Bottom-right quarter', { x: W / 2, y: H / 2, w: W / 2, h: H / 2 });
-    add('right-half', 'Right half', { x: W / 2, y: 0, w: W / 2, h: H });
-    add('bottom-half', 'Bottom half', { x: 0, y: H / 2, w: W, h: H / 2 });
-  } else if (nearLeft) add('left-half', 'Left half', { x: 0, y: 0, w: W / 2, h: H });
-  else if (nearRight) add('right-half', 'Right half', { x: W / 2, y: 0, w: W / 2, h: H });
-  else if (nearTop) add('top-half', 'Top half', { x: 0, y: 0, w: W, h: H / 2 });
-  else if (nearBottom) add('bottom-half', 'Bottom half', { x: 0, y: H / 2, w: W, h: H / 2 });
-  return suggestions;
-}
-
-function showSnapSuggestions(suggestions, activeKey = null) {
-  const grid = document.getElementById('termGrid');
-  if (!grid || !suggestions.length) { clearSnapSuggestions(); return; }
-  let wrap = document.getElementById('snapSuggestions');
-  if (!wrap) {
-    wrap = document.createElement('section');
-    wrap.id = 'snapSuggestions';
-    wrap.className = 'snap-suggestions';
-    grid.appendChild(wrap);
-  }
-  wrap.innerHTML = '';
-  for (const s of suggestions) {
-    const el = document.createElement('div');
-    el.className = `snap-choice${s.key === activeKey ? ' active' : ''}`;
-    el.dataset.snapKey = s.key;
-    el.style.left = `${s.rect.x}px`;
-    el.style.top = `${s.rect.y}px`;
-    el.style.width = `${s.rect.w}px`;
-    el.style.height = `${s.rect.h}px`;
-    el.innerHTML = `<span>${s.label}</span>`;
-    wrap.appendChild(el);
-  }
-}
-
-function chooseSnapSuggestionAt(x, y, suggestions) {
-  if (!suggestions.length) return null;
-  const grid = document.getElementById('termGrid');
-  const r = grid.getBoundingClientRect();
-  const px = x - r.left;
-  const py = y - r.top;
-  const containing = suggestions.filter(s => px >= s.rect.x && px <= s.rect.x + s.rect.w && py >= s.rect.y && py <= s.rect.y + s.rect.h);
-  if (containing.length) return containing.sort((a, b) => (a.rect.w * a.rect.h) - (b.rect.w * b.rect.h))[0];
-  return suggestions[0];
-}
 
 function visibleWindowIds(firstId = null) {
   const ids = state.order.filter(id => state.sessions.has(id) && !state.minimized.has(id));
@@ -797,18 +789,6 @@ function tileRects(rect, count) {
   });
 }
 
-function leftoverRects(used) {
-  const grid = document.getElementById('termGrid');
-  const r = grid?.getBoundingClientRect?.() || { width: 1280, height: 720 };
-  const W = r.width, H = r.height;
-  return [
-    { x: 0, y: 0, w: used.x, h: H },
-    { x: used.x + used.w, y: 0, w: W - used.x - used.w, h: H },
-    { x: 0, y: 0, w: W, h: used.y },
-    { x: 0, y: used.y + used.h, w: W, h: H - used.y - used.h }
-  ].filter(a => a.w >= 180 && a.h >= 120).sort((a, b) => b.w * b.h - a.w * a.h);
-}
-
 function applyRectsToWindows(ids, rects) {
   const prefs = windowPrefs();
   ids.forEach((id, i) => {
@@ -820,16 +800,6 @@ function applyRectsToWindows(ids, rects) {
   savePanePrefs();
   scheduleTerminalFit();
   renderSharedResizeHandles();
-}
-
-function applySnapSuggestion(id, suggestion) {
-  if (!id || !suggestion) return;
-  const ids = visibleWindowIds(id);
-  const rem = ids.slice(1);
-  const rects = [suggestion.rect];
-  const left = leftoverRects(suggestion.rect)[0];
-  if (left) rects.push(...tileRects(left, rem.length));
-  applyRectsToWindows(ids, rects);
 }
 
 function layoutProposalRects(key, ids) {
@@ -845,29 +815,56 @@ function layoutProposalRects(key, ids) {
   return tileRects({ x: 0, y: 0, w: W, h: H }, n);
 }
 
+function orderWindowIdsForRects(ids, rects) {
+  const prefs = windowPrefs();
+  const remaining = ids.slice();
+  return rects.slice(0, ids.length).map(target => {
+    const tx = target.x + target.w / 2;
+    const ty = target.y + target.h / 2;
+    let best = 0;
+    let bestDistance = Infinity;
+    remaining.forEach((id, index) => {
+      const source = prefs[id];
+      if (!source) return;
+      const dx = source.x + source.w / 2 - tx;
+      const dy = source.y + source.h / 2 - ty;
+      const distance = dx * dx + dy * dy;
+      if (distance < bestDistance) { best = index; bestDistance = distance; }
+    });
+    return remaining.splice(best, 1)[0];
+  });
+}
+
 function layoutProposals(id) {
-  const ids = visibleWindowIds(id);
-  const proposals = ids.length === 1
-    ? [{ key: 'full', label: 'Full', ids }]
-    : ids.length === 2
-      ? [{ key: 'columns', label: 'Side by side', ids }, { key: 'rows', label: 'Stacked', ids }]
+  const visibleIds = visibleWindowIds();
+  const proposals = visibleIds.length === 1
+    ? [{ key: 'full', label: 'Full' }]
+    : visibleIds.length === 2
+      ? [{ key: 'columns', label: 'Side by side' }, { key: 'rows', label: 'Stacked' }]
       : [
-          { key: 'grid', label: 'Grid', ids },
-          { key: 'columns', label: 'Columns', ids },
-          { key: 'rows', label: 'Rows', ids },
-          { key: 'focus-left', label: 'Left + rest', ids },
-          { key: 'focus-right', label: 'Right + rest', ids },
-          { key: 'focus-top', label: 'Top + rest', ids },
-          { key: 'focus-bottom', label: 'Bottom + rest', ids }
+          { key: 'grid', label: 'Grid' },
+          { key: 'columns', label: 'Columns' },
+          { key: 'rows', label: 'Rows' },
+          { key: 'focus-left', label: 'Left + rest' },
+          { key: 'focus-right', label: 'Right + rest' },
+          { key: 'focus-top', label: 'Top + rest' },
+          { key: 'focus-bottom', label: 'Bottom + rest' }
         ];
-  return proposals.map(p => ({ ...p, rects: layoutProposalRects(p.key, p.ids) }));
+  return proposals.map(proposal => {
+    const rects = layoutProposalRects(proposal.key, visibleIds);
+    const focused = proposal.key.startsWith('focus-') && visibleIds.includes(id);
+    const ids = focused
+      ? [id, ...orderWindowIdsForRects(visibleIds.filter(other => other !== id), rects.slice(1))]
+      : orderWindowIdsForRects(visibleIds, rects);
+    return { ...proposal, ids, rects };
+  });
 }
 
 function clearLayoutAssist() {
   document.getElementById('layoutAssist')?.remove();
 }
 
-function showLayoutAssist(id, anchor) {
+function showLayoutAssist(id, anchor, hover = {}) {
   const grid = document.getElementById('termGrid');
   if (!grid) return;
   clearLayoutAssist();
@@ -894,7 +891,8 @@ function showLayoutAssist(id, anchor) {
     btn.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); applyRectsToWindows(p.ids, p.rects); clearLayoutAssist(); });
     box.appendChild(btn);
   }
-  box.addEventListener('mouseleave', () => setTimeout(clearLayoutAssist, 120));
+  box.addEventListener('mouseenter', () => hover.enter?.());
+  box.addEventListener('mouseleave', () => hover.leave?.());
   grid.appendChild(box);
 }
 
@@ -908,7 +906,6 @@ function applyLayoutVisibility() {
   grid.style.gridTemplateColumns = '';
   grid.style.gridTemplateRows = '';
   grid.querySelectorAll('.empty-slot, .resize-gutter, .drop-placeholder').forEach(el => el.remove());
-  clearSnapSuggestions();
   clearDesktopSlotSuggestions();
   clearSharedResizeHandles();
   clearLayoutAssist();
@@ -998,18 +995,27 @@ function buildGridPicker() {
 function updateGridPickerActive() {}
 
 /* ── Font Size ── */
+let fontSizePreviewTimer = null;
 function setFontSize(size, opts = {}) {
+  clearTimeout(fontSizePreviewTimer);
+  fontSizePreviewTimer = null;
   size = Math.max(10, Math.min(24, Number(size) || 13));
   state.fontSize = size;
-  for (const [, entry] of state.sessions) {
-    try { entry.term.setOption('fontSize', size); } catch {}
-  }
+  for (const [, entry] of state.sessions) entry.term.options.fontSize = size;
   scheduleTerminalFit();
-  const slider = document.getElementById('fontSizeSlider');
+  const select = document.getElementById('fontSizeSelect');
   const label = document.getElementById('fontSizeLabel');
-  if (slider) slider.value = size;
-  if (label) label.textContent = `${size}px`;
+  if (select) select.value = String(size);
+  if (label) label.textContent = 'Live';
   if (opts.persist !== false) saveUiState();
+}
+
+function previewFontSize(size) {
+  size = Math.max(10, Math.min(24, Number(size) || 13));
+  const label = document.getElementById('fontSizeLabel');
+  if (label) label.textContent = 'Pending';
+  clearTimeout(fontSizePreviewTimer);
+  fontSizePreviewTimer = setTimeout(() => setFontSize(size), 250);
 }
 
 /* ── Minimize / Restore ── */
@@ -1122,7 +1128,10 @@ function notifyResponseComplete(id) {
 }
 
 function setChromeHidden(hidden, opts = {}) {
+  const wasHidden = document.body.classList.contains('chrome-hidden');
+  const before = desktopSize();
   document.body.classList.toggle('chrome-hidden', Boolean(hidden));
+  if (opts.resize !== false && wasHidden !== Boolean(hidden)) resizeWindowsForDesktop(before, desktopSize());
   scheduleTerminalFit();
   if (opts.persist !== false) saveUiState();
 }
@@ -1524,7 +1533,7 @@ function applyAuthoritativeUiState(ui) {
   setTheme(ui.theme || 'green', { persist: false });
   setSkin(ui.skin || 'neon', { persist: false });
   setFontSize(ui.fontSize || state.fontSize, { persist: false });
-  setChromeHidden(Boolean(ui.chromeHidden), { persist: false });
+  setChromeHidden(Boolean(ui.chromeHidden), { persist: false, resize: false });
   setSystemMonitorVisible(Boolean(ui.systemMonitor), { persist: false });
   restorePanelOrder();
   state.responsiveMinimized.clear();
@@ -1648,7 +1657,14 @@ function terminalViewportRows(term) {
       const bg = cell.getBgColor?.() || 0;
       if (bgMode || bg > 0) bgCells += 1;
     }
-    rows.push({ text: line.translateToString(false), selected: selectedCells >= 2 || bgCells >= 2 });
+    const text = line.translateToString(false);
+    const selected = selectedCells >= 2 || bgCells >= 2;
+    if (line.isWrapped && rows.length) {
+      rows.at(-1).text += text;
+      rows.at(-1).selected ||= selected;
+    } else {
+      rows.push({ text, selected });
+    }
   }
   return rows;
 }
@@ -1796,8 +1812,23 @@ function endPointerDrag(event) {
   const d = state.pointerDrag;
   if (!d) return;
   event?.preventDefault?.();
-  const suggestion = d.activeSuggestion;
+  const canceled = event?.type === 'pointercancel';
   const slot = d.activeDesktopSlot;
+  const p = windowPrefs()[d.sourceId];
+  if (p && d.preDragRect) {
+    if (canceled) Object.assign(p, d.preDragRect);
+    else {
+      const gridRect = document.getElementById('termGrid').getBoundingClientRect();
+      Object.assign(p, {
+        x: d.x - gridRect.left - d.preDragRect.w * d.grabRatioX,
+        y: d.y - gridRect.top - d.preDragRect.h * d.grabRatioY,
+        w: d.preDragRect.w,
+        h: d.preDragRect.h
+      });
+      Object.assign(p, clampWindowRect(p));
+    }
+    applyFreeWindow(d.sourceId);
+  }
   state.pointerDrag = null;
   document.removeEventListener('pointermove', updatePointerDrag, true);
   document.removeEventListener('pointerup', endPointerDrag, true);
@@ -1806,12 +1837,11 @@ function endPointerDrag(event) {
   document.removeEventListener('mouseup', endPointerDrag, true);
   document.getElementById(`panel-${d.sourceId}`)?.classList.remove('dragging');
   document.body.classList.remove('pane-dragging');
-  clearSnapSuggestions();
   clearDesktopSlotSuggestions();
-  if (suggestion) applySnapSuggestion(d.sourceId, suggestion);
-  else if (slot?.type === 'swap') swapWindowSlots(d.sourceId, slot.targetId, d.swapOriginRect);
-  else if (slot?.type === 'free') applyFreeSlotSnap(d.sourceId, slot.rect);
-  savePanePrefs();
+  if (!canceled) {
+    if (slot?.type === 'free') applyFreeSlotSnap(d.sourceId, slot.rect);
+    savePanePrefs();
+  }
   scheduleTerminalFit();
   renderSharedResizeHandles();
 }
@@ -1834,22 +1864,9 @@ function updatePointerDrag(event) {
   p.x = Math.max(-p.w + 80, Math.min(gr.width - 80, pt.x - gr.left - d.dx));
   p.y = Math.max(0, Math.min(gr.height - 32, pt.y - gr.top - d.dy));
   p.z = d.z;
-  const suggestions = snapSuggestionsAt(pt.x, pt.y);
-  const active = chooseSnapSuggestionAt(pt.x, pt.y, suggestions);
-  d.activeSuggestion = active;
-  if (active) {
-    d.activeDesktopSlot = null;
-    showSnapSuggestions(suggestions, active.key);
-    clearDesktopSlotSuggestions();
-    applyFreeWindow(d.sourceId);
-    scheduleTerminalFit({ secondPass: false, latePass: false });
-    return;
-  }
-  clearSnapSuggestions();
   const slot = chooseDesktopSlotAt(pt.x, pt.y, d.sourceId);
   d.activeDesktopSlot = slot?.type === 'none' ? null : slot;
   showDesktopSlotSuggestions(slot);
-  d.lastSwapTarget = slot?.type === 'swap' ? slot.targetId : null;
   applyFreeWindow(d.sourceId);
   scheduleTerminalFit({ secondPass: false, latePass: false });
 }
@@ -2013,11 +2030,20 @@ function startPointerDrag(id, handle, event) {
   if (!entry) return;
   const r = entry.el.getBoundingClientRect();
   const p = makeFreeWindow(id, r);
-  const swapOriginRect = { x: p.x, y: p.y, w: p.w, h: p.h };
   const grid = document.getElementById('termGrid');
   const gr = grid.getBoundingClientRect();
+  const preDragRect = { x: p.x, y: p.y, w: p.w, h: p.h, z: p.z };
+  const grabRatioX = Math.max(0, Math.min(1, (event.clientX - gr.left - p.x) / p.w));
+  const grabRatioY = Math.max(0, Math.min(1, (event.clientY - gr.top - p.y) / p.h));
+  const defaultSize = defaultWindowSize();
+  p.w = Math.min(p.w, defaultSize.w);
+  p.h = Math.min(p.h, defaultSize.h);
+  p.x = event.clientX - gr.left - p.w * grabRatioX;
+  p.y = event.clientY - gr.top - p.h * grabRatioY;
+  Object.assign(p, clampWindowRect(p));
+  applyFreeWindow(id);
   p.z = nextWindowZ();
-  state.pointerDrag = { sourceId: id, dx: event.clientX - gr.left - p.x, dy: event.clientY - gr.top - p.y, x: event.clientX, y: event.clientY, z: p.z, activeSuggestion: null, activeDesktopSlot: null, lastSwapTarget: null, swapOriginRect };
+  state.pointerDrag = { sourceId: id, dx: event.clientX - gr.left - p.x, dy: event.clientY - gr.top - p.y, x: event.clientX, y: event.clientY, z: p.z, activeDesktopSlot: null, preDragRect, grabRatioX, grabRatioY };
   state.draggingId = id;
   clearSharedResizeHandles();
   entry.el.classList.add('dragging');
@@ -2087,8 +2113,27 @@ function createPanel(session, opts = {}) {
   });
   titleEl.addEventListener('dblclick', e => { e.stopPropagation(); titleEl.dataset.editing = '1'; titleEl.focus(); });
   titleEl.addEventListener('blur', () => { delete titleEl.dataset.editing; });
-  arrangeBtn.addEventListener('mouseenter', () => showLayoutAssist(id, arrangeBtn));
-  arrangeBtn.onclick = e => { e.stopPropagation(); showLayoutAssist(id, arrangeBtn); };
+  let arrangeHoverTimer = null;
+  let arrangeDismissTimer = null;
+  const cancelArrangeHover = () => { clearTimeout(arrangeHoverTimer); arrangeHoverTimer = null; };
+  const cancelArrangeDismiss = () => { clearTimeout(arrangeDismissTimer); arrangeDismissTimer = null; };
+  const dismissArrange = () => { cancelArrangeHover(); cancelArrangeDismiss(); clearLayoutAssist(); };
+  const scheduleArrangeDismiss = () => {
+    cancelArrangeDismiss();
+    arrangeDismissTimer = setTimeout(dismissArrange, 120);
+  };
+  const openArrange = () => {
+    cancelArrangeHover();
+    showLayoutAssist(id, arrangeBtn, { enter: cancelArrangeDismiss, leave: scheduleArrangeDismiss });
+  };
+  arrangeBtn.addEventListener('mouseenter', () => {
+    cancelArrangeDismiss();
+    cancelArrangeHover();
+    arrangeHoverTimer = setTimeout(openArrange, 300);
+  });
+  arrangeBtn.addEventListener('mouseleave', () => { cancelArrangeHover(); scheduleArrangeDismiss(); });
+  arrangeBtn.onclick = e => { e.stopPropagation(); cancelArrangeDismiss(); openArrange(); };
+  window.addEventListener('blur', dismissArrange);
   arrangeBtn.addEventListener('pointerdown', e => e.stopPropagation());
   arrangeBtn.addEventListener('mousedown', e => e.stopPropagation());
   minBtn.onclick = e => { e.stopPropagation(); minimizePanel(id); };
@@ -2144,7 +2189,7 @@ function createPanel(session, opts = {}) {
   });
 
   const hasSnapshot = hasTerminalSnapshot(id);
-  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, restored: hasSnapshot, snapshotTimer: null, titleSource: '', lastSentCols: 0, lastSentRows: 0 });
+  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, arrangeCleanup: dismissArrange, restored: hasSnapshot, snapshotTimer: null, titleSource: '', lastSentCols: 0, lastSentRows: 0 });
   term.onWriteParsed?.(() => refreshTitleFromTerminal(id));
   term.onBell?.(() => notifyResponseComplete(id));
   if (state.minimized.has(id)) el.classList.add('minimized');
@@ -2388,6 +2433,7 @@ function discardPanel(id, opts = {}) {
     try { entry.ro.disconnect(); } catch {}
     try { entry.ws.close(); } catch {}
     try { entry.term.dispose(); } catch {}
+    window.removeEventListener('blur', entry.arrangeCleanup);
     clearTimeout(entry.snapshotTimer);
     try { localStorage.removeItem(snapshotKey(id)); } catch {}
     entry.el.remove();
@@ -2536,6 +2582,18 @@ function clipboardFiles(data) {
   return files;
 }
 
+async function uploadDesktopClipboardImage(targetId) {
+  try {
+    const data = await window.passideckDesktop?.readImage?.();
+    if (!data) return;
+    const blob = await (await fetch(data)).blob();
+    if (!blob.size) return;
+    await uploadFiles([new File([blob], 'clipboard.png', { type: blob.type || 'image/png' })], targetId);
+  } catch (err) {
+    showToast(`Clipboard image failed: ${err.message}`, 'error');
+  }
+}
+
 function bracketedPastePayload(text) {
   return `\x1b[200~${String(text || '').replace(/\x1b/g, '')}\x1b[201~`;
 }
@@ -2566,6 +2624,12 @@ function handleTerminalPaste(event) {
   if (text && insertIntoTerminalEntry(activeTerminalEntry(), text)) {
     event.preventDefault();
     event.stopImmediatePropagation();
+    return;
+  }
+  if (!text && activeTerminalEntry() && window.passideckDesktop?.readImage) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    void uploadDesktopClipboardImage(state.activeId);
   }
 }
 
@@ -2622,7 +2686,7 @@ async function init() {
   setTheme(ui?.theme || 'green', { persist: false });
   setSkin(ui?.skin || 'neon', { persist: false });
   setFontSize(ui?.fontSize || state.fontSize, { persist: false });
-  setChromeHidden(Boolean(ui?.chromeHidden), { persist: false });
+  setChromeHidden(Boolean(ui?.chromeHidden), { persist: false, resize: false });
   setSystemMonitorVisible(Boolean(ui?.systemMonitor), { persist: false });
   startCodexLimitsPolling();
   installCloseHitLayer();
@@ -2662,6 +2726,7 @@ function setSettingsOpen(open, restoreFocus = false) {
   else if (restoreFocus) setTimeout(() => toggle.focus(), 0);
 }
 document.getElementById('settingsToggle').onclick = () => setSettingsOpen(document.getElementById('settingsPanel').hidden);
+document.getElementById('settingsClose').onclick = () => setSettingsOpen(false, true);
 document.addEventListener('pointerdown', event => {
   const panel = document.getElementById('settingsPanel');
   const toggle = document.getElementById('settingsToggle');
@@ -2680,7 +2745,7 @@ document.getElementById('chromeToggle').onclick = toggleChrome;
 document.getElementById('chromePeek').onclick = toggleChrome;
 document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
 document.getElementById('skinSelect').onchange = e => setSkin(e.target.value);
-document.getElementById('fontSizeSlider').oninput = e => setFontSize(Number(e.target.value));
+document.getElementById('fontSizeSelect').onchange = e => previewFontSize(Number(e.target.value));
 document.getElementById('responseSoundModeSelect').onchange = e => setResponseSoundMode(e.target.value);
 document.getElementById('responseSoundToneSelect').onchange = e => setResponseSoundTone(e.target.value);
 document.getElementById('responseSoundVolume').oninput = e => setResponseSoundVolume(e.target.value);
@@ -2784,7 +2849,8 @@ document.addEventListener('contextmenu', handleTerminalContextMenu, true);
 document.addEventListener('dragover', handleUploadDragOver, true);
 document.addEventListener('drop', handleUploadDrop, true);
 window.addEventListener('focus', () => requestAnimationFrame(focusActiveTerminalOnWindowActivation));
-window.addEventListener('blur', () => syncTerminalInputFocus(false));
+window.addEventListener('blur', () => { syncTerminalInputFocus(false); clearLayoutAssist(); });
+document.documentElement.addEventListener('mouseleave', clearLayoutAssist);
 document.addEventListener('focusin', () => syncTerminalInputFocus());
 document.addEventListener('focusout', () => queueMicrotask(() => syncTerminalInputFocus()));
 window.addEventListener('resize', () => { responsiveMinimizeForViewport(); applyLayoutVisibility(); scheduleTerminalFit(); });

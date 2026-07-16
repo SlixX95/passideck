@@ -196,6 +196,27 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       return { statusChip: Boolean(document.querySelector('.status-chip')), leftGap: first.left - strip.left };
     })()`);
     assert.deepStrictEqual(compactLaunchStrip, { statusChip: false, leftGap: 6 }, 'quick-launch buttons must occupy the left edge after removing the window/save status chip');
+    const chromeToggleResize = await evalExpr(cdp, sid, `(async () => {
+      const id = '${madeSessions[0]}';
+      const prefs = windowPrefs();
+      const previous = structuredClone(prefs[id]);
+      const wasHidden = document.body.classList.contains('chrome-hidden');
+      if (wasHidden) setChromeHidden(false, { persist: false });
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const before = document.getElementById('termGrid').getBoundingClientRect();
+      prefs[id] = { x: 0, y: 0, w: before.width, h: before.height, z: previous.z || 1 };
+      applyFreeWindow(id);
+      setChromeHidden(true, { persist: false });
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      const panel = state.sessions.get(id).el.getBoundingClientRect();
+      setChromeHidden(wasHidden, { persist: false });
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      prefs[id] = previous;
+      applyFreeWindow(id);
+      return { gridGrowth: grid.height - before.height, bottomGap: grid.bottom - panel.bottom };
+    })()`);
+    assert.ok(chromeToggleResize.gridGrowth > 20 && Math.abs(chromeToggleResize.bottomGap) < 2, `UI toggle must resize desktop windows into the gained space: ${JSON.stringify(chromeToggleResize)}`);
     const dynamicLayoutProposals = await evalExpr(cdp, sid, `(() => {
       const beforeMinimized = state.minimized;
       const proposalsFor = count => {
@@ -210,6 +231,27 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.deepStrictEqual(dynamicLayoutProposals.two.map(p => p.label), ['Side by side', 'Stacked'], 'two visible windows need only the two distinct splits');
     assert.deepStrictEqual(dynamicLayoutProposals.three.map(p => p.label), ['Grid', 'Columns', 'Rows', 'Left + rest', 'Right + rest', 'Top + rest', 'Bottom + rest'], 'three or more visible windows need all adaptive focus directions');
     assert.ok(dynamicLayoutProposals.one.every(p => p.count === 1) && dynamicLayoutProposals.two.every(p => p.count === 2) && dynamicLayoutProposals.three.every(p => p.count === 3), 'layout proposals must exclude minimized windows');
+    const stableGridOrder = await evalExpr(cdp, sid, `(() => {
+      const ids = state.order.slice(0, 4);
+      const previousMinimized = state.minimized;
+      const previousWindows = structuredClone(state.panePrefs.windows);
+      state.minimized = new Set(state.order.slice(4));
+      const prefs = windowPrefs();
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      const w = grid.width / 2;
+      const h = grid.height / 2;
+      prefs[ids[0]] = { x: 0, y: h, w, h, z: 1 };
+      prefs[ids[1]] = { x: w, y: 0, w, h, z: 2 };
+      prefs[ids[2]] = { x: w, y: h, w, h, z: 3 };
+      prefs[ids[3]] = { x: 0, y: 0, w, h, z: 4 };
+      const proposal = layoutProposals(ids[0]).find(item => item.key === 'grid');
+      const focused = layoutProposals(ids[0]).find(item => item.key === 'focus-left');
+      state.minimized = previousMinimized;
+      state.panePrefs.windows = previousWindows;
+      return { actual: proposal.ids, expected: [ids[3], ids[1], ids[0], ids[2]], focused: focused.ids[0], clicked: ids[0] };
+    })()`);
+    assert.deepStrictEqual(stableGridOrder.actual, stableGridOrder.expected, 'grid layout must preserve visual window positions instead of promoting the clicked window');
+    assert.strictEqual(stableGridOrder.focused, stableGridOrder.clicked, 'focus layouts must still prioritize the explicitly selected window');
     const clampedWindow = await evalExpr(cdp, sid, `(() => {
       const panel = document.querySelector('[data-pane-id="${madeSessions[0]}"]');
       const grid = document.getElementById('termGrid');
@@ -353,42 +395,403 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
 
     const titleDragProbe = await evalExpr(cdp, sid, `(() => {
       document.activeElement?.blur?.();
+      const id = '${madeSessions[1]}';
       const title = document.querySelector('[data-pane-id="${madeSessions[1]}"] .term-title');
       const panel = title.closest('.term-panel');
+      Object.assign(windowPrefs()[id], { x: 70, y: 60, w: 1100, h: 650, z: 30 });
+      applyFreeWindow(id);
       const tr = title.getBoundingClientRect();
       const pr = panel.getBoundingClientRect();
       return { x: Math.round(tr.left + Math.min(20, tr.width / 2)), y: Math.round(tr.top + tr.height / 2), before: { left: pr.left, top: pr.top, width: pr.width, height: pr.height } };
     })()`);
     const titleDragAfter = await evalExpr(cdp, sid, `(() => {
       const title = document.querySelector('[data-pane-id="${madeSessions[1]}"] .term-title');
+      const panel = title.closest('.term-panel');
       title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: ${titleDragProbe.x}, clientY: ${titleDragProbe.y}, pointerId: 7, pointerType: 'mouse' }));
       updatePointerDrag({ preventDefault(){}, clientX: ${titleDragProbe.x + 90}, clientY: ${titleDragProbe.y + 45} });
-      const r = document.querySelector('[data-pane-id="${madeSessions[1]}"]').getBoundingClientRect();
+      const duringRect = panel.getBoundingClientRect();
+      const during = { left: duringRect.left, top: duringRect.top, width: duringRect.width, height: duringRect.height };
       const dragging = Boolean(state.pointerDrag);
-      const classes = title.closest('.term-panel').className;
+      const classes = panel.className;
       endPointerDrag({ preventDefault(){} });
-      return { left: r.left, top: r.top, width: r.width, height: r.height, dragging, classes, editing: title.dataset.editing || '', target: document.elementFromPoint(${titleDragProbe.x}, ${titleDragProbe.y})?.className || '' };
+      const restoredRect = panel.getBoundingClientRect();
+      return {
+        during,
+        restored: { left: restoredRect.left, top: restoredRect.top, width: restoredRect.width, height: restoredRect.height },
+        dragging,
+        classes,
+        editing: title.dataset.editing || '',
+        target: document.elementFromPoint(${titleDragProbe.x}, ${titleDragProbe.y})?.className || ''
+      };
     })()`);
-    assert.ok(titleDragAfter.left > titleDragProbe.before.left + 40 && titleDragAfter.top > titleDragProbe.before.top + 20, `window title drag must move pane: ${JSON.stringify({ before: titleDragProbe.before, after: titleDragAfter })}`);
-    assert.ok(Math.abs(titleDragAfter.width - titleDragProbe.before.width) < 2 && Math.abs(titleDragAfter.height - titleDragProbe.before.height) < 2, `window drag must not resize pane: ${JSON.stringify({ before: titleDragProbe.before, after: titleDragAfter })}`);
-    const dragDropSizePreserved = await evalExpr(cdp, sid, `(() => {
+    assert.ok(titleDragAfter.during.left > titleDragProbe.before.left + 40 && titleDragAfter.during.top > titleDragProbe.before.top + 20, `window title drag must move pane: ${JSON.stringify({ before: titleDragProbe.before, after: titleDragAfter })}`);
+    assert.ok(titleDragAfter.during.width < titleDragProbe.before.width - 100 && titleDragAfter.during.height < titleDragProbe.before.height - 50, `large window must shrink to default size while dragging: ${JSON.stringify({ before: titleDragProbe.before, after: titleDragAfter })}`);
+    assert.ok(Math.abs(titleDragAfter.restored.width - titleDragProbe.before.width) < 2 && Math.abs(titleDragAfter.restored.height - titleDragProbe.before.height) < 2, `free drop must restore the pre-drag size: ${JSON.stringify({ before: titleDragProbe.before, after: titleDragAfter })}`);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 120 }, sid);
+    const twoWindowFreeDock = await evalExpr(cdp, sid, `(() => {
+      const source = '${madeSessions[1]}';
+      const target = '${madeSessions[2]}';
       const prefs = windowPrefs();
-      const a = '${madeSessions[1]}';
-      const b = '${madeSessions[2]}';
-      ensureFreeWindow(a); ensureFreeWindow(b);
-      Object.assign(prefs[a], { x: 80, y: 80, w: 1111, h: 555, z: 30 });
-      Object.assign(prefs[b], { x: 360, y: 260, w: 640, h: 360, z: 29 });
-      applyFreeSlotSnap(a, { x: 120, y: 140, w: 300, h: 190 });
-      const afterFree = { ...prefs[a] };
-      swapWindowSlots(a, b, { x: 120, y: 140, w: 999, h: 999 });
-      return { afterFree, afterSwapA: { ...prefs[a] }, afterSwapB: { ...prefs[b] } };
+      const savedPrefs = JSON.parse(JSON.stringify(prefs));
+      const savedMinimized = [...state.minimized];
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      state.sessions.forEach((entry, id) => {
+        if (id === source || id === target) state.minimized.delete(id);
+        else state.minimized.add(id);
+      });
+      Object.assign(prefs[source], { x: 0, y: 0, w: grid.width / 2, h: grid.height, z: 30 });
+      Object.assign(prefs[target], { x: grid.width / 2, y: 0, w: grid.width / 2, h: grid.height, z: 29 });
+      applyFreeWindow(source);
+      applyFreeWindow(target);
+      const center = chooseDesktopSlotAt(grid.left + grid.width / 4, grid.top + grid.height / 2, source);
+      const bottom = chooseDesktopSlotAt(grid.left + grid.width / 4, grid.top + grid.height * 0.75, source);
+      const title = state.sessions.get(source).el.querySelector('.term-title');
+      const titleRect = title.getBoundingClientRect();
+      const persistPanePrefs = savePanePrefs;
+      savePanePrefs = () => {};
+      title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: titleRect.left + 20, clientY: titleRect.top + 12, pointerId: 27, pointerType: 'mouse' }));
+      const top = chooseDesktopSlotAt(grid.left + grid.width / 4, grid.top + grid.height / 4, source);
+      updatePointerDrag({ preventDefault(){}, clientX: grid.left + grid.width / 4, clientY: grid.top + grid.height / 2 });
+      const centerLabels = [...document.querySelectorAll('#desktopSlotSuggestions .desktop-slot')].map(el => el.textContent);
+      updatePointerDrag({ preventDefault(){}, clientX: grid.left + grid.width / 4, clientY: grid.top + grid.height / 4 });
+      const quarterLabels = [...document.querySelectorAll('#desktopSlotSuggestions .desktop-slot')].map(el => el.textContent);
+      updatePointerDrag({ preventDefault(){}, clientX: grid.left + grid.width / 4, clientY: grid.top + grid.height / 2 });
+      endPointerDrag({ preventDefault(){} });
+      const docked = { ...prefs[source] };
+      const free = slotRectsForDrag(source).free.map(slot => slot.rect);
+      const freeOverlap = free.length === 2 ? rectOverlap(free[0], free[1]) : null;
+      savePanePrefs = persistPanePrefs;
+      state.panePrefs.windows.desktop = savedPrefs;
+      state.minimized.clear();
+      savedMinimized.forEach(id => state.minimized.add(id));
+      restorePanelOrder();
+      return { grid: { w: grid.width, h: grid.height }, top: { type: top.type, rect: top.rect }, center: { type: center.type, rect: center.rect }, bottom: { type: bottom.type, rect: bottom.rect }, centerLabels, quarterLabels, docked, free, freeOverlap };
     })()`);
-    assert.strictEqual(dragDropSizePreserved.afterFree.w, 1111, `free slot drop must preserve width: ${JSON.stringify(dragDropSizePreserved)}`);
-    assert.strictEqual(dragDropSizePreserved.afterFree.h, 555, `free slot drop must preserve height: ${JSON.stringify(dragDropSizePreserved)}`);
-    assert.strictEqual(dragDropSizePreserved.afterSwapA.w, 1111, `swap drop must preserve source width: ${JSON.stringify(dragDropSizePreserved)}`);
-    assert.strictEqual(dragDropSizePreserved.afterSwapA.h, 555, `swap drop must preserve source height: ${JSON.stringify(dragDropSizePreserved)}`);
-    assert.strictEqual(dragDropSizePreserved.afterSwapB.w, 640, `swap drop must preserve target width: ${JSON.stringify(dragDropSizePreserved)}`);
-    assert.strictEqual(dragDropSizePreserved.afterSwapB.h, 360, `swap drop must preserve target height: ${JSON.stringify(dragDropSizePreserved)}`);
+    assert.deepStrictEqual(
+      { x: twoWindowFreeDock.top.rect.x, y: twoWindowFreeDock.top.rect.y, w: twoWindowFreeDock.top.rect.w, h: twoWindowFreeDock.top.rect.h },
+      { x: 0, y: 0, w: twoWindowFreeDock.grid.w / 2, h: twoWindowFreeDock.grid.h / 2 },
+      `upper Free choice must select the upper quarter, not the overlapping half: ${JSON.stringify(twoWindowFreeDock)}`
+    );
+    assert.deepStrictEqual(
+      { x: twoWindowFreeDock.center.rect.x, y: twoWindowFreeDock.center.rect.y, w: twoWindowFreeDock.center.rect.w, h: twoWindowFreeDock.center.rect.h },
+      { x: 0, y: 0, w: twoWindowFreeDock.grid.w / 2, h: twoWindowFreeDock.grid.h },
+      `center-left Free choice must select the whole left half: ${JSON.stringify(twoWindowFreeDock)}`
+    );
+    assert.ok(twoWindowFreeDock.centerLabels.includes('Free · 1/2'), `half overlay must identify itself: ${JSON.stringify(twoWindowFreeDock.centerLabels)}`);
+    assert.ok(twoWindowFreeDock.quarterLabels.includes('Free · 1/4'), `quarter overlay must identify itself: ${JSON.stringify(twoWindowFreeDock.quarterLabels)}`);
+    assert.deepStrictEqual(
+      { x: twoWindowFreeDock.bottom.rect.x, y: twoWindowFreeDock.bottom.rect.y, w: twoWindowFreeDock.bottom.rect.w, h: twoWindowFreeDock.bottom.rect.h },
+      { x: 0, y: twoWindowFreeDock.grid.h / 2, w: twoWindowFreeDock.grid.w / 2, h: twoWindowFreeDock.grid.h / 2 },
+      `lower Free choice must select the lower quarter, not the overlapping half: ${JSON.stringify(twoWindowFreeDock)}`
+    );
+    assert.deepStrictEqual(
+      { x: twoWindowFreeDock.docked.x, y: twoWindowFreeDock.docked.y, w: twoWindowFreeDock.docked.w, h: twoWindowFreeDock.docked.h },
+      { x: 0, y: 0, w: twoWindowFreeDock.grid.w / 2, h: twoWindowFreeDock.grid.h },
+      `Free drop must dock to the selected slot geometry: ${JSON.stringify(twoWindowFreeDock)}`
+    );
+    assert.strictEqual(twoWindowFreeDock.free.length, 2, `two-window Free overlay must expose one unambiguous grid, not overlapping half/quarter/third layouts: ${JSON.stringify(twoWindowFreeDock.free)}`);
+    assert.strictEqual(twoWindowFreeDock.freeOverlap, 0, `Free targets must never overlap: ${JSON.stringify(twoWindowFreeDock.free)}`);
+    const horizontalHalfDock = await evalExpr(cdp, sid, `(() => {
+      const source = '${madeSessions[1]}';
+      const prefs = windowPrefs();
+      const savedPrefs = JSON.parse(JSON.stringify(prefs));
+      const savedMinimized = [...state.minimized];
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      state.sessions.forEach((entry, id) => {
+        if (id === source) state.minimized.delete(id);
+        else state.minimized.add(id);
+      });
+      Object.assign(prefs[source], { x: grid.width / 2, y: grid.height / 2, w: grid.width / 2, h: grid.height / 2, z: 30 });
+      applyFreeWindow(source);
+      const top = chooseDesktopSlotAt(grid.left + grid.width / 2, grid.top + grid.height / 4, source);
+      const bottom = chooseDesktopSlotAt(grid.left + grid.width / 2, grid.top + grid.height * 0.75, source);
+      const title = state.sessions.get(source).el.querySelector('.term-title');
+      const titleRect = title.getBoundingClientRect();
+      const persistPanePrefs = savePanePrefs;
+      savePanePrefs = () => {};
+      title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: titleRect.left + 20, clientY: titleRect.top + 12, pointerId: 28, pointerType: 'mouse' }));
+      updatePointerDrag({ preventDefault(){}, clientX: grid.left + grid.width / 2, clientY: grid.top + grid.height / 4 });
+      const labels = [...document.querySelectorAll('#desktopSlotSuggestions .desktop-slot')].map(el => el.textContent);
+      endPointerDrag({ preventDefault(){} });
+      const docked = { ...prefs[source] };
+      savePanePrefs = persistPanePrefs;
+      state.panePrefs.windows.desktop = savedPrefs;
+      state.minimized.clear();
+      savedMinimized.forEach(id => state.minimized.add(id));
+      restorePanelOrder();
+      return { grid: { w: grid.width, h: grid.height }, top: top.rect, bottom: bottom.rect, labels, docked };
+    })()`);
+    assert.deepStrictEqual(horizontalHalfDock.top, { x: 0, y: 0, w: horizontalHalfDock.grid.w, h: horizontalHalfDock.grid.h / 2 }, `top-center must select the whole upper half: ${JSON.stringify(horizontalHalfDock)}`);
+    assert.deepStrictEqual(horizontalHalfDock.bottom, { x: 0, y: horizontalHalfDock.grid.h / 2, w: horizontalHalfDock.grid.w, h: horizontalHalfDock.grid.h / 2 }, `bottom-center must select the whole lower half: ${JSON.stringify(horizontalHalfDock)}`);
+    assert.ok(horizontalHalfDock.labels.includes('Free · 1/2'), `horizontal half overlay must identify itself: ${JSON.stringify(horizontalHalfDock.labels)}`);
+    assert.deepStrictEqual(
+      { x: horizontalHalfDock.docked.x, y: horizontalHalfDock.docked.y, w: horizontalHalfDock.docked.w, h: horizontalHalfDock.docked.h },
+      horizontalHalfDock.top,
+      `top-center drop must adopt the upper half geometry: ${JSON.stringify(horizontalHalfDock)}`
+    );
+    const dynamicFreeGapDock = await evalExpr(cdp, sid, `(() => {
+      const source = '${madeSessions[1]}';
+      const blockers = ['${madeSessions[2]}', '${madeSessions[3]}', '${madeSessions[4]}', '${madeSessions[5]}', '${madeSessions[6]}', '${madeSessions[7]}'];
+      const prefs = windowPrefs();
+      const savedPrefs = JSON.parse(JSON.stringify(prefs));
+      const savedMinimized = [...state.minimized];
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      const topH = Math.round(grid.height - 240);
+      const gap = { x: 0, y: topH, w: grid.width, h: grid.height - topH };
+      state.sessions.forEach((entry, id) => {
+        if (id === source || blockers.includes(id)) state.minimized.delete(id);
+        else state.minimized.add(id);
+      });
+      Object.assign(prefs[source], { x: gap.x + 20, y: gap.y + 20, w: 360, h: 220, z: 40 });
+      blockers.forEach((id, i) => {
+        const x = Math.round(i * grid.width / blockers.length);
+        const right = Math.round((i + 1) * grid.width / blockers.length);
+        Object.assign(prefs[id], { x, y: 0, w: right - x, h: topH, z: 30 - i });
+      });
+      [source, ...blockers].forEach(applyFreeWindow);
+      const px = grid.left + gap.x + gap.w / 2;
+      const py = grid.top + gap.y + gap.h / 2;
+      const choice = chooseDesktopSlotAt(px, py, source);
+      const title = state.sessions.get(source).el.querySelector('.term-title');
+      const titleRect = title.getBoundingClientRect();
+      const persistPanePrefs = savePanePrefs;
+      savePanePrefs = () => {};
+      title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: titleRect.left + 20, clientY: titleRect.top + 12, pointerId: 29, pointerType: 'mouse' }));
+      updatePointerDrag({ preventDefault(){}, clientX: px, clientY: py });
+      const visible = [...document.querySelectorAll('#desktopSlotSuggestions .desktop-slot')].map(el => ({
+        x: parseFloat(el.style.left), y: parseFloat(el.style.top), w: parseFloat(el.style.width), h: parseFloat(el.style.height)
+      }));
+      endPointerDrag({ preventDefault(){} });
+      const docked = { ...prefs[source] };
+      savePanePrefs = persistPanePrefs;
+      state.panePrefs.windows.desktop = savedPrefs;
+      state.minimized.clear();
+      savedMinimized.forEach(id => state.minimized.add(id));
+      restorePanelOrder();
+      return { choice: { type: choice.type, rect: choice.rect || null }, gap, visible, docked };
+    })()`);
+    assert.deepStrictEqual(dynamicFreeGapDock.choice, { type: 'free', rect: dynamicFreeGapDock.gap }, `drag must discover the actual free gap between many windows: ${JSON.stringify(dynamicFreeGapDock)}`);
+    assert.ok(dynamicFreeGapDock.visible.some(rect => JSON.stringify(rect) === JSON.stringify(dynamicFreeGapDock.gap)), `actual free gap must be visibly offered during drag: ${JSON.stringify(dynamicFreeGapDock)}`);
+    assert.deepStrictEqual(
+      { x: dynamicFreeGapDock.docked.x, y: dynamicFreeGapDock.docked.y, w: dynamicFreeGapDock.docked.w, h: dynamicFreeGapDock.docked.h },
+      dynamicFreeGapDock.gap,
+      `dropping into a dynamic free gap must adopt that exact geometry: ${JSON.stringify(dynamicFreeGapDock)}`
+    );
+    const splitCenterGapDock = await evalExpr(cdp, sid, `(() => {
+      const source = '${madeSessions[1]}';
+      const blockers = ['${madeSessions[2]}', '${madeSessions[3]}', '${madeSessions[4]}', '${madeSessions[5]}'];
+      const prefs = windowPrefs();
+      const savedPrefs = JSON.parse(JSON.stringify(prefs));
+      const savedMinimized = [...state.minimized];
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      const left = Math.round(grid.width / 3);
+      const right = Math.round(grid.width * 2 / 3);
+      const middle = grid.height / 2;
+      const top = { x: left, y: 0, w: right - left, h: middle };
+      const full = { x: left, y: 0, w: right - left, h: grid.height };
+      const bottom = { x: left, y: middle, w: right - left, h: grid.height - middle };
+      state.sessions.forEach((entry, id) => {
+        if (id === source || blockers.includes(id)) state.minimized.delete(id);
+        else state.minimized.add(id);
+      });
+      Object.assign(prefs[source], { ...full, z: 40 });
+      Object.assign(prefs[blockers[0]], { x: 0, y: 0, w: left, h: middle, z: 30 });
+      Object.assign(prefs[blockers[1]], { x: 0, y: middle, w: left, h: bottom.h, z: 29 });
+      Object.assign(prefs[blockers[2]], { x: right, y: 0, w: grid.width - right, h: middle, z: 28 });
+      Object.assign(prefs[blockers[3]], { x: right, y: middle, w: grid.width - right, h: bottom.h, z: 27 });
+      [source, ...blockers].forEach(applyFreeWindow);
+      const blockersBefore = blockers.map(id => ({ x: prefs[id].x, y: prefs[id].y, w: prefs[id].w, h: prefs[id].h }));
+      const px = grid.left + left + (right - left) / 2;
+      const point = y => ({ x: px, y: grid.top + y });
+      const choiceAt = y => {
+        const choice = chooseDesktopSlotAt(point(y).x, point(y).y, source);
+        return { type: choice.type, rect: choice.rect || null };
+      };
+      const choices = {
+        top: choiceAt(middle / 2),
+        full: choiceAt(grid.height / 2),
+        bottom: choiceAt(middle + bottom.h / 2)
+      };
+      const title = state.sessions.get(source).el.querySelector('.term-title');
+      const persistPanePrefs = savePanePrefs;
+      let saveCalls = 0;
+      savePanePrefs = () => { saveCalls += 1; };
+      const cancelBefore = { x: prefs[source].x, y: prefs[source].y, w: prefs[source].w, h: prefs[source].h, z: prefs[source].z };
+      let titleRect = title.getBoundingClientRect();
+      title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: titleRect.left + 20, clientY: titleRect.top + 12, pointerId: 30, pointerType: 'mouse' }));
+      updatePointerDrag({ preventDefault(){}, clientX: point(middle / 2).x, clientY: point(middle / 2).y });
+      const saveCallsBeforeCancel = saveCalls;
+      endPointerDrag({ type: 'pointercancel', preventDefault(){} });
+      const cancelAfter = { x: prefs[source].x, y: prefs[source].y, w: prefs[source].w, h: prefs[source].h, z: prefs[source].z };
+      const cancelSaveCalls = saveCalls - saveCallsBeforeCancel;
+      titleRect = title.getBoundingClientRect();
+      title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: titleRect.left + 20, clientY: titleRect.top + 12, pointerId: 31, pointerType: 'mouse' }));
+      const visible = {};
+      for (const [name, y] of [['top', middle / 2], ['full', grid.height / 2], ['bottom', middle + bottom.h / 2]]) {
+        updatePointerDrag({ preventDefault(){}, clientX: point(y).x, clientY: point(y).y });
+        visible[name] = [...document.querySelectorAll('#desktopSlotSuggestions .desktop-slot')].map(el => ({
+          x: parseFloat(el.style.left), y: parseFloat(el.style.top), w: parseFloat(el.style.width), h: parseFloat(el.style.height)
+        }));
+      }
+      endPointerDrag({ preventDefault(){} });
+      const docked = { x: prefs[source].x, y: prefs[source].y, w: prefs[source].w, h: prefs[source].h };
+      const blockersAfter = blockers.map(id => ({ x: prefs[id].x, y: prefs[id].y, w: prefs[id].w, h: prefs[id].h }));
+      const upper = Math.round(grid.height / 3);
+      const lower = Math.round(grid.height * 2 / 3);
+      const centerX = Math.round(grid.width / 2);
+      const leftSlot = { x: 0, y: upper, w: centerX, h: lower - upper };
+      const fullWidthSlot = { x: 0, y: upper, w: Math.round(grid.width), h: lower - upper };
+      const rightSlot = { x: centerX, y: upper, w: Math.round(grid.width) - centerX, h: lower - upper };
+      Object.assign(prefs[source], { ...fullWidthSlot, z: 40 });
+      Object.assign(prefs[blockers[0]], { x: 0, y: 0, w: centerX, h: upper, z: 30 });
+      Object.assign(prefs[blockers[1]], { x: centerX, y: 0, w: grid.width - centerX, h: upper, z: 29 });
+      Object.assign(prefs[blockers[2]], { x: 0, y: lower, w: centerX, h: grid.height - lower, z: 28 });
+      Object.assign(prefs[blockers[3]], { x: centerX, y: lower, w: grid.width - centerX, h: grid.height - lower, z: 27 });
+      [source, ...blockers].forEach(applyFreeWindow);
+      const py = grid.top + upper + (lower - upper) / 2;
+      const choiceAtX = x => {
+        const choice = chooseDesktopSlotAt(grid.left + x, py, source);
+        return { type: choice.type, rect: choice.rect || null };
+      };
+      const horizontal = {
+        left: leftSlot,
+        full: fullWidthSlot,
+        right: rightSlot,
+        choices: {
+          left: choiceAtX(centerX / 2),
+          full: choiceAtX(grid.width / 2),
+          right: choiceAtX(centerX + rightSlot.w / 2)
+        }
+      };
+      savePanePrefs = persistPanePrefs;
+      state.panePrefs.windows.desktop = savedPrefs;
+      state.minimized.clear();
+      savedMinimized.forEach(id => state.minimized.add(id));
+      restorePanelOrder();
+      return { top, full, bottom, choices, visible, docked, blockersBefore, blockersAfter, horizontal, cancelBefore, cancelAfter, cancelSaveCalls };
+    })()`);
+    assert.deepStrictEqual(splitCenterGapDock.choices.top, { type: 'free', rect: splitCenterGapDock.top }, `upper center gap option must remain selectable: ${JSON.stringify(splitCenterGapDock)}`);
+    assert.deepStrictEqual(splitCenterGapDock.choices.full, { type: 'free', rect: splitCenterGapDock.full }, `full-height center gap option must remain selectable: ${JSON.stringify(splitCenterGapDock)}`);
+    assert.deepStrictEqual(splitCenterGapDock.choices.bottom, { type: 'free', rect: splitCenterGapDock.bottom }, `lower center gap option must remain selectable: ${JSON.stringify(splitCenterGapDock)}`);
+    assert.deepStrictEqual(splitCenterGapDock.visible, {
+      top: [splitCenterGapDock.top],
+      full: [splitCenterGapDock.full],
+      bottom: [splitCenterGapDock.bottom]
+    }, `split center gap must show one unambiguous option at a time: ${JSON.stringify(splitCenterGapDock)}`);
+    assert.deepStrictEqual(splitCenterGapDock.docked, splitCenterGapDock.bottom, `drop must use the selected lower center gap: ${JSON.stringify(splitCenterGapDock)}`);
+    assert.deepStrictEqual(splitCenterGapDock.blockersAfter, splitCenterGapDock.blockersBefore, `split-gap docking must not move surrounding windows: ${JSON.stringify(splitCenterGapDock)}`);
+    assert.deepStrictEqual(splitCenterGapDock.cancelAfter, splitCenterGapDock.cancelBefore, `pointercancel must restore the exact pre-drag geometry: ${JSON.stringify(splitCenterGapDock)}`);
+    assert.strictEqual(splitCenterGapDock.cancelSaveCalls, 0, `pointercancel must not add a preview commit: ${JSON.stringify(splitCenterGapDock)}`);
+    assert.deepStrictEqual(splitCenterGapDock.horizontal.choices.left, { type: 'free', rect: splitCenterGapDock.horizontal.left }, `left center gap option must remain selectable: ${JSON.stringify(splitCenterGapDock)}`);
+    assert.deepStrictEqual(splitCenterGapDock.horizontal.choices.full, { type: 'free', rect: splitCenterGapDock.horizontal.full }, `full-width center gap option must remain selectable: ${JSON.stringify(splitCenterGapDock)}`);
+    assert.deepStrictEqual(splitCenterGapDock.horizontal.choices.right, { type: 'free', rect: splitCenterGapDock.horizontal.right }, `right center gap option must remain selectable: ${JSON.stringify(splitCenterGapDock)}`);
+    const overlappingBlockerCoverage = await evalExpr(cdp, sid, `(() => {
+      const source = '${madeSessions[1]}';
+      const blockers = ['${madeSessions[2]}', '${madeSessions[3]}'];
+      const prefs = windowPrefs();
+      const savedPrefs = JSON.parse(JSON.stringify(prefs));
+      const savedMinimized = [...state.minimized];
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      const left = { x: 0, y: 0, w: grid.width / 2, h: grid.height };
+      const blocker = { x: 0, y: 0, w: left.w, h: left.h * 0.08 };
+      state.sessions.forEach((entry, id) => {
+        if (id === source || blockers.includes(id)) state.minimized.delete(id);
+        else state.minimized.add(id);
+      });
+      Object.assign(prefs[source], { x: left.w, y: 0, w: left.w, h: left.h, z: 40 });
+      blockers.forEach((id, i) => Object.assign(prefs[id], { ...blocker, z: 30 - i }));
+      [source, ...blockers].forEach(applyFreeWindow);
+      const choice = chooseDesktopSlotAt(grid.left + left.w / 2, grid.top + left.h / 2, source);
+      state.panePrefs.windows.desktop = savedPrefs;
+      state.minimized.clear();
+      savedMinimized.forEach(id => state.minimized.add(id));
+      restorePanelOrder();
+      return { choice: { type: choice.type, rect: choice.rect || null }, left };
+    })()`);
+    assert.deepStrictEqual(overlappingBlockerCoverage.choice, { type: 'free', rect: overlappingBlockerCoverage.left }, `overlapping blockers must count their covered union only once: ${JSON.stringify(overlappingBlockerCoverage)}`);
+    const edgeDragKeepsOtherWindow = await evalExpr(cdp, sid, `(() => {
+      const small = '${madeSessions[1]}';
+      const source = '${madeSessions[2]}';
+      const prefs = windowPrefs();
+      const savedPrefs = JSON.parse(JSON.stringify(prefs));
+      const savedMinimized = [...state.minimized];
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      state.sessions.forEach((entry, id) => {
+        if (id === small || id === source) state.minimized.delete(id);
+        else state.minimized.add(id);
+      });
+      Object.assign(prefs[small], { x: 0, y: 80, w: 280, h: 240, z: 29 });
+      Object.assign(prefs[source], { x: grid.width / 2, y: 0, w: grid.width / 2, h: grid.height, z: 30 });
+      applyFreeWindow(small);
+      applyFreeWindow(source);
+      const before = { ...prefs[small] };
+      const title = state.sessions.get(source).el.querySelector('.term-title');
+      const titleRect = title.getBoundingClientRect();
+      const persistPanePrefs = savePanePrefs;
+      savePanePrefs = () => {};
+      title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: titleRect.left + 20, clientY: titleRect.top + 12, pointerId: 28, pointerType: 'mouse' }));
+      updatePointerDrag({ preventDefault(){}, clientX: grid.left + 5, clientY: grid.top + grid.height / 2 });
+      const edgeSuggestion = state.pointerDrag.activeSuggestion?.key || null;
+      endPointerDrag({ preventDefault(){} });
+      const after = { ...prefs[small] };
+      savePanePrefs = persistPanePrefs;
+      state.panePrefs.windows.desktop = savedPrefs;
+      state.minimized.clear();
+      savedMinimized.forEach(id => state.minimized.add(id));
+      restorePanelOrder();
+      return { edgeSuggestion, before, after };
+    })()`);
+    assert.strictEqual(edgeDragKeepsOtherWindow.edgeSuggestion, null, `edge drag must not activate an invisible snap layout: ${JSON.stringify(edgeDragKeepsOtherWindow)}`);
+    assert.deepStrictEqual(
+      { x: edgeDragKeepsOtherWindow.after.x, y: edgeDragKeepsOtherWindow.after.y, w: edgeDragKeepsOtherWindow.after.w, h: edgeDragKeepsOtherWindow.after.h },
+      { x: edgeDragKeepsOtherWindow.before.x, y: edgeDragKeepsOtherWindow.before.y, w: edgeDragKeepsOtherWindow.before.w, h: edgeDragKeepsOtherWindow.before.h },
+      `dragging another window must not move or resize the small window: ${JSON.stringify(edgeDragKeepsOtherWindow)}`
+    );
+    const overlapKeepsTargetWindow = await evalExpr(cdp, sid, `(() => {
+      const source = '${madeSessions[1]}';
+      const target = '${madeSessions[2]}';
+      const prefs = windowPrefs();
+      const savedPrefs = JSON.parse(JSON.stringify(prefs));
+      const savedMinimized = [...state.minimized];
+      state.sessions.forEach((entry, id) => {
+        if (id === source || id === target) state.minimized.delete(id);
+        else state.minimized.add(id);
+      });
+      Object.assign(prefs[source], { x: 80, y: 70, w: 420, h: 300, z: 30 });
+      Object.assign(prefs[target], { x: 760, y: 220, w: 500, h: 360, z: 29 });
+      applyFreeWindow(source);
+      applyFreeWindow(target);
+      const before = { ...prefs[target] };
+      const targetRect = state.sessions.get(target).el.getBoundingClientRect();
+      const title = state.sessions.get(source).el.querySelector('.term-title');
+      const titleRect = title.getBoundingClientRect();
+      const persistPanePrefs = savePanePrefs;
+      savePanePrefs = () => {};
+      title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: titleRect.left + 20, clientY: titleRect.top + 12, pointerId: 29, pointerType: 'mouse' }));
+      updatePointerDrag({ preventDefault(){}, clientX: targetRect.left + targetRect.width / 2, clientY: targetRect.top + targetRect.height / 2 });
+      const activeSlot = state.pointerDrag.activeDesktopSlot?.type || null;
+      endPointerDrag({ preventDefault(){} });
+      const after = { ...prefs[target] };
+      savePanePrefs = persistPanePrefs;
+      state.panePrefs.windows.desktop = savedPrefs;
+      state.minimized.clear();
+      savedMinimized.forEach(id => state.minimized.add(id));
+      restorePanelOrder();
+      return { activeSlot, before, after };
+    })()`);
+    assert.strictEqual(overlapKeepsTargetWindow.activeSlot, null, `dragging over a window must remain a free overlap, not activate swap: ${JSON.stringify(overlapKeepsTargetWindow)}`);
+    assert.deepStrictEqual(
+      { x: overlapKeepsTargetWindow.after.x, y: overlapKeepsTargetWindow.after.y, w: overlapKeepsTargetWindow.after.w, h: overlapKeepsTargetWindow.after.h },
+      { x: overlapKeepsTargetWindow.before.x, y: overlapKeepsTargetWindow.before.y, w: overlapKeepsTargetWindow.before.w, h: overlapKeepsTargetWindow.before.h },
+      `overlap drop must not move or resize the covered window: ${JSON.stringify(overlapKeepsTargetWindow)}`
+    );
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1595, y: 895 }, sid);
+    await evalExpr(cdp, sid, `(() => {
+      window.dispatchEvent(new Event('blur'));
+      window.dispatchEvent(new Event('focus'));
+      clearLayoutAssist();
+      return true;
+    })()`);
     const edgeResize = await evalExpr(cdp, sid, `(() => {
       const id = '${madeSessions[1]}';
       const entry = state.sessions.get(id);
@@ -509,6 +912,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const calls = [];
       Object.defineProperty(window, 'passideckDesktop', {
         configurable: true,
+        writable: true,
         value: { notifyResponseComplete: () => calls.push('complete') }
       });
       setResponseSoundMode('off');
@@ -516,6 +920,44 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       return calls;
     })()`);
     assert.deepStrictEqual(responseAttentionBridge, ['complete'], 'response completion must notify the desktop bridge even when sound is off');
+
+    const fontSizeDropdown = await evalExpr(cdp, sid, `(async () => {
+      const select = document.getElementById('fontSizeSelect');
+      if (!select) return { missing: true, oldSlider: Boolean(document.getElementById('fontSizeSlider')) };
+      const original = state.fontSize;
+      const term = state.sessions.values().next().value?.term;
+      const originalPanelWidth = document.getElementById('settingsPanel').getBoundingClientRect().width;
+      setFontSize(13, { persist: false });
+      select.value = '18';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      const immediate = {
+        size: state.fontSize,
+        terminalSize: term?.options.fontSize,
+        selected: select.options[select.selectedIndex]?.textContent || '',
+        status: document.getElementById('fontSizeLabel')?.textContent || ''
+      };
+      await new Promise(resolve => setTimeout(resolve, 120));
+      const beforeDelay = state.fontSize;
+      await new Promise(resolve => setTimeout(resolve, 180));
+      const afterDelay = state.fontSize;
+      const afterTerminalSize = term?.options.fontSize;
+      const afterSettingsSize = getComputedStyle(document.getElementById('settingsPanel')).fontSize;
+      const resizedPanelWidth = document.getElementById('settingsPanel').getBoundingClientRect().width;
+      const afterStatus = document.getElementById('fontSizeLabel')?.textContent || '';
+      setFontSize(original, { persist: false });
+      return { missing: false, oldSlider: Boolean(document.getElementById('fontSizeSlider')), immediate, beforeDelay, afterDelay, afterTerminalSize, afterSettingsSize, resized: resizedPanelWidth > originalPanelWidth, afterStatus };
+    })()`);
+    assert.deepStrictEqual(fontSizeDropdown, {
+      missing: false,
+      oldSlider: false,
+      immediate: { size: 13, terminalSize: 13, selected: '18 px', status: 'Pending' },
+      beforeDelay: 13,
+      afterDelay: 18,
+      afterTerminalSize: 18,
+      afterSettingsSize: '12px',
+      resized: false,
+      afterStatus: 'Live'
+    }, 'font-size dropdown must show the selected value immediately and apply it live after a short delay');
 
     const responseSound = await evalExpr(cdp, sid, `(async () => {
       const entries = [...state.sessions.values()];
@@ -810,8 +1252,17 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         stopImmediatePropagation(){ keyStopped = true; }
       });
       entry.session.meta.command = 'hermes --tui';
+      const screenshot = new File(['png'], 'screenshot.png', { type: 'image/png' });
+      handleTerminalPaste({ clipboardData: {
+        files: [],
+        items: [{ kind: 'file', getAsFile: () => screenshot }]
+      }, preventDefault(){}, stopImmediatePropagation(){} });
+      while (state.uploadBusy) await new Promise(resolve => setTimeout(resolve, 0));
+      window.passideckDesktop = { readImage: async () => 'data:image/png;base64,cG5n' };
+      handleTerminalPaste({ clipboardData: { files: [], items: [], getData: () => '' }, preventDefault(){}, stopImmediatePropagation(){} });
+      for (let i = 0; i < 100 && sent.length < 3; i++) await new Promise(resolve => setTimeout(resolve, 10));
+      delete window.passideckDesktop;
       handleTerminalPaste({ clipboardData: { files: [
-        new File(['png'], 'clip.png', { type: 'image/png' }),
         new File(['text'], 'pasted.txt', { type: 'text/plain' })
       ], items: [] }, preventDefault(){}, stopImmediatePropagation(){} });
       while (state.uploadBusy) await new Promise(resolve => setTimeout(resolve, 0));
@@ -824,7 +1275,8 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.deepStrictEqual(uploadInteraction, {
       sent: [
         '\u001b[200~normal Hermes paste\u001b[201~',
-        '\u0001/image /tmp/clip.png\r',
+        '\u0001/image /tmp/screenshot.png\r',
+        '\u0001/image /tmp/clipboard.png\r',
         '\u001b[200~/tmp/pasted.txt \u001b[201~',
         '\u001b[200~/tmp/notes.txt \u001b[201~'
       ],
@@ -871,6 +1323,23 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.deepStrictEqual(minimizeProbe.actionRects.map(r => r.w), [24, 24, 24], 'pane action buttons should be wider');
     assert.deepStrictEqual(minimizeProbe.actionRects.map(r => r.h), [18, 18, 18], 'pane action buttons should not be taller');
+
+    const arrangeProbe = await evalExpr(cdp, sid, `(() => {
+      const r = document.querySelector('.term-panel.active button.arrange').getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    })()`);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: arrangeProbe.x, y: arrangeProbe.y }, sid);
+    await sleep(150);
+    assert.strictEqual(await evalExpr(cdp, sid, `Boolean(document.getElementById('layoutAssist'))`), false, 'arrange preview must wait 300ms before opening');
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 5, y: 120 }, sid);
+    await sleep(250);
+    assert.strictEqual(await evalExpr(cdp, sid, `Boolean(document.getElementById('layoutAssist'))`), false, 'leaving arrange before the delay must cancel its preview');
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: arrangeProbe.x, y: arrangeProbe.y }, sid);
+    await sleep(350);
+    assert.strictEqual(await evalExpr(cdp, sid, `Boolean(document.getElementById('layoutAssist'))`), true, 'arrange preview must open after the hover delay');
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: -10, y: arrangeProbe.y }, sid);
+    await waitEval(cdp, sid, `!document.getElementById('layoutAssist')`);
+
     await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: minimizeProbe.x, y: minimizeProbe.y }, sid);
     await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: minimizeProbe.x, y: minimizeProbe.y, button: 'left', clickCount: 1 }, sid);
     await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: minimizeProbe.x, y: minimizeProbe.y, button: 'left', clickCount: 1 }, sid);
