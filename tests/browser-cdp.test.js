@@ -190,6 +190,12 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await cdp.send('Page.navigate', { url: base }, sid);
     await waitEval(cdp, sid, 'document.readyState === "complete"');
     await waitEval(cdp, sid, 'document.querySelectorAll(".term-panel").length >= 11');
+    const compactLaunchStrip = await evalExpr(cdp, sid, `(() => {
+      const strip = document.querySelector('.command-strip').getBoundingClientRect();
+      const first = document.querySelector('.topbar-ql-btn').getBoundingClientRect();
+      return { statusChip: Boolean(document.querySelector('.status-chip')), leftGap: first.left - strip.left };
+    })()`);
+    assert.deepStrictEqual(compactLaunchStrip, { statusChip: false, leftGap: 6 }, 'quick-launch buttons must occupy the left edge after removing the window/save status chip');
     const dynamicLayoutProposals = await evalExpr(cdp, sid, `(() => {
       const beforeMinimized = state.minimized;
       const proposalsFor = count => {
@@ -288,7 +294,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       applyFreeWindow('${madeSessions[0]}');
       savePanePrefs();
     })()`);
-    await waitEval(cdp, sid, `state.saveState === 'saved'`);
+    await waitEval(cdp, sid, `state.saveTimer === null`);
 
     const peerTarget = await cdp.send('Target.createTarget', { url: 'about:blank' });
     const peerAttached = await cdp.send('Target.attachToTarget', { targetId: peerTarget.targetId, flatten: true });
@@ -298,8 +304,8 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1024, height: 768, deviceScaleFactor: 1, mobile: false }, peerSid);
     await cdp.send('Page.navigate', { url: base }, peerSid);
     await waitEval(cdp, peerSid, 'document.readyState === "complete" && document.querySelectorAll(".term-panel").length >= 11');
-    await waitEval(cdp, sid, `!state.hydrating && state.saveState === 'saved'`);
-    await waitEval(cdp, peerSid, `!state.hydrating && state.saveState === 'saved'`);
+    await waitEval(cdp, sid, `!state.hydrating && state.saveTimer == null`);
+    await waitEval(cdp, peerSid, `!state.hydrating && state.saveTimer == null`);
     const afterDesktopPeerInit = await requestJson(base, 'GET', '/api/ui-state');
     const desktopPeerRect = afterDesktopPeerInit.panePrefs?.windows?.desktop?.[madeSessions[0]];
     assert.deepStrictEqual(
@@ -347,24 +353,57 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
 
     const titleDragProbe = await evalExpr(cdp, sid, `(() => {
       document.activeElement?.blur?.();
+      const id = '${madeSessions[1]}';
       const title = document.querySelector('[data-pane-id="${madeSessions[1]}"] .term-title');
       const panel = title.closest('.term-panel');
+      Object.assign(windowPrefs()[id], { x: 70, y: 60, w: 1100, h: 650, z: 30 });
+      applyFreeWindow(id);
       const tr = title.getBoundingClientRect();
       const pr = panel.getBoundingClientRect();
       return { x: Math.round(tr.left + Math.min(20, tr.width / 2)), y: Math.round(tr.top + tr.height / 2), before: { left: pr.left, top: pr.top, width: pr.width, height: pr.height } };
     })()`);
     const titleDragAfter = await evalExpr(cdp, sid, `(() => {
       const title = document.querySelector('[data-pane-id="${madeSessions[1]}"] .term-title');
+      const panel = title.closest('.term-panel');
       title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: ${titleDragProbe.x}, clientY: ${titleDragProbe.y}, pointerId: 7, pointerType: 'mouse' }));
       updatePointerDrag({ preventDefault(){}, clientX: ${titleDragProbe.x + 90}, clientY: ${titleDragProbe.y + 45} });
-      const r = document.querySelector('[data-pane-id="${madeSessions[1]}"]').getBoundingClientRect();
+      const duringRect = panel.getBoundingClientRect();
+      const during = { left: duringRect.left, top: duringRect.top, width: duringRect.width, height: duringRect.height };
       const dragging = Boolean(state.pointerDrag);
-      const classes = title.closest('.term-panel').className;
+      const classes = panel.className;
       endPointerDrag({ preventDefault(){} });
-      return { left: r.left, top: r.top, width: r.width, height: r.height, dragging, classes, editing: title.dataset.editing || '', target: document.elementFromPoint(${titleDragProbe.x}, ${titleDragProbe.y})?.className || '' };
+      const restoredRect = panel.getBoundingClientRect();
+      return {
+        during,
+        restored: { left: restoredRect.left, top: restoredRect.top, width: restoredRect.width, height: restoredRect.height },
+        dragging,
+        classes,
+        editing: title.dataset.editing || '',
+        target: document.elementFromPoint(${titleDragProbe.x}, ${titleDragProbe.y})?.className || ''
+      };
     })()`);
-    assert.ok(titleDragAfter.left > titleDragProbe.before.left + 40 && titleDragAfter.top > titleDragProbe.before.top + 20, `window title drag must move pane: ${JSON.stringify({ before: titleDragProbe.before, after: titleDragAfter })}`);
-    assert.ok(Math.abs(titleDragAfter.width - titleDragProbe.before.width) < 2 && Math.abs(titleDragAfter.height - titleDragProbe.before.height) < 2, `window drag must not resize pane: ${JSON.stringify({ before: titleDragProbe.before, after: titleDragAfter })}`);
+    assert.ok(titleDragAfter.during.left > titleDragProbe.before.left + 40 && titleDragAfter.during.top > titleDragProbe.before.top + 20, `window title drag must move pane: ${JSON.stringify({ before: titleDragProbe.before, after: titleDragAfter })}`);
+    assert.ok(titleDragAfter.during.width < titleDragProbe.before.width - 100 && titleDragAfter.during.height < titleDragProbe.before.height - 50, `large window must shrink to default size while dragging: ${JSON.stringify({ before: titleDragProbe.before, after: titleDragAfter })}`);
+    assert.ok(Math.abs(titleDragAfter.restored.width - titleDragProbe.before.width) < 2 && Math.abs(titleDragAfter.restored.height - titleDragProbe.before.height) < 2, `free drop must restore the pre-drag size: ${JSON.stringify({ before: titleDragProbe.before, after: titleDragAfter })}`);
+    const snappedDrag = await evalExpr(cdp, sid, `(() => {
+      const id = '${madeSessions[1]}';
+      const title = document.querySelector('[data-pane-id="${madeSessions[1]}"] .term-title');
+      const savedPrefs = JSON.parse(JSON.stringify(windowPrefs()));
+      Object.assign(windowPrefs()[id], { x: 70, y: 60, w: 1100, h: 650, z: 30 });
+      applyFreeWindow(id);
+      const tr = title.getBoundingClientRect();
+      const persistPanePrefs = savePanePrefs;
+      savePanePrefs = () => {};
+      title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: tr.left + 20, clientY: tr.top + 12, pointerId: 17, pointerType: 'mouse' }));
+      state.pointerDrag.activeSuggestion = { key: 'test-snap', rect: { x: 0, y: 0, w: 500, h: 300 } };
+      endPointerDrag({ preventDefault(){} });
+      const snapped = { ...windowPrefs()[id] };
+      savePanePrefs = persistPanePrefs;
+      state.panePrefs.windows.desktop = savedPrefs;
+      restorePanelOrder();
+      return snapped;
+    })()`);
+    assert.deepStrictEqual({ x: snappedDrag.x, y: snappedDrag.y, w: snappedDrag.w, h: snappedDrag.h }, { x: 0, y: 0, w: 500, h: 300 }, `snap drop must adapt to target geometry instead of restoring the old size: ${JSON.stringify(snappedDrag)}`);
     const dragDropSizePreserved = await evalExpr(cdp, sid, `(() => {
       const prefs = windowPrefs();
       const a = '${madeSessions[1]}';

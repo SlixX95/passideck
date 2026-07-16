@@ -8,6 +8,7 @@ const app = read('packages/client/public/app.js');
 const server = read('packages/server/src/index.js');
 const session = read('packages/server/src/session.js');
 const html = read('packages/client/public/index.html');
+const style = read('packages/client/public/style.css');
 const installer = read('scripts/install.sh');
 const service = read('scripts/passideck.service');
 const pkg = JSON.parse(read('package.json'));
@@ -30,6 +31,9 @@ for (const needle of [
 assert.ok(session.includes('randomUUID()'), 'session ids should use stdlib crypto.randomUUID');
 assert.ok(html.includes('vendor/xterm.js') && !html.includes('cdn.jsdelivr.net'), 'client assets must stay local');
 assert.ok(html.includes("location.port === '8792' ? 'PassiDeck Dev' : 'PassiDeck'"), 'browser tab title must distinguish dev port 8792 from normal/live');
+assert.ok(!html.includes('status-chip') && !html.includes('stat-active') && !html.includes('saveState'), 'window/save status chip should stay removed so launch controls start at the left edge');
+assert.ok(!style.includes('.status-chip') && !style.includes('#saveState'), 'removed window/save status chip must not leave dead CSS');
+assert.ok(!app.includes('setSaveState') && !app.includes("saveState: 'saved'"), 'removed save indicator must not leave display-only state logic');
 assert.ok(!html.includes('minimizedBar'), 'unused minimized bar markup should stay deleted');
 assert.ok(!app.includes('function authQuery'), 'unused authQuery should stay deleted');
 assert.ok(!app.includes('function desktopWindowIds'), 'unused desktopWindowIds should stay deleted');

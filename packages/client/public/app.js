@@ -55,8 +55,7 @@ const state = {
   hydrating: false,
   uiRevision: 0,
   uiEvents: null,
-  panePrefs: { titles: {}, order: [], windows: {} },
-  saveState: 'saved'
+  panePrefs: { titles: {}, order: [], windows: {} }
 };
 
 const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v1:';
@@ -928,12 +927,6 @@ function applyLayoutVisibility() {
   renderSharedResizeHandles();
 }
 
-function setSaveState(value) {
-  state.saveState = value;
-  const el = document.getElementById('saveState');
-  if (el) el.textContent = value;
-}
-
 function persistentMinimizedIds() {
   return [...state.minimized].filter(id => !state.responsiveMinimized.has(id));
 }
@@ -956,7 +949,6 @@ function uiPayload() {
 
 function saveUiState() {
   if (state.hydrating) return;
-  setSaveState('saving');
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(async () => {
     const local = uiPayload();
@@ -969,10 +961,10 @@ function saveUiState() {
         saved = await api('PUT', '/api/ui-state', { ...local, revision: error.data.revision });
       }
       state.uiRevision = saved.revision;
-      setSaveState('saved');
     } catch (error) {
       if (error.status === 409 && error.data) applyAuthoritativeUiState(error.data);
-      else setSaveState('offline');
+    } finally {
+      state.saveTimer = null;
     }
   }, 150);
 }
@@ -1365,7 +1357,6 @@ function installTerminalWheelScroll(termEl, term, session = null) {
 
 function updateEmpty() {
   document.getElementById('emptyState').style.display = state.sessions.size ? 'none' : 'grid';
-  document.getElementById('stat-active').textContent = String(state.sessions.size);
 }
 
 function stripTerminalReplyJunk(data) {
@@ -1549,7 +1540,6 @@ function applyAuthoritativeUiState(ui) {
   renderSwitcher();
   scheduleTerminalFit();
   state.hydrating = wasHydrating;
-  setSaveState('saved');
 }
 
 function connectUiEvents() {
@@ -1808,6 +1798,18 @@ function endPointerDrag(event) {
   event?.preventDefault?.();
   const suggestion = d.activeSuggestion;
   const slot = d.activeDesktopSlot;
+  const p = windowPrefs()[d.sourceId];
+  if (!suggestion && p && d.preDragRect) {
+    const gridRect = document.getElementById('termGrid').getBoundingClientRect();
+    Object.assign(p, {
+      x: d.x - gridRect.left - d.preDragRect.w * d.grabRatioX,
+      y: d.y - gridRect.top - d.preDragRect.h * d.grabRatioY,
+      w: d.preDragRect.w,
+      h: d.preDragRect.h
+    });
+    Object.assign(p, clampWindowRect(p));
+    applyFreeWindow(d.sourceId);
+  }
   state.pointerDrag = null;
   document.removeEventListener('pointermove', updatePointerDrag, true);
   document.removeEventListener('pointerup', endPointerDrag, true);
@@ -2026,8 +2028,18 @@ function startPointerDrag(id, handle, event) {
   const swapOriginRect = { x: p.x, y: p.y, w: p.w, h: p.h };
   const grid = document.getElementById('termGrid');
   const gr = grid.getBoundingClientRect();
+  const preDragRect = { x: p.x, y: p.y, w: p.w, h: p.h };
+  const grabRatioX = Math.max(0, Math.min(1, (event.clientX - gr.left - p.x) / p.w));
+  const grabRatioY = Math.max(0, Math.min(1, (event.clientY - gr.top - p.y) / p.h));
+  const defaultSize = defaultWindowSize();
+  p.w = Math.min(p.w, defaultSize.w);
+  p.h = Math.min(p.h, defaultSize.h);
+  p.x = event.clientX - gr.left - p.w * grabRatioX;
+  p.y = event.clientY - gr.top - p.h * grabRatioY;
+  Object.assign(p, clampWindowRect(p));
+  applyFreeWindow(id);
   p.z = nextWindowZ();
-  state.pointerDrag = { sourceId: id, dx: event.clientX - gr.left - p.x, dy: event.clientY - gr.top - p.y, x: event.clientX, y: event.clientY, z: p.z, activeSuggestion: null, activeDesktopSlot: null, lastSwapTarget: null, swapOriginRect };
+  state.pointerDrag = { sourceId: id, dx: event.clientX - gr.left - p.x, dy: event.clientY - gr.top - p.y, x: event.clientX, y: event.clientY, z: p.z, activeSuggestion: null, activeDesktopSlot: null, lastSwapTarget: null, swapOriginRect, preDragRect, grabRatioX, grabRatioY };
   state.draggingId = id;
   clearSharedResizeHandles();
   entry.el.classList.add('dragging');
