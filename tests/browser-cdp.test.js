@@ -359,6 +359,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const p = windowPrefs()['${madeSessions[0]}'];
       return p?.x === 111 && p?.y === 112 && p?.w === 777 && p?.h === 444;
     })()`, 4000);
+    await waitEval(cdp, peerSid, `(() => [...state.sessions.values()].every(entry => entry.el.dataset.connectionStatus === 'live'))()`, 4000);
     const peerLive = await evalExpr(cdp, peerSid, `(() => ({
       rect: { ...windowPrefs()['${madeSessions[0]}'] },
       live: [...state.sessions.values()].every(entry => entry.el.dataset.connectionStatus === 'live')
@@ -796,15 +797,71 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const id = '${madeSessions[1]}';
       const entry = state.sessions.get(id);
       const prefs = windowPrefs();
+      const savedPrefs = JSON.parse(JSON.stringify(prefs));
+      const savedMinimized = [...state.minimized];
+      state.sessions.forEach((other, otherId) => {
+        if (otherId === id) return;
+        state.minimized.add(otherId);
+        other.el.classList.add('layout-hidden');
+      });
       Object.assign(prefs[id], { x: 100, y: 100, w: 500, h: 300, z: 40 });
       applyFreeWindow(id);
       const handle = entry.el.querySelector('.window-resize-handle.edge-w');
       handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: 100, clientY: 200, pointerId: 8, pointerType: 'mouse' }));
-      updateWindowResize({ preventDefault(){}, clientX: 40, clientY: 200 });
+      const start = { ...state.resizeDrag.startRect };
+      updateWindowResize({ preventDefault(){}, clientX: state.resizeDrag.startX - 60, clientY: state.resizeDrag.startY });
+      const result = { dx: Math.round(prefs[id].x - start.x), dw: Math.round(prefs[id].w - start.w), edges: entry.el.querySelectorAll('.window-resize-handle').length };
+      state.panePrefs.windows.desktop = savedPrefs;
+      state.minimized.clear();
+      savedMinimized.forEach(savedId => state.minimized.add(savedId));
+      restorePanelOrder();
       endWindowResize({ preventDefault(){} });
-      return { x: Math.round(prefs[id].x), w: Math.round(prefs[id].w), edges: entry.el.querySelectorAll('.window-resize-handle').length };
+      return result;
     })()`);
-    assert.deepStrictEqual(edgeResize, { x: 40, w: 560, edges: 8 }, `left edge resize must grow window without bottom-right-only lock: ${JSON.stringify(edgeResize)}`);
+    assert.deepStrictEqual(edgeResize, { dx: -60, dw: 60, edges: 8 }, `left edge resize must grow window without bottom-right-only lock: ${JSON.stringify(edgeResize)}`);
+
+    const resizeSnap = await evalExpr(cdp, sid, `(() => {
+      const ids = ${JSON.stringify(madeSessions.slice(0, 3))};
+      const [source, verticalTarget, horizontalTarget] = ids;
+      const prefs = windowPrefs();
+      const savedPrefs = JSON.parse(JSON.stringify(prefs));
+      const savedMinimized = [...state.minimized];
+      state.sessions.forEach((entry, id) => {
+        state.minimized.add(id);
+        entry.el.classList.add('layout-hidden');
+      });
+      ids.forEach(id => {
+        state.minimized.delete(id);
+        state.sessions.get(id)?.el.classList.remove('layout-hidden', 'minimized');
+      });
+      Object.assign(prefs[source], { x: 100, y: 100, w: 500, h: 300, z: 40 });
+      Object.assign(prefs[verticalTarget], { x: 720, y: 80, w: 400, h: 350, z: 20 });
+      Object.assign(prefs[horizontalTarget], { x: 80, y: 500, w: 570, h: 300, z: 21 });
+      ids.forEach(applyFreeWindow);
+      state.resizeDrag = { sourceId: source, edge: 'se', startX: 600, startY: 400, startRect: { x: 100, y: 100, w: 500, h: 300 }, z: 40 };
+      updateWindowResize({ preventDefault(){}, clientX: 708, clientY: 488 });
+      const se = { x: prefs[source].x, y: prefs[source].y, w: prefs[source].w, h: prefs[source].h };
+      const west = snapWindowResize(source, 'w', { x: 1132, y: 100, w: 568, h: 300 });
+      const north = snapWindowResize(source, 'n', { x: 100, y: 812, w: 500, h: 388 });
+      const targets = {
+        vertical: { ...prefs[verticalTarget] },
+        horizontal: { ...prefs[horizontalTarget] }
+      };
+      state.panePrefs.windows.desktop = savedPrefs;
+      state.minimized.clear();
+      savedMinimized.forEach(id => state.minimized.add(id));
+      restorePanelOrder();
+      endWindowResize({ preventDefault(){} });
+      return { se, west, north, targets };
+    })()`);
+    assert.deepStrictEqual(resizeSnap.se, { x: 100, y: 100, w: 620, h: 400 }, `southeast resize must snap both moving edges to nearby neighbor edges: ${JSON.stringify(resizeSnap)}`);
+    assert.deepStrictEqual(resizeSnap.west, { x: 1120, y: 100, w: 580, h: 300 }, `west resize must mirror-snap to a neighbor right edge: ${JSON.stringify(resizeSnap)}`);
+    assert.deepStrictEqual(resizeSnap.north, { x: 100, y: 800, w: 500, h: 400 }, `north resize must mirror-snap to a neighbor bottom edge: ${JSON.stringify(resizeSnap)}`);
+    assert.deepStrictEqual(
+      { vertical: { x: resizeSnap.targets.vertical.x, y: resizeSnap.targets.vertical.y, w: resizeSnap.targets.vertical.w, h: resizeSnap.targets.vertical.h }, horizontal: { x: resizeSnap.targets.horizontal.x, y: resizeSnap.targets.horizontal.y, w: resizeSnap.targets.horizontal.w, h: resizeSnap.targets.horizontal.h } },
+      { vertical: { x: 720, y: 80, w: 400, h: 350 }, horizontal: { x: 80, y: 500, w: 570, h: 300 } },
+      `resize snapping must never move the target windows: ${JSON.stringify(resizeSnap)}`
+    );
 
     const sharedResizeOcclusion = await evalExpr(cdp, sid, `(() => {
       const ids = ${JSON.stringify(madeSessions.slice(0, 3))};
@@ -908,18 +965,66 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.strictEqual(terminalFocusVisual.reactivated.textareaFocused, true, 'reactivating PassiDeck must focus the last selected terminal for immediate typing');
     assert.deepStrictEqual(terminalFocusVisual.modalFocus, { buttonFocused: true, inputFocused: false }, 'reactivating PassiDeck must not steal focus from an open modal');
 
-    const responseAttentionBridge = await evalExpr(cdp, sid, `(() => {
+    const responseAttentionBridge = await evalExpr(cdp, sid, `(async () => {
       const calls = [];
+      const entries = [...state.sessions.values()];
+      const originalActiveId = state.activeId;
+      const originalDesktopDescriptor = Object.getOwnPropertyDescriptor(window, 'passideckDesktop');
       Object.defineProperty(window, 'passideckDesktop', {
         configurable: true,
         writable: true,
-        value: { notifyResponseComplete: () => calls.push('complete') }
+        value: {
+          notifyResponseComplete: () => calls.push('complete'),
+          clearResponseAttention: () => calls.push('clear')
+        }
       });
       setResponseSoundMode('off');
-      notifyResponseComplete([...state.sessions.keys()][0]);
-      return calls;
+      notifyResponseComplete(entries[0].session.id);
+      notifyResponseComplete(entries[1].session.id);
+      const header = entries[0].el.querySelector('.term-header');
+      const switcher = document.querySelector('[data-switcher-pane-id="' + entries[0].session.id + '"]');
+      const immediate = header.classList.contains('response-pulse');
+      const immediateTab = switcher.classList.contains('response-pulse');
+      const tabIterations = getComputedStyle(switcher).animationIterationCount;
+      await new Promise(resolve => setTimeout(resolve, 1700));
+      const persistent = header.classList.contains('response-pulse');
+      const persistentTab = switcher.classList.contains('response-pulse');
+      entries[0].el.querySelector('.terminal').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+      const desktopHeldForOtherPane = !calls.includes('clear');
+      const otherBeforeSwitcherClick = entries[1].responseAttention;
+      document.querySelector('[data-switcher-pane-id="' + entries[1].session.id + '"]').click();
+      const otherClearedBySwitcher = !entries[1].responseAttention;
+      if (state.activeId !== originalActiveId) selectPanel(originalActiveId);
+      const result = {
+        calls,
+        immediate,
+        immediateTab,
+        tabIterations,
+        persistent,
+        persistentTab,
+        cleared: !header.classList.contains('response-pulse'),
+        clearedTab: !document.querySelector('[data-switcher-pane-id="' + entries[0].session.id + '"]').classList.contains('response-pulse'),
+        desktopHeldForOtherPane,
+        otherBeforeSwitcherClick,
+        otherClearedBySwitcher
+      };
+      if (originalDesktopDescriptor) Object.defineProperty(window, 'passideckDesktop', originalDesktopDescriptor);
+      else delete window.passideckDesktop;
+      return result;
     })()`);
-    assert.deepStrictEqual(responseAttentionBridge, ['complete'], 'response completion must notify the desktop bridge even when sound is off');
+    assert.deepStrictEqual(responseAttentionBridge, {
+      calls: ['complete', 'complete', 'clear'],
+      immediate: true,
+      immediateTab: true,
+      tabIterations: 'infinite',
+      persistent: true,
+      persistentTab: true,
+      cleared: true,
+      clearedTab: true,
+      desktopHeldForOtherPane: true,
+      otherBeforeSwitcherClick: true,
+      otherClearedBySwitcher: true
+    }, 'pane acknowledgement must preserve backend attention while another pane waits, and switcher selection must clear the selected pane plus the backend after the final acknowledgement');
 
     const fontSizeDropdown = await evalExpr(cdp, sid, `(async () => {
       const select = document.getElementById('fontSizeSelect');
@@ -1492,6 +1597,73 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     const scrubbedAuthToken = await waitEval(cdp, sid, `(() => ({ token: sessionStorage.getItem('passideck:auth-token'), search: location.search, hash: location.hash }))()`);
     assert.deepStrictEqual(scrubbedAuthToken, { token: 'secret-token', search: '', hash: '#keep' }, 'auth token must move to session storage and be removed from browser history/address bar');
 
+    const resumeLifecycle = await evalExpr(cdp, sid, `(async () => {
+      const entry = state.sessions.get(state.activeId);
+      const realSocket = entry.ws;
+      const realSessions = state.sessions;
+      const originalAttachSocket = attachSocket;
+      const originalRefresh = entry.term.refresh;
+      let reconnects = 0;
+      let staleClosed = 0;
+      let refreshes = 0;
+      try {
+        state.sessions = new Map([[entry.session.id, entry]]);
+        attachSocket = () => {
+          reconnects += 1;
+          return { readyState: WebSocket.CONNECTING, send() {}, close() {} };
+        };
+        entry.term.refresh = () => { refreshes += 1; };
+        entry.ws = {
+          readyState: WebSocket.OPEN,
+          lastMessageAt: Date.now(),
+          lastPongAt: Date.now() - SOCKET_STALE_MS - 1,
+          send() {},
+          close(code) { if (code === 4000) staleClosed += 1; }
+        };
+        resumeAllPanes();
+        const stale = { reconnects, staleClosed, refreshes };
+
+        const sent = [];
+        entry.ws = {
+          readyState: WebSocket.OPEN,
+          lastMessageAt: Date.now(),
+          send(raw) { sent.push(JSON.parse(raw).type); },
+          close() {}
+        };
+        resumeAllPanes();
+        await new Promise(resolve => setTimeout(resolve, 300));
+        const healthy = { sent, refreshes };
+
+        let onlineClosed = 0;
+        entry.ws = {
+          readyState: WebSocket.OPEN,
+          lastMessageAt: Date.now(),
+          send() {},
+          close(code) { if (code === 4000) onlineClosed += 1; }
+        };
+        resumeAllPanes(true);
+        return { stale, healthy, online: { reconnects, onlineClosed } };
+      } finally {
+        state.sessions = realSessions;
+        attachSocket = originalAttachSocket;
+        entry.term.refresh = originalRefresh;
+        entry.ws = realSocket;
+      }
+    })()`);
+    assert.deepStrictEqual(resumeLifecycle.stale, { reconnects: 1, staleClosed: 1, refreshes: 1 }, `resume must replace stale sockets and repaint every pane: ${JSON.stringify(resumeLifecycle)}`);
+    assert.ok(resumeLifecycle.healthy.sent.includes('ping') && resumeLifecycle.healthy.sent.includes('resize') && resumeLifecycle.healthy.refreshes >= 2,
+      `resume must probe live sockets, force PTY redraw, and repaint xterm: ${JSON.stringify(resumeLifecycle)}`);
+    assert.deepStrictEqual(resumeLifecycle.online, { reconnects: 2, onlineClosed: 1 }, `returning online must replace even a nominally open socket immediately: ${JSON.stringify(resumeLifecycle)}`);
+
+    const heartbeatRoundTrip = await evalExpr(cdp, sid, `(async () => {
+      const socket = state.sessions.get(state.activeId).ws;
+      const before = socket.lastPongAt || 0;
+      socket.send(JSON.stringify({ type: 'ping' }));
+      for (let i = 0; i < 30 && !(socket.lastPongAt > before); i += 1) await new Promise(resolve => setTimeout(resolve, 20));
+      return socket.lastPongAt > before;
+    })()`);
+    assert.strictEqual(heartbeatRoundTrip, true, 'server must answer application heartbeat pings');
+
     const socketCloseLifecycle = await evalExpr(cdp, sid, `(async () => {
       const entry = state.sessions.get(state.activeId);
       const currentSocket = entry.ws;
@@ -1506,13 +1678,34 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       handleSocketClose(entry.session.id, {}, { code: 4000 });
       await new Promise(resolve => setTimeout(resolve, 1100));
       const staleResult = { reconnects, retained: state.sessions.has(entry.session.id), status: entry.el.dataset.connectionStatus };
+      entry.ws = {};
+      setConnectionStatus(entry.session.id, 'live');
+      currentSocket.onerror();
+      const staleErrorStatus = entry.el.dataset.connectionStatus;
+      setConnectionStatus(entry.session.id, 'offline');
+      entry.lastPongAt = 111;
+      currentSocket.onopen();
+      currentSocket.onmessage({ data: JSON.stringify({ type: 'pong' }) });
+      const staleEventResult = { status: entry.el.dataset.connectionStatus, lastPongAt: entry.lastPongAt };
+      const delayedSocket = {};
+      entry.ws = delayedSocket;
+      reconnects = 0;
+      handleSocketClose(entry.session.id, delayedSocket, { code: 1006 });
+      entry.ws = { readyState: WebSocket.CONNECTING };
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      const staleTimerReconnects = reconnects;
+      entry.ws = currentSocket;
       reconnect = originalReconnect;
-      return { currentResult, staleResult };
+      return { currentResult, staleResult, staleErrorStatus, staleEventResult, staleTimerReconnects };
     })()`);
+
     assert.deepStrictEqual(socketCloseLifecycle, {
       currentResult: { reconnects: 0, retained: true, status: 'offline' },
-      staleResult: { reconnects: 0, retained: true, status: 'live' }
-    }, 'current superseded websocket must stop; stale websocket close must not affect its newer live replacement');
+      staleResult: { reconnects: 0, retained: true, status: 'live' },
+      staleErrorStatus: 'live',
+      staleEventResult: { status: 'offline', lastPongAt: 111 },
+      staleTimerReconnects: 0
+    }, 'current superseded websocket must stop; stale callbacks and delayed reconnect timers must not affect its newer replacement');
 
     await evalExpr(cdp, sid, `createPanel({ id: 'missing-session-probe', meta: { command: '/bin/bash', label: 'orphan probe', status: 'active', cols: 120, rows: 30 } })`);
     await waitEval(cdp, sid, `!state.sessions.has('missing-session-probe') && !document.getElementById('panel-missing-session-probe')`, 3000);

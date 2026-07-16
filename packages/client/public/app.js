@@ -2,6 +2,8 @@ const API = window.location.origin;
 const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const WS_BASE = `${WS_PROTOCOL}//${window.location.host}/ws`;
 const AUTH_TOKEN_KEY = 'passideck:auth-token';
+const SOCKET_HEARTBEAT_MS = 15000;
+const SOCKET_STALE_MS = SOCKET_HEARTBEAT_MS * 3;
 
 function authToken() {
   const urlToken = new URLSearchParams(window.location.search).get('token') || '';
@@ -45,6 +47,9 @@ const state = {
   uploadBusy: false,
   systemMonitorTimer: null,
   codexLimitsTimer: null,
+  socketHeartbeatTimer: null,
+  resumeTimer: null,
+  resumeForceReconnect: false,
   fitFrame: null,
   fitTimer: null,
   fitTimerLate: null,
@@ -1122,7 +1127,31 @@ function shouldPlayResponseSound(id, hasDocumentFocus = document.hasFocus(), hid
   return hidden || !hasDocumentFocus || state.activeId !== id;
 }
 
+function clearResponseAttention(id) {
+  const entry = state.sessions.get(id);
+  const header = entry?.el.querySelector('.term-header');
+  if (!entry || (!entry.responseAttention && !header?.classList.contains('response-pulse'))) return;
+  entry.responseAttention = false;
+  header?.classList.remove('response-pulse');
+  renderSwitcher();
+  if (![...state.sessions.values()].some(item => item.responseAttention)) {
+    window.passideckDesktop?.clearResponseAttention?.();
+  }
+}
+
+function pulsePaneTitlebar(id) {
+  const entry = state.sessions.get(id);
+  const header = entry?.el.querySelector('.term-header');
+  if (!entry || !header) return;
+  entry.responseAttention = true;
+  header.classList.remove('response-pulse');
+  void header.offsetWidth;
+  header.classList.add('response-pulse');
+  renderSwitcher();
+}
+
 function notifyResponseComplete(id) {
+  pulsePaneTitlebar(id);
   if (shouldPlayResponseSound(id)) playBell(state.responseSoundTone, state.responseSoundVolume);
   window.passideckDesktop?.notifyResponseComplete?.();
 }
@@ -1888,6 +1917,50 @@ function endWindowResize(event) {
   renderSharedResizeHandles();
 }
 
+function snapWindowResize(sourceId, edge, rect) {
+  const minW = 300;
+  const minH = 190;
+  const threshold = 16;
+  const result = { ...rect };
+  const prefs = windowPrefs();
+  const neighbors = [...state.sessions.entries()]
+    .filter(([id, entry]) => id !== sourceId && !state.minimized.has(id) && !entry.session.exited && !entry.el.classList.contains('layout-hidden') && prefs[id])
+    .map(([id]) => prefs[id]);
+  const nearest = (value, axis) => {
+    let best = null;
+    for (const other of neighbors) {
+      const overlap = axis === 'x'
+        ? Math.min(result.y + result.h, other.y + other.h) - Math.max(result.y, other.y)
+        : Math.min(result.x + result.w, other.x + other.w) - Math.max(result.x, other.x);
+      if (overlap <= 0) continue;
+      for (const candidate of axis === 'x' ? [other.x, other.x + other.w] : [other.y, other.y + other.h]) {
+        const distance = Math.abs(candidate - value);
+        if (distance <= threshold && (!best || distance < best.distance)) best = { value: candidate, distance };
+      }
+    }
+    return best?.value;
+  };
+  if (edge.includes('e')) {
+    const target = nearest(result.x + result.w, 'x');
+    if (target != null && target - result.x >= minW) result.w = target - result.x;
+  }
+  if (edge.includes('w')) {
+    const right = result.x + result.w;
+    const target = nearest(result.x, 'x');
+    if (target != null && right - target >= minW) { result.x = target; result.w = right - target; }
+  }
+  if (edge.includes('s')) {
+    const target = nearest(result.y + result.h, 'y');
+    if (target != null && target - result.y >= minH) result.h = target - result.y;
+  }
+  if (edge.includes('n')) {
+    const bottom = result.y + result.h;
+    const target = nearest(result.y, 'y');
+    if (target != null && bottom - target >= minH) { result.y = target; result.h = bottom - target; }
+  }
+  return result;
+}
+
 function updateWindowResize(event) {
   const d = state.resizeDrag;
   if (!d) return;
@@ -1915,6 +1988,7 @@ function updateWindowResize(event) {
     y = Math.max(0, Math.min(bottom - minH, d.startRect.y + dy));
     h = bottom - y;
   }
+  ({ x, y, w, h } = snapWindowResize(d.sourceId, edge, { x, y, w, h }));
   Object.assign(p, { x, y, w, h, z: d.z });
   applyFreeWindow(d.sourceId);
   scheduleTerminalFit({ secondPass: false, latePass: false });
@@ -2088,6 +2162,7 @@ function createPanel(session, opts = {}) {
     <div class="window-resize-handle edge-nw" data-resize-edge="nw" data-tooltip="Resize" aria-hidden="true"></div>
   `;
   grid.appendChild(el);
+  el.addEventListener('mousedown', () => clearResponseAttention(id));
 
   const titleEl = el.querySelector('.term-title');
   const descEl = el.querySelector('.term-session-desc');
@@ -2301,7 +2376,9 @@ function handleSocketClose(id, socket, event) {
     return;
   }
   if (!entry.el.classList.contains('exited')) setConnectionStatus(id, 'reconnecting');
-  setTimeout(() => reconnect(id), 1000);
+  setTimeout(() => {
+    if (state.sessions.get(id)?.ws === socket) reconnect(id);
+  }, 1000);
 }
 
 function attachSocket(id, term, el) {
@@ -2309,9 +2386,17 @@ function attachSocket(id, term, el) {
   const token = authToken();
   if (token) qs.set('token', token);
   const ws = new WebSocket(`${WS_BASE}?${qs.toString()}`);
+  ws.lastMessageAt = Date.now();
+  ws.lastPongAt = 0;
   ws.onmessage = (event) => {
+    if (state.sessions.get(id)?.ws !== ws) return;
     let msg;
     try { msg = JSON.parse(event.data); } catch { return; }
+    ws.lastMessageAt = Date.now();
+    if (msg.type === 'pong') {
+      ws.lastPongAt = ws.lastMessageAt;
+      return;
+    }
     const entry = state.sessions.get(id);
     if (msg.type === 'meta') applySessionMeta(id, msg.session);
     if (msg.type === 'replay') {
@@ -2332,18 +2417,74 @@ function attachSocket(id, term, el) {
     }
   };
   ws.onopen = () => {
+    if (state.sessions.get(id)?.ws !== ws) return;
+    ws.lastMessageAt = ws.lastPongAt = Date.now();
     setConnectionStatus(id, 'live');
     scheduleTerminalFit({ force: true });
   };
-  ws.onerror = () => setConnectionStatus(id, 'offline');
+  ws.onerror = () => {
+    if (state.sessions.get(id)?.ws === ws) setConnectionStatus(id, 'offline');
+  };
   ws.onclose = (event) => handleSocketClose(id, ws, event);
   return ws;
 }
 
-function reconnect(id) {
+function reconnect(id, force = false) {
   const entry = state.sessions.get(id);
   if (!entry || entry.el.classList.contains('exited')) return;
+  const oldSocket = entry.ws;
+  if (!force && oldSocket?.readyState === WebSocket.OPEN) return;
   entry.ws = attachSocket(id, entry.term, entry.el);
+  if (oldSocket && oldSocket !== entry.ws) {
+    try { oldSocket.close(4000, 'superseded'); } catch {}
+  }
+}
+
+function ensureSocketLive(id, entry, now = Date.now()) {
+  const socket = entry.ws;
+  const age = now - (socket?.lastPongAt || socket?.lastMessageAt || 0);
+  if (socket?.readyState === WebSocket.CONNECTING && age <= SOCKET_STALE_MS) return false;
+  if (socket?.readyState !== WebSocket.OPEN || age > SOCKET_STALE_MS) {
+    reconnect(id, true);
+    return false;
+  }
+  try { socket.send(JSON.stringify({ type: 'ping' })); } catch { reconnect(id, true); return false; }
+  return true;
+}
+
+function checkSocketHealth() {
+  if (document.hidden) return;
+  const now = Date.now();
+  for (const [id, entry] of state.sessions) ensureSocketLive(id, entry, now);
+}
+
+function startSocketHeartbeat() {
+  if (state.socketHeartbeatTimer) return;
+  state.socketHeartbeatTimer = setInterval(checkSocketHealth, SOCKET_HEARTBEAT_MS);
+}
+
+function resumeAllPanes(forceReconnect = false) {
+  if (document.hidden) return;
+  const now = Date.now();
+  for (const [id, entry] of state.sessions) {
+    try { entry.term.refresh(0, Math.max(0, entry.term.rows - 1)); } catch {}
+    if (forceReconnect) reconnect(id, true);
+    else if (ensureSocketLive(id, entry, now)) sendResize(id, entry, true);
+  }
+  scheduleTerminalFit({ force: true });
+  pollCodexLimits();
+  pollSystemMonitor();
+}
+
+function scheduleResume(forceReconnect = false) {
+  state.resumeForceReconnect ||= forceReconnect;
+  clearTimeout(state.resumeTimer);
+  state.resumeTimer = setTimeout(() => {
+    state.resumeTimer = null;
+    const force = state.resumeForceReconnect;
+    state.resumeForceReconnect = false;
+    resumeAllPanes(force);
+  }, 50);
 }
 
 function renderSwitcher() {
@@ -2370,10 +2511,11 @@ function renderSwitcher() {
     if (state.minimized.has(id)) btn.classList.add('minimized');
     if (id === state.activeId && state.minimized.has(id)) btn.classList.add('active-minimized');
     if (item.session.exited) btn.classList.add('exited');
+    if (item.responseAttention) btn.classList.add('response-pulse');
     const title = panelTitle(item.session);
     const action = state.minimized.has(id) ? `Restore ${title}` : id === state.activeId ? `Minimize ${title}` : `Focus ${title}`;
     btn.dataset.switcherPaneId = id;
-    btn.setAttribute('aria-label', action);
+    btn.setAttribute('aria-label', `${action}${item.responseAttention ? ', new response' : ''}`);
     setTooltip(btn, action);
     btn.innerHTML = '<span class="switcher-title"></span>';
     btn.querySelector('.switcher-title').textContent = title;
@@ -2384,6 +2526,7 @@ function renderSwitcher() {
     close.textContent = '×';
     close.onclick = e => { e.preventDefault(); e.stopPropagation(); requestClosePanel(id); };
     const activate = () => {
+      clearResponseAttention(id);
       if (state.minimized.has(id)) restorePanel(id);
       else if (id === state.activeId) minimizePanel(id);
       else selectPanel(id);
@@ -2709,6 +2852,7 @@ async function init() {
   renderSwitcher();
   state.hydrating = false;
   connectUiEvents();
+  startSocketHeartbeat();
 }
 
 function escapeHtml(str) {
@@ -2848,14 +2992,23 @@ document.addEventListener('paste', handleTerminalPaste, true);
 document.addEventListener('contextmenu', handleTerminalContextMenu, true);
 document.addEventListener('dragover', handleUploadDragOver, true);
 document.addEventListener('drop', handleUploadDrop, true);
-window.addEventListener('focus', () => requestAnimationFrame(focusActiveTerminalOnWindowActivation));
+window.addEventListener('focus', () => {
+  requestAnimationFrame(focusActiveTerminalOnWindowActivation);
+  scheduleResume();
+});
+window.addEventListener('online', () => scheduleResume(true));
+window.addEventListener('pageshow', scheduleResume);
 window.addEventListener('blur', () => { syncTerminalInputFocus(false); clearLayoutAssist(); });
 document.documentElement.addEventListener('mouseleave', clearLayoutAssist);
 document.addEventListener('focusin', () => syncTerminalInputFocus());
 document.addEventListener('focusout', () => queueMicrotask(() => syncTerminalInputFocus()));
 window.addEventListener('resize', () => { responsiveMinimizeForViewport(); applyLayoutVisibility(); scheduleTerminalFit(); });
 window.addEventListener('beforeunload', saveAllTerminalSnapshots);
-document.addEventListener('visibilitychange', () => { syncTerminalInputFocus(); if (document.hidden) saveAllTerminalSnapshots(); });
+document.addEventListener('visibilitychange', () => {
+  syncTerminalInputFocus();
+  if (document.hidden) saveAllTerminalSnapshots();
+  else scheduleResume();
+});
 document.addEventListener('keydown', e => {
   const key = e.key.toLowerCase();
   if (e.key === 'Escape') {

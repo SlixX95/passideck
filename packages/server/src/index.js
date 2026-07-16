@@ -819,6 +819,7 @@ function createServer(config = loadConfig()) {
     ws.on('message', (raw) => {
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
+      if (msg.type === 'ping') return ws.send(JSON.stringify({ type: 'pong' }));
       if (msg.type === 'input' && session.pty) session.pty.write(String(msg.data || ''));
       if (msg.type === 'resize' && session.pty) {
         const cols = Math.min(TERMINAL_MAX_DIMENSION, Math.max(2, Number(msg.cols) || 120));

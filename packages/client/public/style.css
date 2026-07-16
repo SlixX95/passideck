@@ -156,6 +156,14 @@ button, select { font: inherit; }
 .switcher-btn.minimized, .switcher-btn.active-minimized { color: var(--tg-amber); border-color: color-mix(in srgb, var(--tg-amber) 72%, black 28%); background: color-mix(in srgb, var(--tg-amber) 13%, #030707 87%); }
 .switcher-btn.minimized::before { content: '−'; margin-right: 4px; color: var(--tg-amber); }
 .switcher-btn.exited { opacity: .55; }
+@keyframes switcher-response-pulse {
+  0%, 100% { filter: brightness(.85); box-shadow: 0 0 4px color-mix(in srgb, var(--tg-accent) 25%, transparent); }
+  50% { filter: brightness(1.45); box-shadow: 0 0 18px color-mix(in srgb, var(--tg-accent) 70%, transparent); }
+}
+.switcher-btn.response-pulse { border-color: var(--tg-accent); animation: switcher-response-pulse 1.8s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .switcher-btn.response-pulse { animation: none; box-shadow: 0 0 0 2px var(--tg-accent); }
+}
 .layout-pack { display: flex; align-items: center; }
 .grid-picker-inline { display: flex; gap: 4px; align-items: center; border: 1px solid color-mix(in srgb, var(--tg-border) 80%, black 20%); background: #030707; padding: 1px 4px; height: 23px; }
 .layout-select-label { color: var(--tg-text-dim); font: 10px var(--tg-mono); text-transform: lowercase; }
@@ -468,6 +476,14 @@ body.window-resizing { cursor: nwse-resize; user-select: none; }
   overflow: visible;
   touch-action: none;
   user-select: none;
+}
+@keyframes pane-response-pulse {
+  0%, 100% { background: var(--tg-bg); box-shadow: none; }
+  50% { background: color-mix(in srgb, var(--tg-accent) 38%, var(--tg-bg)); box-shadow: inset 0 0 0 1px var(--tg-accent), 0 0 18px color-mix(in srgb, var(--tg-accent) 48%, transparent); }
+}
+.term-header.response-pulse { animation: pane-response-pulse 1.8s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .term-header.response-pulse { animation: none; background: color-mix(in srgb, var(--tg-accent) 28%, var(--tg-bg)); box-shadow: inset 0 0 0 1px var(--tg-accent); }
 }
 .connection-dot {
   flex: 0 0 8px;
