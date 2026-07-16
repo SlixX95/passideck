@@ -1798,18 +1798,6 @@ function endPointerDrag(event) {
   event?.preventDefault?.();
   const suggestion = d.activeSuggestion;
   const slot = d.activeDesktopSlot;
-  const p = windowPrefs()[d.sourceId];
-  if (!suggestion && p && d.preDragRect) {
-    const gridRect = document.getElementById('termGrid').getBoundingClientRect();
-    Object.assign(p, {
-      x: d.x - gridRect.left - d.preDragRect.w * d.grabRatioX,
-      y: d.y - gridRect.top - d.preDragRect.h * d.grabRatioY,
-      w: d.preDragRect.w,
-      h: d.preDragRect.h
-    });
-    Object.assign(p, clampWindowRect(p));
-    applyFreeWindow(d.sourceId);
-  }
   state.pointerDrag = null;
   document.removeEventListener('pointermove', updatePointerDrag, true);
   document.removeEventListener('pointerup', endPointerDrag, true);
@@ -2028,18 +2016,8 @@ function startPointerDrag(id, handle, event) {
   const swapOriginRect = { x: p.x, y: p.y, w: p.w, h: p.h };
   const grid = document.getElementById('termGrid');
   const gr = grid.getBoundingClientRect();
-  const preDragRect = { x: p.x, y: p.y, w: p.w, h: p.h };
-  const grabRatioX = Math.max(0, Math.min(1, (event.clientX - gr.left - p.x) / p.w));
-  const grabRatioY = Math.max(0, Math.min(1, (event.clientY - gr.top - p.y) / p.h));
-  const defaultSize = defaultWindowSize();
-  p.w = Math.min(p.w, defaultSize.w);
-  p.h = Math.min(p.h, defaultSize.h);
-  p.x = event.clientX - gr.left - p.w * grabRatioX;
-  p.y = event.clientY - gr.top - p.h * grabRatioY;
-  Object.assign(p, clampWindowRect(p));
-  applyFreeWindow(id);
   p.z = nextWindowZ();
-  state.pointerDrag = { sourceId: id, dx: event.clientX - gr.left - p.x, dy: event.clientY - gr.top - p.y, x: event.clientX, y: event.clientY, z: p.z, activeSuggestion: null, activeDesktopSlot: null, lastSwapTarget: null, swapOriginRect, preDragRect, grabRatioX, grabRatioY };
+  state.pointerDrag = { sourceId: id, dx: event.clientX - gr.left - p.x, dy: event.clientY - gr.top - p.y, x: event.clientX, y: event.clientY, z: p.z, activeSuggestion: null, activeDesktopSlot: null, lastSwapTarget: null, swapOriginRect };
   state.draggingId = id;
   clearSharedResizeHandles();
   entry.el.classList.add('dragging');
