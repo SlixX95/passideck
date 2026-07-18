@@ -1154,7 +1154,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const tabIterations = tabStyle.animationIterationCount;
       const headerDuration = headerStyle.animationDuration;
       const tabDuration = tabStyle.animationDuration;
-      const newBadge = getComputedStyle(header, '::after').content;
+      const badgeContent = getComputedStyle(header, '::after').content;
       await new Promise(resolve => setTimeout(resolve, 1700));
       const persistent = header.classList.contains('response-pulse');
       const persistentTab = switcher.classList.contains('response-pulse');
@@ -1171,7 +1171,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         tabIterations,
         headerDuration,
         tabDuration,
-        newBadge,
+        badgeContent,
         persistent,
         persistentTab,
         cleared: !header.classList.contains('response-pulse'),
@@ -1189,9 +1189,9 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       immediate: true,
       immediateTab: true,
       tabIterations: 'infinite',
-      headerDuration: '0.9s',
-      tabDuration: '0.9s',
-      newBadge: '"NEW"',
+      headerDuration: '1.6s',
+      tabDuration: '1.6s',
+      badgeContent: 'none',
       persistent: true,
       persistentTab: true,
       cleared: true,
