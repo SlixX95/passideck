@@ -303,6 +303,18 @@ body.notify-blinking .switcher-btn.response-pulse:not(.active) { animation: swit
 .settings-action:hover, .settings-action:focus-visible { border-color: var(--tg-accent); outline: 1px solid var(--tg-accent); outline-offset: 1px; }
 .settings-toggle { cursor: pointer; border-bottom: 0; }
 .settings-toggle input { justify-self: end; width: 1em; height: 1em; accent-color: var(--tg-accent); }
+.settings-version-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: .65em;
+  padding: .5em .75em;
+  border-top: 1px solid var(--tg-border);
+  color: var(--tg-text-dim);
+  font: .62em var(--tg-mono);
+  letter-spacing: .04em;
+}
+.settings-version-footer [hidden] { display: none; }
+.settings-version-footer span + span::before { content: '·'; margin-right: .65em; color: var(--tg-border-active); }
 @media (max-width: 420px) {
   .settings-row, .settings-toggle { grid-template-columns: 1fr; gap: .45em; }
   .settings-toggle input { justify-self: start; }

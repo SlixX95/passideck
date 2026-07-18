@@ -12,6 +12,7 @@ try { pty = require('@homebridge/node-pty-prebuilt-multiarch'); } catch {}
 
 const { SessionManager } = require('./session');
 const { loadConfig, configDir } = require('./config');
+const { version: PASSIDECK_VERSION } = require('../../../package.json');
 
 let Database = null;
 let db = null;
@@ -824,6 +825,7 @@ function createServer(config = loadConfig()) {
     const activePids = list.filter(s => s.pid).length;
     res.json({
       ok: true,
+      version: PASSIDECK_VERSION,
       sessions: list.length,
       activePids,
       memory: { rss: Math.round(mem.rss / 1024 / 1024), heapUsed: Math.round(mem.heapUsed / 1024 / 1024) },

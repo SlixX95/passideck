@@ -33,7 +33,7 @@ assert.ok(html.includes('vendor/xterm.js') && !html.includes('cdn.jsdelivr.net')
 assert.ok(html.includes("location.port === '8792' ? 'PassiDeck Dev' : 'PassiDeck'"), 'browser tab title must distinguish dev port 8792 from normal/live');
 assert.ok(!style.includes('.response-pulse { animation: none'), 'response attention must keep pulsing even when the OS requests reduced motion');
 assert.ok(!style.includes('#ff3158') && !style.includes("content: 'NEW'"), 'response attention must stay theme-colored and must not add a NEW badge');
-assert.ok(html.includes('app.js?v=20260718-tui-copy-scrollbar-v2') && html.includes('style.css?v=20260718-tui-copy-scrollbar-v2'), 'client cache keys must activate TUI drag/copy, wheel routing and outer scrollbar containment');
+assert.ok(html.includes('app.js?v=20260718-tui-copy-scrollbar-v3-settings-version') && html.includes('style.css?v=20260718-tui-copy-scrollbar-v3-settings-version'), 'client cache keys must activate TUI drag/copy, wheel routing, outer scrollbar containment, and settings versions');
 assert.ok(app.includes("el.classList.toggle('hermes-tui', isHermesTuiEntry({ session }))"), 'Hermes TUI panes must carry a narrow styling hook');
 assert.ok(style.includes('.term-panel.hermes-tui .xterm-viewport') && style.includes('scrollbar-width: none'), 'Hermes TUI panes must hide xterm scrollbars without disabling TUI scrolling');
 assert.ok(html.includes('id="desktopSwitcher"') && html.includes('id="addDesktop"'), 'multi-desktop controls must be present in the shared browser/Electron renderer');
@@ -79,6 +79,18 @@ assert.ok(
 );
 for (const section of ['Appearance', 'Terminal', 'Notifications', 'Interface']) assert.ok(html.includes(`>${section}</h2>`), `settings must keep the ${section} section`);
 assert.ok(style.includes('.settings-group') && style.includes('max-height: calc(100dvh - 44px)'), 'settings must stay grouped and viewport-bounded');
+assert.ok(
+  html.includes('id="passideckVersion"') && html.includes('id="desktopAppVersion"') &&
+  html.includes('class="settings-version-footer"'),
+  'settings must include a quiet version footer for PassiDeck and the optional desktop app version'
+);
+assert.ok(
+  server.includes("version: PASSIDECK_VERSION") &&
+  app.includes("document.getElementById('passideckVersion').textContent = `PassiDeck ${health.version}`") &&
+  app.includes("window.passideckDesktop?.getAppVersion?.()"),
+  'settings versions must come from the running server and optional Electron bridge'
+);
+assert.ok(style.includes('.settings-version-footer'), 'settings version footer must have dedicated low-emphasis styling');
 assert.ok(app.includes('function previewFontSize') && app.includes('setTimeout(() => setFontSize(size), 250)'), 'font-size selection must apply live after the intent delay');
 assert.ok(app.includes('entry.term.options.fontSize = size') && !app.includes("term.setOption('fontSize'"), 'font-size updates must use the xterm 6 options API');
 assert.ok(!app.includes("setProperty('--settings-font-size'" ) && style.includes('font-size: 12px') && style.includes('width: min(29em'), 'settings typography and panel geometry must stay fixed at 12px');

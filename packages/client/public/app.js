@@ -3314,14 +3314,25 @@ function showToast(text, type = 'ok') {
   showToast.timer = setTimeout(() => { el.hidden = true; }, 2200);
 }
 
+async function updateVersionFooter(health) {
+  if (health?.version) document.getElementById('passideckVersion').textContent = `PassiDeck ${health.version}`;
+  const desktopVersion = await Promise.resolve(window.passideckDesktop?.getAppVersion?.()).catch(() => null);
+  if (!desktopVersion) return;
+  const appVersion = document.getElementById('desktopAppVersion');
+  appVersion.textContent = `Desktop app ${desktopVersion}`;
+  appVersion.hidden = false;
+}
+
 async function init() {
   installTooltips();
   loadResponseSoundPrefs();
   state.hydrating = true;
-  const [sessions, ui] = await Promise.all([
+  const [sessions, ui, health] = await Promise.all([
     api('GET', '/api/sessions').catch(() => []),
-    api('GET', '/api/ui-state').catch(() => null)
+    api('GET', '/api/ui-state').catch(() => null),
+    api('GET', '/api/health').catch(() => null)
   ]);
+  void updateVersionFooter(health);
 
   state.uiRevision = Number(ui?.revision) || 0;
   state.lastUiState = ui ? structuredClone(ui) : null;
