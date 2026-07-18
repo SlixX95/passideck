@@ -1999,6 +1999,36 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.strictEqual(tuiScrollbar.firefox, 'none', `Hermes TUI xterm scrollbar must stay hidden after resize: ${JSON.stringify(tuiScrollbar)}`);
     assert.strictEqual(tuiScrollbar.webkit, 'none', `Hermes TUI WebKit scrollbar must stay hidden after resize: ${JSON.stringify(tuiScrollbar)}`);
 
+    const reloadedTuiMouseMode = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const oldCommand = entry.session.meta.command;
+      entry.session.meta.command = 'hermes --tui';
+      entry.term.reset();
+      await new Promise(resolve => entry.term.write('\\x1b[?1000h\\x1b[?1006h', resolve));
+      saveTerminalSnapshot(entry.session.id);
+      const saved = JSON.parse(localStorage.getItem(snapshotKey(entry.session.id)) || '{}').text || '';
+      entry.term.reset();
+      const mouseData = [];
+      const dataListener = entry.term.onData(data => mouseData.push(data));
+      const restored = restoreTerminalSnapshot(entry.session.id, entry.term);
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const target = entry.el.querySelector('.xterm-viewport') || entry.el.querySelector('.terminal');
+      const rect = target.getBoundingClientRect();
+      target.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true, clientX: rect.left + 20, clientY: rect.top + 40 }));
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const out = {
+        restored,
+        snapshotHasSgr: saved.includes('\\x1b[?1006h'),
+        sgrMouseEvents: mouseData.filter(data => data.includes('\\x1b[<')).length
+      };
+      dataListener.dispose();
+      localStorage.removeItem(snapshotKey(entry.session.id));
+      await new Promise(resolve => entry.term.write('\\x1b[?1000l\\x1b[?1006l', resolve));
+      entry.session.meta.command = oldCommand;
+      return out;
+    })()`);
+    assert.deepStrictEqual(reloadedTuiMouseMode, { restored: true, snapshotHasSgr: true, sgrMouseEvents: 1 }, 'reloading a Hermes TUI snapshot must restore SGR mouse tracking so wheel events still reach the TUI');
+
     const uploadInteraction = await evalExpr(cdp, sid, `(async () => {
       const entry = activeTerminalEntry();
       const sent = [];

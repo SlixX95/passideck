@@ -1650,7 +1650,8 @@ function terminalSnapshot(entry) {
   const term = entry?.term;
   if (!term) return '';
   try {
-    const serialized = entry.serialize?.serialize({ scrollback: TERM_SNAPSHOT_MAX_LINES });
+    let serialized = entry.serialize?.serialize({ scrollback: TERM_SNAPSHOT_MAX_LINES });
+    if (serialized && isHermesTuiEntry(entry) && /\x1b\[\?(?:9|1000|1002|1003)h/.test(serialized) && !serialized.includes('\x1b[?1006h')) serialized += '\x1b[?1006h';
     if (serialized) return serialized.slice(-TERM_SNAPSHOT_MAX_CHARS);
   } catch {}
   const buffer = term.buffer?.active;
