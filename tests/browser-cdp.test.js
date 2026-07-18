@@ -653,18 +653,34 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       renderSwitcher();
       const attention = document.querySelector('[data-desktop-id="' + target + '"]').classList.contains('attention');
       state.sessions.get('${madeSessions[0]}').responseAttention = false;
-      window.confirm = () => true;
       document.querySelector('[data-desktop-id="' + target + '"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const modal = document.getElementById('closeModal');
+      const confirmation = {
+        open: modal.classList.contains('open') && !modal.hidden,
+        title: document.getElementById('closeModalTitle').textContent,
+        text: document.getElementById('closeModalText').textContent,
+        action: document.getElementById('closeModalConfirm').textContent
+      };
+      document.getElementById('closeModalConfirm').click();
       await new Promise(resolve => setTimeout(resolve, 220));
       return {
         renamed,
         removed: !state.panePrefs.desktops[target],
         paneDesktop: state.panePrefs.paneDesktop['${madeSessions[0]}'],
         attention,
-        sessionsUnchanged: state.sessions.size === beforeSessions
+        sessionsUnchanged: state.sessions.size === beforeSessions,
+        confirmation
       };
     })()`);
-    assert.deepStrictEqual(desktopLifecycle, { renamed: 'Ops', removed: true, paneDesktop: 'desktop-1', attention: true, sessionsUnchanged: true }, 'rename/delete must preserve panes and hidden desktops must surface response attention');
+    assert.deepStrictEqual(desktopLifecycle, {
+      renamed: 'Ops',
+      removed: true,
+      paneDesktop: 'desktop-1',
+      attention: true,
+      sessionsUnchanged: true,
+      confirmation: { open: true, title: 'Delete desktop?', text: '1 window will be moved to another desktop.', action: 'Delete' }
+    }, 'desktop deletion must use the themed confirmation modal, preserve panes and surface hidden-desktop response attention');
     await waitEval(cdp, sid, `state.saveTimer === null && state.panePrefs.desktopOrder.length === 1`);
     await waitEval(cdp, peerSid, `state.panePrefs.desktopOrder.length === 1`);
     const launchDesktop = await evalExpr(cdp, sid, `(async () => {
@@ -706,8 +722,8 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     const launchCleanup = await evalExpr(cdp, sid, `(async () => {
       await closePanel('${launchDesktop.id}');
       const staleAssignment = Boolean(state.panePrefs.paneDesktop['${launchDesktop.id}']);
-      window.confirm = () => true;
       deleteDesktop('${launchDesktop.target}');
+      runCloseConfirm();
       return { staleAssignment };
     })()`);
     assert.deepStrictEqual(launchCleanup, { staleAssignment: false }, 'closed sessions must remove their desktop assignment');
@@ -2089,6 +2105,27 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.strictEqual(tuiClick.selection, '', `a click must not leave a one-character terminal selection: ${JSON.stringify(tuiClick)}`);
     assert.strictEqual(tuiClick.protocolDuringSelection, 'NONE', `a drag before a plain click must suspend TUI mouse reporting: ${JSON.stringify(tuiClick)}`);
     assert.strictEqual(tuiClick.mouseProtocol, tuiDragSelection.mouseProtocolBeforeDrag, `a plain click must restore TUI mouse reporting: ${JSON.stringify(tuiClick)}`);
+
+    const tuiInterruptedDrag = await evalExpr(cdp, sid, `(() => {
+      const source = [...state.sessions.values()][0];
+      const target = [...state.sessions.values()][1];
+      selectPanel(source.session.id, { persist: false });
+      const screen = source.el.querySelector('.xterm-screen');
+      const rect = screen.getBoundingClientRect();
+      screen.dispatchEvent(new PointerEvent('pointerdown', {
+        button: 0, buttons: 1, pointerId: 77, pointerType: 'mouse',
+        clientX: rect.left + 20, clientY: rect.top + 20, bubbles: true, cancelable: true
+      }));
+      window.dispatchEvent(new Event('blur'));
+      target.el.querySelector('.terminal').dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true }));
+      const result = {
+        selected: state.activeId === target.session.id,
+        inputFocused: target.el.classList.contains('input-focused')
+      };
+      window.dispatchEvent(new PointerEvent('pointercancel'));
+      return result;
+    })()`);
+    assert.deepStrictEqual(tuiInterruptedDrag, { selected: true, inputFocused: true }, 'losing window focus during a TUI drag must not leave a global mouse-event blocker that prevents selecting or typing in panes');
 
     const tuiWheelAfterSelection = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];

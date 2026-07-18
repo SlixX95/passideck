@@ -7,7 +7,7 @@
   <title>PassiDeck</title>
   <script>document.title = location.port === '8792' ? 'PassiDeck Dev' : 'PassiDeck';</script>
   <link rel="stylesheet" href="vendor/xterm.css">
-  <link rel="stylesheet" href="style.css?v=20260718-tui-copy-scrollbar-v7-settings-version">
+  <link rel="stylesheet" href="style.css?v=20260719-passideck-confirmation-modal-tui-drag-blur-v1">
 </head>
 <body data-theme="green">
   <header class="topbar">
@@ -182,7 +182,7 @@
   <div id="closeModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="closeModalTitle" hidden>
     <div class="modal-box">
       <h3 id="closeModalTitle" class="modal-title"></h3>
-      <p class="modal-text">Process will be terminated.</p>
+      <p id="closeModalText" class="modal-text"></p>
       <div class="modal-actions">
         <button id="closeModalCancel" class="modal-btn modal-btn-cancel">Cancel</button>
         <button id="closeModalConfirm" class="modal-btn modal-btn-confirm">Close</button>
@@ -195,6 +195,6 @@
   <script src="vendor/addon-web-links.js"></script>
   <script src="vendor/addon-serialize.js"></script>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="app.js?v=20260718-tui-copy-scrollbar-v7-settings-version" defer></script>
+  <script src="app.js?v=20260719-passideck-confirmation-modal-tui-drag-blur-v1" defer></script>
 </body>
 </html>

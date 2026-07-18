@@ -1541,6 +1541,11 @@ function installTerminalDragSelection(termEl, term, session) {
     suspendedMouse.service.activeProtocol = suspendedMouse.protocol;
     suspendedMouse = null;
   };
+  const cancelInterruptedDrag = () => {
+    if (!start) return;
+    start = origin = null;
+    resumeMouse();
+  };
   term.__passideckResumeMouse = resumeMouse;
   const block = event => {
     event.preventDefault();
@@ -1600,10 +1605,8 @@ function installTerminalDragSelection(termEl, term, session) {
       if (start && !replaying) block(event);
     }, true);
   }
-  window.addEventListener('pointercancel', () => {
-    start = origin = null;
-    resumeMouse();
-  }, true);
+  window.addEventListener('pointercancel', cancelInterruptedDrag, true);
+  window.addEventListener('blur', cancelInterruptedDrag, true);
 }
 
 function installTerminalWheelScroll(termEl, term, session = null) {
@@ -2943,10 +2946,9 @@ function startDesktopRename(id, tab) {
   input.select();
 }
 
-function deleteDesktop(id) {
+function performDeleteDesktop(id) {
   if (state.panePrefs.desktopOrder.length <= 1 || !state.panePrefs.desktops[id]) return;
   const paneIds = state.order.filter(paneId => state.panePrefs.paneDesktop[paneId] === id);
-  if (!confirm(paneIds.length ? `Delete this desktop and move ${paneIds.length} window${paneIds.length === 1 ? '' : 's'}?` : 'Delete this desktop?')) return;
   const fallback = state.panePrefs.desktopOrder.find(desktopId => desktopId !== id);
   if (state.activeDesktopId === id) selectDesktop(fallback);
   for (const paneId of paneIds) movePaneToDesktop(paneId, fallback);
@@ -2954,6 +2956,15 @@ function deleteDesktop(id) {
   state.panePrefs.desktopOrder = state.panePrefs.desktopOrder.filter(desktopId => desktopId !== id);
   renderSwitcher();
   savePanePrefs();
+}
+
+function deleteDesktop(id) {
+  if (state.panePrefs.desktopOrder.length <= 1 || !state.panePrefs.desktops[id]) return;
+  const paneCount = state.order.filter(paneId => state.panePrefs.paneDesktop[paneId] === id).length;
+  const message = paneCount
+    ? `${paneCount} window${paneCount === 1 ? '' : 's'} will be moved to another desktop.`
+    : 'This desktop will be removed.';
+  showConfirmation('Delete desktop?', message, 'Delete', () => performDeleteDesktop(id));
 }
 
 function renderDesktops() {
@@ -3454,14 +3465,18 @@ document.getElementById('responseSoundVolume').oninput = e => setResponseSoundVo
 document.getElementById('responseSoundTest').onclick = () => playBell(state.responseSoundTone, state.responseSoundVolume);
 document.getElementById('systemMonitorToggle').onchange = e => setSystemMonitorVisible(e.target.checked);
 
-// ── Close Confirmation Modal ──
+// ── PassiDeck Confirmation Modal ──
 let closeConfirmSessionId = null;
 let closeModalOpenedAt = 0;
 let closeModalReturnFocus = null;
-function showCloseConfirm(sessionId, title) {
+let confirmationAction = null;
+function showConfirmation(title, text, confirmLabel, action) {
   const modal = document.getElementById('closeModal');
   closeModalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  document.getElementById('closeModalTitle').textContent = `${title} — really close?`;
+  document.getElementById('closeModalTitle').textContent = title;
+  document.getElementById('closeModalText').textContent = text;
+  document.getElementById('closeModalConfirm').textContent = confirmLabel;
+  confirmationAction = action;
 
   // Do not rely on the native hidden repaint path here.
   // In full grids some browsers defer that paint until the next layout change.
@@ -3472,10 +3487,13 @@ function showCloseConfirm(sessionId, title) {
   modal.style.visibility = 'visible';
   modal.style.opacity = '1';
   closeModalOpenedAt = Date.now();
-  closeConfirmSessionId = sessionId;
   void modal.offsetHeight; // force style/layout flush now
 
   setTimeout(() => document.getElementById('closeModalConfirm')?.focus(), 0);
+}
+function showCloseConfirm(sessionId, title) {
+  closeConfirmSessionId = sessionId;
+  showConfirmation(`${title} — really close?`, 'Process will be terminated.', 'Close', () => closePanel(sessionId));
 }
 function hideCloseConfirm() {
   const modal = document.getElementById('closeModal');
@@ -3483,6 +3501,7 @@ function hideCloseConfirm() {
   modal.style.display = 'none';
   modal.hidden = true;
   closeConfirmSessionId = null;
+  confirmationAction = null;
   const returnFocus = closeModalReturnFocus;
   closeModalReturnFocus = null;
   if (returnFocus?.isConnected) setTimeout(() => returnFocus.focus?.(), 0);
@@ -3518,10 +3537,10 @@ function handleCloseModalKeydown(e) {
   }
 }
 function runCloseConfirm() {
-  const id = closeConfirmSessionId;
-  if (!id) return;
+  const action = confirmationAction;
+  if (typeof action !== 'function') return;
   hideCloseConfirm();
-  closePanel(id);
+  action();
 }
 document.getElementById('closeModalConfirm').onclick = runCloseConfirm;
 document.getElementById('closeModalConfirm').addEventListener('pointerdown', e => {

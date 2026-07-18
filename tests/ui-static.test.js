@@ -33,11 +33,18 @@ assert.ok(html.includes('vendor/xterm.js') && !html.includes('cdn.jsdelivr.net')
 assert.ok(html.includes("location.port === '8792' ? 'PassiDeck Dev' : 'PassiDeck'"), 'browser tab title must distinguish dev port 8792 from normal/live');
 assert.ok(!style.includes('.response-pulse { animation: none'), 'response attention must keep pulsing even when the OS requests reduced motion');
 assert.ok(!style.includes('#ff3158') && !style.includes("content: 'NEW'"), 'response attention must stay theme-colored and must not add a NEW badge');
-assert.ok(html.includes('app.js?v=20260718-tui-copy-scrollbar-v7-settings-version') && html.includes('style.css?v=20260718-tui-copy-scrollbar-v7-settings-version'), 'client cache keys must activate TUI drag/copy, wheel routing, outer scrollbar containment, and settings versions');
+assert.ok(html.includes('app.js?v=20260719-passideck-confirmation-modal-tui-drag-blur-v1') && html.includes('style.css?v=20260719-passideck-confirmation-modal-tui-drag-blur-v1'), 'client cache keys must activate the shared PassiDeck confirmation modal and interrupted TUI drag recovery');
 assert.ok(app.includes("el.classList.toggle('hermes-tui', isHermesTuiEntry({ session }))"), 'Hermes TUI panes must carry a narrow styling hook');
 assert.ok(style.includes('.term-panel.hermes-tui .xterm-viewport') && style.includes('scrollbar-width: none'), 'Hermes TUI panes must hide xterm scrollbars without disabling TUI scrolling');
 assert.ok(html.includes('id="desktopSwitcher"') && html.includes('id="addDesktop"'), 'multi-desktop controls must be present in the shared browser/Electron renderer');
 assert.ok(app.includes('handleDesktopShortcut') && app.includes('movePaneToDesktop') && app.includes('DESKTOP_VIEW_KEY'), 'desktop switching, pane movement and per-window local selection must stay wired');
+assert.ok(!app.includes('confirm('), 'destructive actions must not use native browser/Electron confirmation dialogs');
+assert.ok(
+  html.includes('id="closeModalText"') &&
+  app.includes('function showConfirmation') &&
+  app.includes("showConfirmation('Delete desktop?', message, 'Delete', () => performDeleteDesktop(id))"),
+  'desktop deletion must reuse the themed PassiDeck confirmation modal with dynamic copy and action'
+);
 assert.ok(app.includes("window.addEventListener('pagehide', flushUiState)") && app.includes('UI_DRAFT_KEY'), 'page exit must retain unsaved desktop state without racing an in-flight revision');
 assert.ok(app.includes('crypto.randomUUID?.()') && app.includes('Date.now().toString(36)'), 'desktop IDs need a plain-HTTP fallback where randomUUID is unavailable');
 assert.ok(!html.includes('status-chip') && !html.includes('stat-active') && !html.includes('saveState'), 'window/save status chip should stay removed so launch controls start at the left edge');
