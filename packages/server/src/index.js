@@ -62,8 +62,9 @@ const CODEX_OAUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token';
 const CODEX_OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 const CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 300;
 const UPLOAD_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const MAX_DESKTOPS = 3;
 
-const UI_STATE_DEFAULT = { revision: 0, layout: 'auto', baseLayout: 'auto', focusedId: null, primaryId: null, activeId: null, minimized: [], theme: 'blue', skin: 'neon', fontSize: 13, notifyBlinking: true, chromeHidden: false, systemMonitor: false, panePrefs: { titles: {}, order: [], minimized: [], windows: {}, viewport: null }, updatedAt: null };
+const UI_STATE_DEFAULT = { revision: 0, layout: 'auto', baseLayout: 'auto', focusedId: null, primaryId: null, activeId: null, minimized: [], theme: 'blue', skin: 'neon', fontSize: 13, notifyBlinking: true, chromeHidden: false, systemMonitor: false, panePrefs: { titles: {}, order: [], minimized: [], windows: {}, viewport: null, desktopOrder: ['desktop-1'], paneDesktop: {}, desktops: { 'desktop-1': { name: 'Desktop 1', minimized: [], windows: {}, viewport: null } } }, updatedAt: null };
 
 function uiStatePath() {
   return path.join(configDir(), 'ui-state.json');
@@ -100,7 +101,50 @@ function sanitizePanePrefs(input) {
     }
   }
   const vp = src.viewport && typeof src.viewport === 'object' ? { w: Math.max(1, Math.min(20000, Number(src.viewport.w) || 0)), h: Math.max(1, Math.min(20000, Number(src.viewport.h) || 0)) } : null;
-  return { titles, order: cleanIdList(src.order), minimized: cleanIdList(src.minimized), windows, viewport: vp };
+  const desktops = {};
+  if (src.desktops && typeof src.desktops === 'object') {
+    for (const [id, desktop] of Object.entries(src.desktops)) {
+      if (typeof id !== 'string' || !id || id.length > 40 || !desktop || typeof desktop !== 'object') continue;
+      const desktopWindows = sanitizePanePrefs({ windows: { desktop: desktop.windows } }).windows.desktop || {};
+      const desktopViewport = desktop.viewport && typeof desktop.viewport === 'object'
+        ? { w: Math.max(1, Math.min(20000, Number(desktop.viewport.w) || 0)), h: Math.max(1, Math.min(20000, Number(desktop.viewport.h) || 0)) }
+        : null;
+      desktops[id] = {
+        name: String(desktop.name || 'Desktop').trim().slice(0, 40) || 'Desktop',
+        minimized: cleanIdList(desktop.minimized),
+        windows: desktopWindows,
+        viewport: desktopViewport
+      };
+    }
+  }
+  if (!Object.keys(desktops).length) {
+    desktops['desktop-1'] = { name: 'Desktop 1', minimized: cleanIdList(src.minimized), windows: windows.desktop || {}, viewport: vp };
+  }
+  const requestedOrder = cleanIdList(src.desktopOrder).filter(id => desktops[id]);
+  const desktopOrder = [...new Set([...requestedOrder, ...Object.keys(desktops)])].slice(0, MAX_DESKTOPS);
+  const retainedDesktops = new Set(desktopOrder);
+  for (const id of Object.keys(desktops)) if (!retainedDesktops.has(id)) delete desktops[id];
+  const usedDesktopNames = new Set();
+  for (const id of desktopOrder) {
+    const desktop = desktops[id];
+    let name = desktop.name;
+    if (usedDesktopNames.has(name.toLowerCase())) {
+      let number = 1;
+      while (usedDesktopNames.has(`desktop ${number}`)) number += 1;
+      name = `Desktop ${number}`;
+      desktop.name = name;
+    }
+    usedDesktopNames.add(name.toLowerCase());
+  }
+  const fallbackDesktop = desktopOrder[0];
+  const paneDesktop = {};
+  if (src.paneDesktop && typeof src.paneDesktop === 'object') {
+    for (const [paneId, desktopId] of Object.entries(src.paneDesktop)) {
+      if (typeof paneId === 'string' && paneId.length <= 100 && desktops[desktopId]) paneDesktop[paneId] = desktopId;
+    }
+  }
+  for (const paneId of cleanIdList(src.order)) if (!paneDesktop[paneId]) paneDesktop[paneId] = fallbackDesktop;
+  return { titles, order: cleanIdList(src.order), minimized: cleanIdList(src.minimized), windows, viewport: vp, desktopOrder, paneDesktop, desktops };
 }
 
 function sanitizeUiState(input) {

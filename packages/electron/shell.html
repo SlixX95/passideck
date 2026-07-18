@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PassiDeck</title>
+  <style>
+    :root { color-scheme: dark; --accent: #5fffd1; --bg: #020505; --surface: #09110f; --border: #21443b; --text: #d6fff8; --dim: #78948d; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    #titlebar { position: relative; -webkit-app-region: drag; height: 30px; display: flex; align-items: stretch; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--border)); border-bottom-color: var(--accent); background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 86%, var(--accent) 14%), var(--bg)); box-shadow: 0 0 15px color-mix(in srgb, var(--accent) 24%, transparent); }
+    html[data-platform="darwin"] #titlebar { padding-left: 76px; }
+    html[data-platform="darwin"] #windowControls button[data-action]:not([data-action="reload"]) { display: none; }
+    #backendTabs, #addBackend, #windowControls { -webkit-app-region: no-drag; display: flex; align-items: stretch; }
+    #backendTabs { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+    #backendTabs::-webkit-scrollbar { display: none; }
+    .backend-tab { display: flex; align-items: center; gap: 7px; min-width: 120px; max-width: 230px; padding: 0 8px 0 11px; border: 0; border-right: 1px solid var(--border); border-bottom: 2px solid transparent; background: transparent; color: var(--dim); cursor: pointer; }
+    .backend-tab.active { color: var(--tab-color); border-bottom-color: var(--tab-color); background: color-mix(in srgb, var(--tab-color) 11%, transparent); }
+    .backend-tab.attention { color: var(--tab-color); border-bottom-color: var(--tab-color); background: color-mix(in srgb, var(--tab-color) 18%, transparent); box-shadow: inset 0 -2px 0 var(--tab-color), 0 0 12px color-mix(in srgb, var(--tab-color) 24%, transparent); }
+    @keyframes backend-response-pulse { 0%, 100% { background: color-mix(in srgb, var(--tab-color) 10%, transparent); box-shadow: 0 0 4px color-mix(in srgb, var(--tab-color) 18%, transparent); } 50% { color: var(--tab-color); background: color-mix(in srgb, var(--tab-color) 28%, transparent); box-shadow: inset 0 -2px 0 var(--tab-color), 0 0 18px color-mix(in srgb, var(--tab-color) 48%, transparent); } }
+    .backend-tab.response-pulse { color: var(--tab-color); background: color-mix(in srgb, var(--tab-color) 28%, transparent); box-shadow: inset 0 -2px 0 var(--tab-color), 0 0 18px color-mix(in srgb, var(--tab-color) 48%, transparent); }
+    .backend-tab.response-pulse.response-blinking:not(.active) { animation: backend-response-pulse 1.6s ease-in-out infinite; }
+    .response-badge { width: 7px; height: 7px; flex: 0 0 auto; margin-left: 2px; background: var(--tab-color); box-shadow: 0 0 8px var(--tab-color); transform: rotate(45deg); }
+    .backend-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .connectionStatus { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #d35454; box-shadow: 0 0 6px currentColor; }
+    .connectionStatus.loading { background: #d5aa52; }
+    .connectionStatus.online { background: #56d68b; }
+    .backend-edit { margin-left: auto; color: inherit; opacity: 0; visibility: hidden; transition: opacity 80ms linear, visibility 0s linear 80ms; }
+    .backend-tab:hover .backend-edit { opacity: 1; visibility: visible; transition-delay: 300ms; }
+    .backend-tab:focus-visible .backend-edit { opacity: 1; visibility: visible; transition-delay: 0s; }
+    #addBackend, #windowControls button { width: 40px; border: 0; border-right: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; }
+    #windowControls #uiToggle { width: auto; min-width: 60px; padding: 0 8px; }
+    #windowControls #globalSoundToggle { width: auto; min-width: 68px; padding: 0 8px; }
+    #addBackend:hover, #windowControls button:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+    #dragSpace { flex: 1; min-width: 24px; }
+    #windowControls .close:hover { background: #b9434c; color: white; }
+    dialog { position: fixed; inset: 50% auto auto 50%; transform: translate(-50%, -50%); z-index: 10; width: min(500px, calc(100vw - 32px)); border: 1px solid var(--accent); background: #07100e; color: var(--text); box-shadow: 0 20px 70px #000; padding: 18px; }
+    dialog::backdrop { background: rgba(0,0,0,.62); }
+    form { display: grid; gap: 12px; }
+    label { display: grid; gap: 5px; color: var(--dim); }
+    input { min-width: 0; padding: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; }
+    .color-editor { display: flex; align-items: center; gap: 10px; }
+    #backendColor { width: 112px; text-transform: uppercase; }
+    #backendColorPreview { width: 34px; height: 34px; flex: 0 0 auto; border: 1px solid var(--border); background: var(--accent); }
+    .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .dialog-actions button { padding: 7px 12px; border: 1px solid var(--border); background: transparent; color: var(--text); cursor: pointer; }
+    #removeBackend { margin-right: auto; color: #ff858f; }
+  </style>
+</head>
+<body>
+  <header id="titlebar">
+    <nav id="backendTabs" aria-label="PassiDeck backends"></nav>
+    <button id="addBackend" aria-label="Add backend">+</button>
+    <div id="dragSpace"></div>
+    <div id="windowControls">
+      <button id="uiToggle" aria-label="Hide backend UI" aria-pressed="true">UI On</button>
+      <button id="globalSoundToggle" aria-label="Mute response sounds" aria-pressed="true">🔔 On</button>
+      <button data-action="reload" aria-label="Reload active backend">↻</button>
+      <button data-action="minimize" aria-label="Minimize">−</button>
+      <button data-action="maximize" aria-label="Maximize or restore">□</button>
+      <button data-action="close" class="close" aria-label="Close">×</button>
+    </div>
+  </header>
+
+  <dialog id="backendDialog">
+    <form id="backendForm">
+      <input id="backendId" type="hidden">
+      <label>Name <input id="backendName" required maxlength="40"></label>
+      <label>URL <input id="backendUrl" type="url" required placeholder="http://host:8791/"></label>
+      <label>Color
+        <span class="color-editor">
+          <input id="backendColor" type="text" value="#5FFFD1" required maxlength="7" pattern="#[0-9A-Fa-f]{6}" spellcheck="false" aria-label="Color as hexadecimal value">
+          <span id="backendColorPreview" aria-hidden="true"></span>
+        </span>
+      </label>
+      <div class="dialog-actions">
+        <button id="removeBackend" type="button">Remove</button>
+        <button id="cancelBackend" type="button">Cancel</button>
+        <button type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+  <script src="shell.js"></script>
+</body>
+</html>

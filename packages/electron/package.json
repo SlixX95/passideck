@@ -1,0 +1,8 @@
+{
+  "name": "passideck-desktop",
+  "version": "0.8.48",
+  "description": "Thin PassiDeck desktop shell",
+  "author": "PassiDeck contributors",
+  "main": "main.js",
+  "license": "MIT"
+}

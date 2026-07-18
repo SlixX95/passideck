@@ -44,6 +44,8 @@ const state = {
   minimized: new Set(),
   responsiveMinimized: new Set(),
   saveTimer: null,
+  saveInFlight: 0,
+  saveQueued: false,
   launchBusy: false,
   uploadBusy: false,
   systemMonitorTimer: null,
@@ -60,9 +62,32 @@ const state = {
   zCounter: 10,
   hydrating: false,
   uiRevision: 0,
+  lastUiState: null,
   uiEvents: null,
-  panePrefs: { titles: {}, order: [], windows: {} }
+  activeDesktopId: 'desktop-1',
+  panePrefs: { titles: {}, order: [], windows: {}, desktopOrder: ['desktop-1'], paneDesktop: {}, desktops: { 'desktop-1': { name: 'Desktop 1', minimized: [], windows: {}, viewport: null } } }
 };
+
+const DESKTOP_VIEW_KEY = 'passideck:desktop-view:v1';
+const UI_DRAFT_KEY = 'passideck:ui-draft:v1';
+const MAX_DESKTOPS = 3;
+
+function localDesktopView() {
+  try { return JSON.parse(sessionStorage.getItem(DESKTOP_VIEW_KEY) || '{}'); }
+  catch { return {}; }
+}
+
+function saveLocalDesktopView() {
+  try { sessionStorage.setItem(DESKTOP_VIEW_KEY, JSON.stringify({ activeDesktopId: state.activeDesktopId })); } catch {}
+}
+
+function activeDesktop() {
+  return state.panePrefs.desktops[state.activeDesktopId] || state.panePrefs.desktops[state.panePrefs.desktopOrder[0]];
+}
+
+function desktopPaneIds(id = state.activeDesktopId) {
+  return state.order.filter(paneId => state.sessions.has(paneId) && state.panePrefs.paneDesktop[paneId] === id);
+}
 
 const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v1:';
 const TERM_SNAPSHOT_MAX_LINES = 20000;
@@ -231,6 +256,7 @@ function installCloseHitLayer() {
 
 async function api(method, path, body) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (method === 'PUT' && path === '/api/ui-state') opts.keepalive = true;
   const token = authToken();
   if (token) opts.headers['X-PassiDeck-Token'] = token;
   if (body !== undefined) opts.body = JSON.stringify(body);
@@ -250,9 +276,15 @@ function slotKey(layout = state.layout) {
 }
 
 function windowPrefs() {
-  state.panePrefs.windows = state.panePrefs.windows && typeof state.panePrefs.windows === 'object' ? state.panePrefs.windows : {};
-  state.panePrefs.windows[slotKey()] = state.panePrefs.windows[slotKey()] || {};
-  return state.panePrefs.windows[slotKey()];
+  const desktop = activeDesktop();
+  if (state.activeDesktopId === state.panePrefs.desktopOrder[0]) {
+    state.panePrefs.windows = state.panePrefs.windows && typeof state.panePrefs.windows === 'object' ? state.panePrefs.windows : {};
+    state.panePrefs.windows.desktop = state.panePrefs.windows.desktop || desktop.windows || {};
+    desktop.windows = state.panePrefs.windows.desktop;
+  } else {
+    desktop.windows = desktop.windows && typeof desktop.windows === 'object' ? desktop.windows : {};
+  }
+  return desktop.windows;
 }
 
 function desktopSize() {
@@ -285,8 +317,9 @@ function responsiveMinimizeForViewport() {
     state.responsiveMinimized.clear();
     return;
   }
-  const keep = state.activeId && state.sessions.has(state.activeId) ? state.activeId : state.order.find(id => state.sessions.has(id));
-  for (const id of state.order) {
+  const paneIds = desktopPaneIds();
+  const keep = state.activeId && paneIds.includes(state.activeId) ? state.activeId : paneIds[0];
+  for (const id of paneIds) {
     if (id !== keep && state.sessions.has(id) && !state.minimized.has(id)) {
       state.minimized.add(id);
       state.responsiveMinimized.add(id);
@@ -913,6 +946,16 @@ function showLayoutAssist(id, anchor, hover = {}) {
     btn.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); applyRectsToWindows(p.ids, p.rects); clearLayoutAssist(); });
     box.appendChild(btn);
   }
+  for (const desktopId of state.panePrefs.desktopOrder) {
+    if (desktopId === state.activeDesktopId) continue;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'layout-move';
+    btn.dataset.targetDesktopId = desktopId;
+    btn.textContent = `Move to ${state.panePrefs.desktops[desktopId].name}`;
+    btn.onclick = () => { movePaneToDesktop(id, desktopId); clearLayoutAssist(); };
+    box.appendChild(btn);
+  }
   box.addEventListener('mouseenter', () => hover.enter?.());
   box.addEventListener('mouseleave', () => hover.leave?.());
   grid.appendChild(box);
@@ -934,7 +977,7 @@ function applyLayoutVisibility() {
   for (const id of state.order) {
     const entry = state.sessions.get(id);
     if (!entry) continue;
-    if (state.minimized.has(id)) {
+    if (state.panePrefs.paneDesktop[id] !== state.activeDesktopId || state.minimized.has(id)) {
       if (entry.el.parentElement !== hidden) hidden.appendChild(entry.el);
       entry.el.classList.add('layout-hidden');
       continue;
@@ -967,31 +1010,122 @@ function uiPayload() {
   };
 }
 
+function sameUiValue(a, b) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function mergeUiArrays(base, local, remote) {
+  const baseSet = new Set(base);
+  const remoteSet = new Set(remote);
+  const merged = local.filter(value => !baseSet.has(value) || remoteSet.has(value));
+  for (const value of remote) if (!baseSet.has(value) && !merged.includes(value)) merged.push(value);
+  return merged;
+}
+
+function mergeUiChanges(base, local, remote) {
+  if (sameUiValue(local, base)) return structuredClone(remote);
+  if (Array.isArray(base) && Array.isArray(local) && Array.isArray(remote)) return mergeUiArrays(base, local, remote);
+  const objects = [base, local, remote].every(value => value && typeof value === 'object' && !Array.isArray(value));
+  if (!objects) return structuredClone(local);
+  const result = structuredClone(remote);
+  for (const key of new Set([...Object.keys(base), ...Object.keys(local)])) {
+    if (!(key in local) && key in base) {
+      delete result[key];
+      continue;
+    }
+    if (!(key in base)) {
+      result[key] = structuredClone(local[key]);
+      continue;
+    }
+    const merged = mergeUiChanges(base[key], local[key], remote[key]);
+    if (merged === undefined && !(key in remote)) delete result[key];
+    else result[key] = merged;
+  }
+  return result;
+}
+
+function persistUiDraft(payload = uiPayload(), base = state.lastUiState || payload) {
+  try { localStorage.setItem(UI_DRAFT_KEY, JSON.stringify({ base, local: payload })); } catch {}
+}
+
+function readUiDraft() {
+  try {
+    const draft = JSON.parse(localStorage.getItem(UI_DRAFT_KEY) || 'null');
+    return draft?.base && draft?.local ? draft : null;
+  } catch { return null; }
+}
+
+function clearUiDraft() {
+  try { localStorage.removeItem(UI_DRAFT_KEY); } catch {}
+}
+
+function uiSavePending() {
+  return state.saveQueued || state.saveTimer !== null || state.saveInFlight > 0;
+}
+
 function saveUiState() {
   if (state.hydrating) return;
+  persistUiDraft();
+  state.saveQueued = true;
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(async () => {
-    const local = uiPayload();
+    state.saveTimer = null;
+    if (state.saveInFlight > 0) return;
+    state.saveQueued = false;
+    state.saveInFlight = 1;
+    let retryPending = false;
+    const captured = structuredClone(uiPayload());
+    let local = structuredClone(captured);
+    let base = state.lastUiState ? structuredClone(state.lastUiState) : structuredClone(local);
+    let hadConflict = false;
+    let saved = null;
     try {
-      let saved;
-      try {
-        saved = await api('PUT', '/api/ui-state', local);
-      } catch (error) {
-        if (error.status !== 409 || !error.data) throw error;
-        saved = await api('PUT', '/api/ui-state', { ...local, revision: error.data.revision });
+      for (let attempt = 0; attempt < 3 && !saved; attempt += 1) {
+        try {
+          saved = await api('PUT', '/api/ui-state', local);
+        } catch (error) {
+          if (error.status !== 409 || !error.data) throw error;
+          hadConflict = true;
+          const remote = error.data;
+          local = mergeUiChanges(base, local, remote);
+          local.revision = remote.revision;
+          base = structuredClone(remote);
+          if (attempt === 2) {
+            applyAuthoritativeUiState(local, { force: true, baseline: remote });
+            retryPending = true;
+          }
+        }
       }
-      state.uiRevision = saved.revision;
+      const savedRevision = Number(saved?.revision) || 0;
+      if (saved && savedRevision < state.uiRevision) {
+        state.saveQueued = true;
+      } else if (saved && hadConflict) {
+        const reconciled = mergeUiChanges(captured, structuredClone(uiPayload()), saved);
+        reconciled.revision = saved.revision;
+        applyAuthoritativeUiState(reconciled, { force: true, baseline: saved });
+      } else if (saved) {
+        state.uiRevision = Number(saved.revision) || state.uiRevision;
+        state.lastUiState = structuredClone(saved);
+      }
     } catch (error) {
       if (error.status === 409 && error.data) applyAuthoritativeUiState(error.data);
     } finally {
-      state.saveTimer = null;
+      state.saveInFlight = 0;
+      if (retryPending || state.saveQueued) saveUiState();
+      else if (saved) clearUiDraft();
     }
   }, 150);
 }
 
 function flushUiState() {
+  const draft = readUiDraft();
   clearTimeout(state.saveTimer);
-  const body = JSON.stringify(uiPayload());
+  state.saveTimer = null;
+  state.saveQueued = false;
+  if (!draft || state.saveInFlight > 0) return;
+  const local = state.lastUiState ? mergeUiChanges(draft.base, draft.local, state.lastUiState) : structuredClone(draft.local);
+  local.revision = state.uiRevision;
+  const body = JSON.stringify(local);
   try {
     const token = authToken();
     if (token) {
@@ -1154,13 +1288,30 @@ function shouldPlayResponseSound(id, hasDocumentFocus = document.hasFocus(), hid
   return hidden || !hasDocumentFocus || state.activeId !== id;
 }
 
+function updateResponseAttentionUi(id) {
+  const entry = state.sessions.get(id);
+  const button = document.querySelector(`[data-switcher-pane-id="${CSS.escape(id)}"]`);
+  const markAria = (el, marked) => {
+    if (!el) return;
+    const base = (el.getAttribute('aria-label') || '').replace(/, new response$/, '');
+    el.setAttribute('aria-label', `${base}${marked ? ', new response' : ''}`);
+  };
+  button?.classList.toggle('response-pulse', Boolean(entry?.responseAttention));
+  markAria(button, Boolean(entry?.responseAttention));
+  const desktopId = state.panePrefs.paneDesktop[id];
+  const desktopMarked = state.order.some(paneId => state.panePrefs.paneDesktop[paneId] === desktopId && state.sessions.get(paneId)?.responseAttention);
+  const desktopTab = document.querySelector(`[data-desktop-id="${CSS.escape(desktopId || '')}"]`);
+  desktopTab?.classList.toggle('attention', desktopMarked);
+  markAria(desktopTab, desktopMarked);
+}
+
 function clearResponseAttention(id) {
   const entry = state.sessions.get(id);
   const header = entry?.el.querySelector('.term-header');
   if (!entry || (!entry.responseAttention && !header?.classList.contains('response-pulse'))) return;
   entry.responseAttention = false;
   header?.classList.remove('response-pulse');
-  renderSwitcher();
+  updateResponseAttentionUi(id);
   if (![...state.sessions.values()].some(item => item.responseAttention)) {
     window.passideckDesktop?.clearResponseAttention?.();
   }
@@ -1174,7 +1325,7 @@ function pulsePaneTitlebar(id) {
   header.classList.remove('response-pulse');
   void header.offsetWidth;
   header.classList.add('response-pulse');
-  renderSwitcher();
+  updateResponseAttentionUi(id);
 }
 
 function notifyResponseComplete(id) {
@@ -1377,7 +1528,9 @@ function installTerminalWheelScroll(termEl, term, session = null) {
   term.attachCustomWheelEventHandler?.(e => {
     const command = String(session?.meta?.command || session?.meta?.label || '').toLowerCase();
     const isHermes = /\bhermes\b/.test(command);
+    const isHermesTui = /\bhermes\b[^\n]*\s--tui\b/.test(command);
     if (e.ctrlKey) return true;
+    if (isHermesTui) return true;
     const buffer = term.buffer?.active;
     if (buffer?.type === 'alternate') return true;
     if (!buffer || buffer.baseY <= 0) {
@@ -1400,7 +1553,9 @@ function installTerminalWheelScroll(termEl, term, session = null) {
   termEl.addEventListener('wheel', e => {
     const command = String(session?.meta?.command || session?.meta?.label || '').toLowerCase();
     const isHermes = /\bhermes\b/.test(command);
+    const isHermesTui = /\bhermes\b[^\n]*\s--tui\b/.test(command);
     if (!isHermes || e.ctrlKey) return;
+    if (isHermesTui) return;
     const buffer = term.buffer?.active;
     if (buffer?.type === 'alternate') return;
     if (!buffer || buffer.baseY <= 0) {
@@ -1423,7 +1578,7 @@ function installTerminalWheelScroll(termEl, term, session = null) {
 }
 
 function updateEmpty() {
-  document.getElementById('emptyState').style.display = state.sessions.size ? 'none' : 'grid';
+  document.getElementById('emptyState').style.display = desktopPaneIds().length ? 'none' : 'grid';
 }
 
 function stripTerminalReplyJunk(data) {
@@ -1563,30 +1718,99 @@ function saveAllTerminalSnapshots() {
   for (const id of state.sessions.keys()) saveTerminalSnapshot(id);
 }
 
-function loadPanePrefs(prefs = {}) {
-  state.panePrefs = {
-    titles: prefs.titles && typeof prefs.titles === 'object' ? prefs.titles : {},
-    order: Array.isArray(prefs.order) ? prefs.order.filter(id => typeof id === 'string') : [],
-    minimized: Array.isArray(prefs.minimized) ? prefs.minimized.filter(id => typeof id === 'string') : [],
-    windows: prefs.windows && typeof prefs.windows === 'object' ? prefs.windows : {},
-    viewport: prefs.viewport && typeof prefs.viewport === 'object' ? prefs.viewport : null
-  };
+function desktopNameKey(name) {
+  return String(name || '').trim().toLocaleLowerCase();
 }
 
-async function syncSessionsFromServer() {
+function nextDesktopDefaultName(desktops = state.panePrefs.desktops, excludedId = null) {
+  const used = new Set(Object.entries(desktops || {})
+    .filter(([id]) => id !== excludedId)
+    .map(([, desktop]) => desktopNameKey(desktop?.name)));
+  let number = 1;
+  while (used.has(`desktop ${number}`)) number += 1;
+  return `Desktop ${number}`;
+}
+
+function normalizeDesktopNames(desktops, order) {
+  const used = new Set();
+  for (const id of order) {
+    const desktop = desktops[id];
+    if (!desktop) continue;
+    let name = String(desktop.name || '').trim().slice(0, 40);
+    if (!name || used.has(desktopNameKey(name))) {
+      let number = 1;
+      while (used.has(`desktop ${number}`)) number += 1;
+      name = `Desktop ${number}`;
+    }
+    desktop.name = name;
+    used.add(desktopNameKey(name));
+  }
+}
+
+function loadPanePrefs(prefs = {}) {
+  const legacyWindows = prefs.windows && typeof prefs.windows === 'object' ? prefs.windows : {};
+  const legacyViewport = prefs.viewport && typeof prefs.viewport === 'object' ? prefs.viewport : null;
+  const hasModernDesktops = prefs.desktops && typeof prefs.desktops === 'object' && Object.keys(prefs.desktops).length;
+  const desktops = hasModernDesktops
+    ? structuredClone(prefs.desktops)
+    : { 'desktop-1': { name: 'Desktop 1', minimized: prefs.minimized || [], windows: legacyWindows.desktop || {}, viewport: legacyViewport } };
+  const desktopOrder = Array.isArray(prefs.desktopOrder) ? prefs.desktopOrder.filter(id => desktops[id]) : [];
+  for (const id of Object.keys(desktops)) if (!desktopOrder.includes(id)) desktopOrder.push(id);
+  normalizeDesktopNames(desktops, desktopOrder);
+  const firstDesktop = desktops[desktopOrder[0]];
+  const fallbackDesktop = desktopOrder[0] || 'desktop-1';
+  const order = Array.isArray(prefs.order) ? prefs.order.filter(id => typeof id === 'string') : [];
+  const paneDesktop = prefs.paneDesktop && typeof prefs.paneDesktop === 'object' ? { ...prefs.paneDesktop } : {};
+  for (const id of order) if (!desktops[paneDesktop[id]]) paneDesktop[id] = fallbackDesktop;
+  state.panePrefs = {
+    titles: prefs.titles && typeof prefs.titles === 'object' ? prefs.titles : {},
+    order,
+    minimized: Array.isArray(firstDesktop.minimized) ? firstDesktop.minimized : [],
+    windows: { desktop: firstDesktop.windows || {} },
+    viewport: firstDesktop.viewport || null,
+    desktopOrder,
+    paneDesktop,
+    desktops
+  };
+  const local = localDesktopView();
+  state.activeDesktopId = desktops[local.activeDesktopId] ? local.activeDesktopId : fallbackDesktop;
+  saveLocalDesktopView();
+}
+
+async function syncSessionsFromServer(incomingPanePrefs = null) {
   const sessions = await api('GET', '/api/sessions');
   const currentIds = new Set(sessions.map(session => session.id));
-  sessions.forEach(createPanel);
+  for (const session of sessions) {
+    const isNew = !state.sessions.has(session.id);
+    const incomingDesktopId = incomingPanePrefs?.paneDesktop?.[session.id];
+    if (isNew && incomingDesktopId) state.panePrefs.paneDesktop[session.id] = incomingDesktopId;
+    createPanel(session);
+  }
   for (const id of [...state.sessions.keys()]) {
     if (!currentIds.has(id)) discardPanel(id, { persist: false });
   }
 }
 
-function applyAuthoritativeUiState(ui) {
-  if (!ui || Number(ui.revision) <= state.uiRevision) return;
+function selectAuthoritativePane(id) {
+  if (!id || !state.sessions.has(id) || state.panePrefs.paneDesktop[id] !== state.activeDesktopId || state.minimized.has(id)) return false;
+  selectPanel(id, { persist: false });
+  return true;
+}
+
+function nextActivePaneId() {
+  const ids = desktopPaneIds();
+  if (ids.includes(state.activeId) && !state.minimized.has(state.activeId)) return state.activeId;
+  return ids.find(id => state.responsiveMinimized.has(id)) ||
+    ids.find(id => !state.minimized.has(id)) || ids[0] || null;
+}
+
+function applyAuthoritativeUiState(ui, opts = {}) {
+  if (!ui || (!opts.force && Number(ui.revision) <= state.uiRevision)) return;
   const wasHydrating = state.hydrating;
+  const localActiveId = state.activeId;
   state.hydrating = true;
   state.uiRevision = Number(ui.revision) || 0;
+  state.lastUiState = structuredClone(opts.baseline || ui);
   loadPanePrefs(ui.panePrefs || {});
   setTheme(ui.theme || 'green', { persist: false });
   setSkin(ui.skin || 'neon', { persist: false });
@@ -1596,7 +1820,7 @@ function applyAuthoritativeUiState(ui) {
   setSystemMonitorVisible(Boolean(ui.systemMonitor), { persist: false });
   restorePanelOrder();
   state.responsiveMinimized.clear();
-  state.minimized = new Set((state.panePrefs.minimized || []).filter(id => state.sessions.has(id)));
+  state.minimized = new Set((activeDesktop().minimized || []).filter(id => state.sessions.has(id)));
   for (const [id, entry] of state.sessions) {
     entry.el.classList.toggle('minimized', state.minimized.has(id));
     if (windowPrefs()[id]) applyFreeWindow(id);
@@ -1604,10 +1828,26 @@ function applyAuthoritativeUiState(ui) {
   responsiveMinimizeForViewport();
   applyLayoutVisibility();
   updateMinimizedBar();
-  if (ui.activeId && state.sessions.has(ui.activeId) && !state.minimized.has(ui.activeId)) selectPanel(ui.activeId, { persist: false });
+  const localActiveValid = localActiveId && state.sessions.has(localActiveId) &&
+    state.panePrefs.paneDesktop[localActiveId] === state.activeDesktopId && !state.minimized.has(localActiveId);
+  const remoteActiveValid = ui.activeId && state.sessions.has(ui.activeId) &&
+    state.panePrefs.paneDesktop[ui.activeId] === state.activeDesktopId && !state.minimized.has(ui.activeId);
+  state.activeId = localActiveValid ? localActiveId : remoteActiveValid ? ui.activeId : nextActivePaneId();
+  for (const [id, entry] of state.sessions) entry.el.classList.toggle('active', id === state.activeId);
   renderSwitcher();
   scheduleTerminalFit();
   state.hydrating = wasHydrating;
+}
+
+function reconcileIncomingUiState(ui) {
+  if (!ui || Number(ui.revision) <= state.uiRevision) return;
+  if (uiSavePending() && state.lastUiState) {
+    const reconciled = mergeUiChanges(state.lastUiState, structuredClone(uiPayload()), ui);
+    reconciled.revision = ui.revision;
+    applyAuthoritativeUiState(reconciled, { force: true, baseline: ui });
+    return;
+  }
+  applyAuthoritativeUiState(ui);
 }
 
 function connectUiEvents() {
@@ -1617,8 +1857,8 @@ function connectUiEvents() {
   events.onmessage = async event => {
     try {
       const ui = JSON.parse(event.data);
-      await syncSessionsFromServer();
-      applyAuthoritativeUiState(ui);
+      await syncSessionsFromServer(ui.panePrefs || null);
+      reconcileIncomingUiState(ui);
     } catch {}
   };
   state.uiEvents = events;
@@ -1628,12 +1868,18 @@ function savePanePrefs() {
   if (state.hydrating) return;
   state.order = state.order.filter(id => state.sessions.has(id));
   state.panePrefs.order = state.order.slice();
-  state.panePrefs.minimized = persistentMinimizedIds().filter(id => state.sessions.has(id));
+  const desktop = activeDesktop();
+  desktop.minimized = persistentMinimizedIds().filter(id => state.panePrefs.paneDesktop[id] === state.activeDesktopId && state.sessions.has(id));
   state.panePrefs.windows = state.panePrefs.windows && typeof state.panePrefs.windows === 'object' ? state.panePrefs.windows : {};
-  if (innerWidth > 900) state.panePrefs.viewport = desktopSize();
+  if (innerWidth > 900) desktop.viewport = desktopSize();
+  if (state.activeDesktopId === state.panePrefs.desktopOrder[0]) {
+    state.panePrefs.minimized = desktop.minimized;
+    state.panePrefs.windows.desktop = desktop.windows;
+    state.panePrefs.viewport = desktop.viewport || null;
+  }
   const prefs = windowPrefs();
   for (const id of Object.keys(prefs)) {
-    if (!state.sessions.has(id)) delete prefs[id];
+    if (!state.sessions.has(id) || state.panePrefs.paneDesktop[id] !== state.activeDesktopId) delete prefs[id];
   }
   saveUiState();
 }
@@ -2164,6 +2410,7 @@ function startPointerDrag(id, handle, event) {
 function createPanel(session, opts = {}) {
   if (state.sessions.has(session.id) || session.meta.status === 'exited') return;
   const id = session.id;
+  if (!state.panePrefs.paneDesktop[id]) state.panePrefs.paneDesktop[id] = state.panePrefs.desktopOrder[0];
   const grid = document.getElementById('termGrid');
   const el = document.createElement('section');
   el.className = 'term-panel';
@@ -2317,7 +2564,8 @@ function createPanel(session, opts = {}) {
 
   updateEmpty();
   renderSwitcher();
-  selectPanel(id, { persist: false });
+  if (state.panePrefs.paneDesktop[id] === state.activeDesktopId) selectPanel(id, { persist: false });
+  else applyLayoutVisibility();
   requestAnimationFrame(() => {
     fitAll({ allowHeight: true, scrollBottom: true });
     const entry = state.sessions.get(id);
@@ -2332,12 +2580,7 @@ function createPanel(session, opts = {}) {
 }
 
 function applyPanelOrder() {
-  const grid = document.getElementById('termGrid');
   state.order = state.order.filter(id => state.sessions.has(id));
-  for (const id of state.order) {
-    const entry = state.sessions.get(id);
-    if (entry) grid.appendChild(entry.el);
-  }
   applyLayoutVisibility();
   renderSwitcher();
   scheduleTerminalFit();
@@ -2517,7 +2760,144 @@ function scheduleResume(forceReconnect = false) {
   }, 50);
 }
 
+function movePaneToDesktop(id, targetDesktopId) {
+  const target = state.panePrefs.desktops[targetDesktopId];
+  const sourceDesktopId = state.panePrefs.paneDesktop[id];
+  const source = state.panePrefs.desktops[sourceDesktopId];
+  if (!state.sessions.has(id) || !target || !source || sourceDesktopId === targetDesktopId) return;
+  const rect = source.windows?.[id] ? { ...source.windows[id] } : defaultWindowRect();
+  source.minimized = (source.minimized || []).filter(paneId => paneId !== id);
+  if (source.windows) delete source.windows[id];
+  target.windows = target.windows || {};
+  target.windows[id] = rect;
+  target.minimized = (target.minimized || []).filter(paneId => paneId !== id);
+  state.panePrefs.paneDesktop[id] = targetDesktopId;
+  state.minimized.delete(id);
+  if (state.activeId === id) state.activeId = desktopPaneIds().find(paneId => !state.minimized.has(paneId)) || null;
+  for (const [paneId, entry] of state.sessions) entry.el.classList.toggle('active', paneId === state.activeId);
+  applyLayoutVisibility();
+  updateEmpty();
+  renderSwitcher();
+  savePanePrefs();
+}
+
+function selectDesktop(id) {
+  if (!state.panePrefs.desktops[id] || id === state.activeDesktopId) return;
+  const current = activeDesktop();
+  current.minimized = persistentMinimizedIds();
+  current.windows = windowPrefs();
+  if (innerWidth > 900) current.viewport = desktopSize();
+  state.activeDesktopId = id;
+  const next = activeDesktop();
+  state.minimized = new Set((next.minimized || []).filter(paneId => state.sessions.has(paneId)));
+  state.responsiveMinimized.clear();
+  const ids = desktopPaneIds();
+  state.activeId = ids.find(paneId => !state.minimized.has(paneId)) || ids[0] || null;
+  for (const [paneId, entry] of state.sessions) {
+    entry.el.classList.toggle('active', paneId === state.activeId);
+    entry.el.classList.toggle('minimized', state.minimized.has(paneId));
+  }
+  saveLocalDesktopView();
+  responsiveMinimizeForViewport();
+  applyLayoutVisibility();
+  updateEmpty();
+  renderSwitcher();
+  scheduleTerminalFit();
+}
+
+function createDesktop() {
+  if (state.panePrefs.desktopOrder.length >= MAX_DESKTOPS) return;
+  const id = crypto.randomUUID?.() || `desktop-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  state.panePrefs.desktops[id] = { name: nextDesktopDefaultName(), minimized: [], windows: {}, viewport: null };
+  state.panePrefs.desktopOrder.push(id);
+  selectDesktop(id);
+  savePanePrefs();
+}
+
+function startDesktopRename(id, tab) {
+  const desktop = state.panePrefs.desktops[id];
+  if (!desktop || !tab) return;
+  document.querySelector('.desktop-rename')?.blur();
+  const input = document.createElement('input');
+  input.className = 'desktop-rename';
+  input.value = desktop.name;
+  input.maxLength = 40;
+  input.setAttribute('aria-label', `Rename ${desktop.name}`);
+  input.style.width = `${tab.offsetWidth}px`;
+  let finished = false;
+  const finish = commit => {
+    if (finished) return;
+    finished = true;
+    const name = input.value.trim();
+    const duplicate = Object.entries(state.panePrefs.desktops)
+      .some(([otherId, other]) => otherId !== id && desktopNameKey(other?.name) === desktopNameKey(name));
+    if (commit && name && duplicate) {
+      showToast('Desktop name already exists', 'error');
+    } else if (commit && name && name !== desktop.name) {
+      desktop.name = name;
+      savePanePrefs();
+    }
+    renderDesktops();
+  };
+  input.onkeydown = event => {
+    if (event.key === 'Enter') { event.preventDefault(); finish(true); }
+    else if (event.key === 'Escape') { event.preventDefault(); finish(false); }
+  };
+  input.onblur = () => finish(true);
+  tab.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
+function deleteDesktop(id) {
+  if (state.panePrefs.desktopOrder.length <= 1 || !state.panePrefs.desktops[id]) return;
+  const paneIds = state.order.filter(paneId => state.panePrefs.paneDesktop[paneId] === id);
+  if (!confirm(paneIds.length ? `Delete this desktop and move ${paneIds.length} window${paneIds.length === 1 ? '' : 's'}?` : 'Delete this desktop?')) return;
+  const fallback = state.panePrefs.desktopOrder.find(desktopId => desktopId !== id);
+  if (state.activeDesktopId === id) selectDesktop(fallback);
+  for (const paneId of paneIds) movePaneToDesktop(paneId, fallback);
+  delete state.panePrefs.desktops[id];
+  state.panePrefs.desktopOrder = state.panePrefs.desktopOrder.filter(desktopId => desktopId !== id);
+  renderSwitcher();
+  savePanePrefs();
+}
+
+function renderDesktops() {
+  const switcher = document.getElementById('desktopSwitcher');
+  if (!switcher) return;
+  const add = document.getElementById('addDesktop');
+  if (add) {
+    add.disabled = state.panePrefs.desktopOrder.length >= MAX_DESKTOPS;
+    setTooltip(add, add.disabled ? `Maximum ${MAX_DESKTOPS} desktops` : 'Add desktop');
+  }
+  switcher.replaceChildren(...state.panePrefs.desktopOrder.map((id, index) => {
+    const desktop = state.panePrefs.desktops[id];
+    const attention = state.order.some(paneId => state.panePrefs.paneDesktop[paneId] === id && state.sessions.get(paneId)?.responseAttention);
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.className = `desktop-tab${id === state.activeDesktopId ? ' active' : ''}${attention ? ' attention' : ''}`;
+    tab.dataset.desktopId = id;
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-selected', String(id === state.activeDesktopId));
+    const shortcut = index < 9 ? `, shortcut Alt Shift ${index + 1}` : '';
+    tab.setAttribute('aria-label', `${desktop.name}${shortcut}${attention ? ', new response' : ''}`);
+    if (index < 9) tab.setAttribute('aria-keyshortcuts', `Alt+Shift+${index + 1}`);
+    tab.textContent = desktop.name;
+    setTooltip(tab, `${desktop.name}${index < 9 ? ` · Alt+Shift+${index + 1}` : ''} · Double-click to rename · Right-click to delete`);
+    let selectTimer = null;
+    tab.onclick = event => {
+      if (event.detail === 0) return selectDesktop(id);
+      if (event.detail > 1) return clearTimeout(selectTimer);
+      selectTimer = setTimeout(() => selectDesktop(id), 180);
+    };
+    tab.ondblclick = event => { clearTimeout(selectTimer); event.preventDefault(); event.stopPropagation(); startDesktopRename(id, tab); };
+    tab.oncontextmenu = event => { event.preventDefault(); deleteDesktop(id); };
+    return tab;
+  }));
+}
+
 function renderSwitcher() {
+  renderDesktops();
   state.order = state.order.filter(id => state.sessions.has(id));
   const desc = document.getElementById('activeSessionDescription');
   const entry = state.activeId ? state.sessions.get(state.activeId) : null;
@@ -2529,7 +2909,7 @@ function renderSwitcher() {
   const switcher = document.getElementById('sessionSwitcher');
   if (!switcher) return;
   switcher.replaceChildren();
-  for (const id of state.order) {
+  for (const id of desktopPaneIds()) {
     const item = state.sessions.get(id);
     if (!item) continue;
     const wrapper = document.createElement('span');
@@ -2613,11 +2993,15 @@ function discardPanel(id, opts = {}) {
     state.sessions.delete(id);
     state.order = state.order.filter(existing => existing !== id);
   }
+  delete state.panePrefs.paneDesktop[id];
+  for (const desktop of Object.values(state.panePrefs.desktops)) {
+    desktop.minimized = (desktop.minimized || []).filter(paneId => paneId !== id);
+    if (desktop.windows) delete desktop.windows[id];
+  }
   state.responsiveMinimized.delete(id);
   state.minimized.delete(id);
   if (state.activeId === id) {
-    state.activeId = state.order.find(existing => state.responsiveMinimized.has(existing)) ||
-      state.order.find(existing => !state.minimized.has(existing)) || state.order[0] || null;
+    state.activeId = nextActivePaneId();
     if (state.activeId && state.responsiveMinimized.delete(state.activeId)) {
       state.minimized.delete(state.activeId);
       state.sessions.get(state.activeId)?.el.classList.remove('minimized');
@@ -2649,6 +3033,7 @@ async function launch(command) {
   try {
     const cmd = String(command || '').trim() || '/bin/bash';
     const session = await api('POST', '/api/sessions', { command: cmd, label: cmd });
+    state.panePrefs.paneDesktop[session.id] = state.activeDesktopId;
     createPanel(session, { autoPlace: true });
     applyLayoutVisibility();
     savePanePrefs();
@@ -2855,6 +3240,7 @@ async function init() {
   ]);
 
   state.uiRevision = Number(ui?.revision) || 0;
+  state.lastUiState = ui ? structuredClone(ui) : null;
   loadPanePrefs(ui?.panePrefs || {});
   setTheme(ui?.theme || 'green', { persist: false });
   setSkin(ui?.skin || 'neon', { persist: false });
@@ -2871,17 +3257,25 @@ async function init() {
   state.layout = 'auto';
   setLayout('auto', { persist: false });
 
-  state.minimized = new Set((state.panePrefs.minimized || []).filter(id => state.sessions.has(id)));
+  state.minimized = new Set((activeDesktop().minimized || []).filter(id => state.sessions.has(id)));
   state.minimized.forEach(id => state.sessions.get(id)?.el.classList.add('minimized'));
   responsiveMinimizeForViewport();
   applyLayoutVisibility();
   updateMinimizedBar();
 
-  if (ui?.activeId && state.sessions.has(ui.activeId) && !state.minimized.has(ui.activeId)) selectPanel(ui.activeId, { persist: false });
-  else if (state.order[0]) selectPanel(state.order[0], { persist: false });
+  const firstDesktopPane = desktopPaneIds().find(id => !state.minimized.has(id));
+  if (!selectAuthoritativePane(ui?.activeId) && firstDesktopPane) selectPanel(firstDesktopPane, { persist: false });
   updateEmpty();
   renderSwitcher();
   state.hydrating = false;
+  const draft = readUiDraft();
+  if (draft) {
+    const remote = ui || draft.base;
+    const reconciled = mergeUiChanges(draft.base, draft.local, remote);
+    reconciled.revision = Number(remote.revision) || 0;
+    applyAuthoritativeUiState(reconciled, { force: true, baseline: remote });
+    saveUiState();
+  }
   connectUiEvents();
   startSocketHeartbeat();
 }
@@ -2891,6 +3285,7 @@ function escapeHtml(str) {
 }
 
 document.querySelectorAll('[data-command]').forEach(btn => btn.onclick = () => launch(btn.dataset.command));
+document.getElementById('addDesktop').onclick = createDesktop;
 function setSettingsOpen(open, restoreFocus = false) {
   const panel = document.getElementById('settingsPanel');
   const toggle = document.getElementById('settingsToggle');
@@ -3036,11 +3431,31 @@ document.addEventListener('focusin', () => syncTerminalInputFocus());
 document.addEventListener('focusout', () => queueMicrotask(() => syncTerminalInputFocus()));
 window.addEventListener('resize', () => { responsiveMinimizeForViewport(); applyLayoutVisibility(); scheduleTerminalFit(); });
 window.addEventListener('beforeunload', saveAllTerminalSnapshots);
+window.addEventListener('pagehide', flushUiState);
 document.addEventListener('visibilitychange', () => {
   syncTerminalInputFocus();
   if (document.hidden) saveAllTerminalSnapshots();
   else scheduleResume();
 });
+function handleDesktopShortcut(e) {
+  if (!e.altKey || !e.shiftKey || e.ctrlKey || e.metaKey) return;
+  const target = e.target?.nodeType === Node.ELEMENT_NODE ? e.target : null;
+  if (target?.matches?.('input, select, textarea, [contenteditable="true"]') && !target.closest('.xterm')) return;
+  let id = null;
+  const digit = /^Digit([1-9])$/.exec(e.code || '');
+  if (digit) id = state.panePrefs.desktopOrder[Number(digit[1]) - 1];
+  else if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') {
+    const order = state.panePrefs.desktopOrder;
+    const current = Math.max(0, order.indexOf(state.activeDesktopId));
+    const delta = e.code === 'ArrowLeft' ? -1 : 1;
+    id = order[(current + delta + order.length) % order.length];
+  }
+  if (!id) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  selectDesktop(id);
+}
+document.addEventListener('keydown', handleDesktopShortcut, true);
 document.addEventListener('keydown', e => {
   const key = e.key.toLowerCase();
   if (e.key === 'Escape') {

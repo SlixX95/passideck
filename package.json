@@ -1,15 +1,16 @@
 {
   "name": "@passi/passideck",
-  "version": "0.8.47",
+  "version": "0.8.48",
   "description": "Standalone self-hosted browser terminal wall",
   "bin": {
     "passideck": "./packages/cli/src/index.js"
   },
-  "main": "packages/cli/src/index.js",
+  "main": "packages/electron/main.js",
   "files": [
     "packages/cli/src/index.js",
     "packages/server/src/**",
     "packages/client/public/**",
+    "packages/electron/**",
     "scripts/prepare-assets.js",
     "scripts/install.sh",
     "scripts/passideck.service",
@@ -22,8 +23,15 @@
     "server": "node packages/server/src/index.js",
     "start": "node packages/cli/src/index.js",
     "install-local": "bash scripts/install.sh",
-    "test": "node --check packages/server/src/index.js && node --check packages/client/public/app.js && node scripts/prepare-assets.js && node tests/session.test.js && node tests/upload.test.js && node tests/server-validation.test.js && node tests/ui-static.test.js && node tests/browser-cdp.test.js",
+    "test": "node --check packages/server/src/index.js && node --check packages/client/public/app.js && node scripts/prepare-assets.js && node tests/session.test.js && node tests/upload.test.js && node tests/server-validation.test.js && node tests/ui-static.test.js && node tests/electron-backends.test.js && node tests/electron-static.test.js && node tests/browser-cdp.test.js",
     "test:browser": "node tests/browser-cdp.test.js",
+    "electron": "electron .",
+    "dist:electron": "electron-builder --linux AppImage --win portable",
+    "test:electron": "node tests/electron-static.test.js",
+    "dist:electron:mac": "electron-builder --mac dmg",
+    "dist:electron:all": "electron-builder --win portable --linux AppImage --mac dmg",
+    "dist:electron:win": "electron-builder --win portable",
+    "dist:electron:linux": "electron-builder --linux AppImage",
     "prepare": "node scripts/prepare-assets.js",
     "predev": "npm run prepare-assets",
     "preserver": "npm run prepare-assets",
@@ -50,6 +58,42 @@
   "license": "MIT",
   "engines": {
     "node": ">=20.0.0"
+  },
+  "devDependencies": {
+    "electron": "^43.1.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "dev.passi.passideck",
+    "productName": "PassiDeck",
+    "executableName": "PassiDeck",
+    "directories": {
+      "app": "packages/electron",
+      "output": "dist/electron"
+    },
+    "files": [
+      "**/*",
+      "!node_modules/**",
+      "!package-lock.json"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "win": {
+      "target": [
+        "portable"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ]
+    }
   },
   "author": "PassiDeck contributors"
 }

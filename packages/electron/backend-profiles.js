@@ -1,0 +1,61 @@
+const { randomUUID } = require('crypto');
+
+const CONFIG_VERSION = 5;
+const LEGACY_MATHILDA_URL = 'http://100.77.97.64:8791/';
+const DEFAULT_BACKENDS = [
+  { id: 'maeve', name: 'Maeve', url: 'http://42.69.42.44:8791/', color: '#5fffd1' },
+  { id: 'passideck-dev', name: 'PassiDeck Dev', url: 'http://42.69.42.44:8792/', color: '#e0af68' },
+  { id: 'mathilda', name: 'Mathilda', url: 'http://100.74.164.4:8791/', color: '#bb9af7' }
+];
+
+function normalizeUrl(value) {
+  const url = new URL(String(value || '').trim());
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Backend URL must start with http:// or https://');
+  return url.href;
+}
+
+function normalizeBackend(value, fallback = {}) {
+  const color = /^#[0-9a-f]{6}$/i.test(value?.color || '') ? value.color : fallback.color || '#5fffd1';
+  return {
+    id: String(value?.id || fallback.id || randomUUID()),
+    name: String(value?.name || fallback.name || 'PassiDeck').trim() || 'PassiDeck',
+    url: normalizeUrl(value?.url || fallback.url),
+    color
+  };
+}
+
+function normalizeConfig(value = {}) {
+  let backends;
+  if (Array.isArray(value.backends) && value.backends.length) {
+    backends = value.backends.map(backend => normalizeBackend(backend));
+    if (value.configVersion !== CONFIG_VERSION) {
+      for (const backend of DEFAULT_BACKENDS) {
+        if (!backends.some(item => item.id === backend.id)) backends.push({ ...backend });
+      }
+    }
+  } else {
+    backends = DEFAULT_BACKENDS.map(backend => ({ ...backend }));
+    if (value.backendUrl) backends[0].url = normalizeUrl(value.backendUrl);
+  }
+  if (Number(value.configVersion || 0) < 4) {
+    const dev = backends.find(backend => backend.id === 'passideck-dev');
+    if (dev?.url === DEFAULT_BACKENDS[0].url) dev.url = DEFAULT_BACKENDS[1].url;
+  }
+  if (Number(value.configVersion || 0) < 5) {
+    const mathilda = backends.find(backend => backend.id === 'mathilda');
+    if (mathilda?.url === LEGACY_MATHILDA_URL) mathilda.url = DEFAULT_BACKENDS[2].url;
+  }
+  if (!backends.length) backends = DEFAULT_BACKENDS.map(backend => ({ ...backend }));
+  const activeBackendId = backends.some(backend => backend.id === value.activeBackendId)
+    ? value.activeBackendId
+    : backends[0].id;
+  return {
+    configVersion: CONFIG_VERSION,
+    activeBackendId,
+    globalSoundEnabled: value.globalSoundEnabled !== false,
+    notifyBlinking: value.notifyBlinking !== false,
+    backends
+  };
+}
+
+module.exports = { CONFIG_VERSION, DEFAULT_BACKENDS, normalizeUrl, normalizeBackend, normalizeConfig };

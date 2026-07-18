@@ -150,14 +150,57 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     const saved = await fetch(`${base}/api/ui-state`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...initialUi, revision: initialUi.revision, activeId: 'validation', notifyBlinking: false })
+      body: JSON.stringify({
+        ...initialUi,
+        revision: initialUi.revision,
+        activeId: 'validation',
+        notifyBlinking: false,
+        panePrefs: {
+          ...initialUi.panePrefs,
+          desktopOrder: ['work', 'monitoring'],
+          paneDesktop: { validation: 'monitoring' },
+          desktops: {
+            work: { name: 'Work', minimized: [], windows: {}, viewport: { w: 1400, h: 850 } },
+            monitoring: { name: 'Work', minimized: ['validation'], windows: { validation: { x: 10, y: 20, w: 700, h: 500, z: 11 } }, viewport: { w: 1400, h: 850 } }
+          }
+        }
+      })
     });
     assert.strictEqual(saved.status, 200);
     const savedUi = await saved.json();
     assert.strictEqual(savedUi.notifyBlinking, false, 'UI state must persist Notify blinking Off instead of dropping it during validation');
+    assert.deepStrictEqual(savedUi.panePrefs.desktopOrder, ['work', 'monitoring'], 'desktop order must survive server validation');
+    assert.deepStrictEqual(
+      savedUi.panePrefs.desktopOrder.map(id => savedUi.panePrefs.desktops[id].name),
+      ['Work', 'Desktop 1'],
+      'server validation must repair duplicate desktop names with the lowest free default number'
+    );
+    assert.strictEqual(savedUi.panePrefs.paneDesktop.validation, 'monitoring', 'pane desktop assignment must survive server validation');
+    assert.deepStrictEqual(savedUi.panePrefs.desktops.monitoring.minimized, ['validation'], 'per-desktop minimized state must survive server validation');
+    assert.deepStrictEqual(savedUi.panePrefs.desktops.monitoring.windows.validation, { x: 10, y: 20, w: 700, h: 500, z: 11 }, 'per-desktop geometry must survive server validation');
     assert.ok(savedUi.revision > initialUi.revision, 'accepted UI changes must advance the server revision');
     const eventChunk = new TextDecoder().decode((await reader.read()).value || new Uint8Array());
     assert.ok(eventChunk.includes('"activeId":"validation"') && eventChunk.includes(`"revision":${savedUi.revision}`), 'accepted UI changes must broadcast to every browser');
+    const capped = await fetch(`${base}/api/ui-state`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...savedUi,
+        revision: savedUi.revision,
+        panePrefs: {
+          ...savedUi.panePrefs,
+          order: ['validation'],
+          desktopOrder: ['one', 'two', 'three', 'four'],
+          paneDesktop: { validation: 'four' },
+          desktops: Object.fromEntries(['one', 'two', 'three', 'four'].map((id, index) => [id, { name: `Desk ${index + 1}`, minimized: [], windows: {}, viewport: null }]))
+        }
+      })
+    });
+    assert.strictEqual(capped.status, 200);
+    const cappedUi = await capped.json();
+    assert.deepStrictEqual(cappedUi.panePrefs.desktopOrder, ['one', 'two', 'three'], 'server validation must cap persisted desktops at the supported maximum');
+    assert.deepStrictEqual(Object.keys(cappedUi.panePrefs.desktops), ['one', 'two', 'three'], 'discarded desktops must not remain in persisted desktop metadata');
+    assert.strictEqual(cappedUi.panePrefs.paneDesktop.validation, 'one', 'panes assigned to a discarded desktop must move to the first retained desktop');
     const stale = await fetch(`${base}/api/ui-state`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },

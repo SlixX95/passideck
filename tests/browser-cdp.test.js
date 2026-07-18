@@ -196,6 +196,169 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       return { statusChip: Boolean(document.querySelector('.status-chip')), leftGap: first.left - strip.left };
     })()`);
     assert.deepStrictEqual(compactLaunchStrip, { statusChip: false, leftGap: 6 }, 'quick-launch buttons must occupy the left edge after removing the window/save status chip');
+    const migratedDesktop = await evalExpr(cdp, sid, `(() => {
+      const tabs = [...document.querySelectorAll('[data-desktop-id]')];
+      const lastTab = tabs.at(-1)?.getBoundingClientRect();
+      const add = document.getElementById('addDesktop')?.getBoundingClientRect();
+      return {
+        ids: state.panePrefs.desktopOrder || [],
+        names: tabs.map(tab => tab.textContent.trim()),
+        assignments: state.order.map(id => state.panePrefs.paneDesktop?.[id]),
+        active: state.activeDesktopId,
+        local: JSON.parse(sessionStorage.getItem('passideck:desktop-view:v1') || '{}').activeDesktopId,
+        addGap: add && lastTab ? Math.round(add.left - lastTab.right) : null
+      };
+    })()`);
+    assert.deepStrictEqual(migratedDesktop.ids, ['desktop-1'], 'legacy pane layout must migrate into one default desktop');
+    assert.deepStrictEqual(migratedDesktop.names, ['Desktop 1'], 'default desktop label must not duplicate its shortcut number');
+    assert.ok(migratedDesktop.addGap !== null && migratedDesktop.addGap <= 7, `add desktop must stay attached to the dynamic desktop tab group, gap=${migratedDesktop.addGap}`);
+    assert.ok(migratedDesktop.assignments.every(id => id === 'desktop-1'), 'legacy panes must remain assigned to Desktop 1');
+    assert.strictEqual(migratedDesktop.active, 'desktop-1', 'default desktop must become locally active');
+    assert.strictEqual(migratedDesktop.local, 'desktop-1', 'active desktop must persist locally, not in shared UI state');
+    const modernDesktopIgnoresLegacy = await evalExpr(cdp, sid, `(() => {
+      const snapshot = structuredClone(state.panePrefs);
+      loadPanePrefs({
+        order: ['pane-modern'],
+        minimized: ['stale-pane'],
+        windows: { desktop: { 'stale-pane': { x: 1, y: 1, w: 300, h: 200, z: 1 } } },
+        viewport: { w: 300, h: 200 },
+        desktopOrder: ['survivor'],
+        paneDesktop: { 'pane-modern': 'survivor' },
+        desktops: { survivor: { name: 'Survivor', minimized: [], windows: { 'pane-modern': { x: 20, y: 30, w: 700, h: 500, z: 2 } }, viewport: { w: 1400, h: 850 } } }
+      });
+      const survivor = structuredClone(state.panePrefs.desktops.survivor);
+      loadPanePrefs(snapshot);
+      return survivor;
+    })()`);
+    assert.deepStrictEqual(modernDesktopIgnoresLegacy, { name: 'Survivor', minimized: [], windows: { 'pane-modern': { x: 20, y: 30, w: 700, h: 500, z: 2 } }, viewport: { w: 1400, h: 850 } }, 'modern desktop state must never be overwritten by stale legacy mirrors after deleting the original first desktop');
+    const mergedConcurrentDesktops = await evalExpr(cdp, sid, `(() => {
+      const desktop = name => ({ name, minimized: [], windows: {}, viewport: null });
+      const baseState = { revision: 1, panePrefs: { desktopOrder: ['one', 'two'], paneDesktop: { p1: 'one', p2: 'two' }, desktops: { one: desktop('One'), two: desktop('Two') } } };
+      const local = structuredClone(baseState);
+      local.panePrefs.desktopOrder = ['two', 'local'];
+      delete local.panePrefs.desktops.one;
+      delete local.panePrefs.paneDesktop.p1;
+      local.panePrefs.desktops.local = desktop('Local');
+      local.panePrefs.paneDesktop.pLocal = 'local';
+      const remote = structuredClone(baseState);
+      remote.revision = 2;
+      remote.panePrefs.desktopOrder.push('remote');
+      remote.panePrefs.desktops.two.name = 'Two renamed remotely';
+      remote.panePrefs.desktops.remote = desktop('Remote');
+      remote.panePrefs.paneDesktop.pRemote = 'remote';
+      const merged = mergeUiChanges(baseState, local, remote);
+      return {
+        order: merged.panePrefs.desktopOrder,
+        names: Object.fromEntries(Object.entries(merged.panePrefs.desktops).map(([id, value]) => [id, value.name])),
+        assignments: merged.panePrefs.paneDesktop
+      };
+    })()`);
+    assert.deepStrictEqual(mergedConcurrentDesktops, {
+      order: ['two', 'local', 'remote'],
+      names: { two: 'Two renamed remotely', local: 'Local', remote: 'Remote' },
+      assignments: { p2: 'two', pLocal: 'local', pRemote: 'remote' }
+    }, '409 replay must preserve independent remote edits/additions while applying local additions and deletions');
+    const repeatedConflictReplay = await evalExpr(cdp, sid, `(async () => {
+      const originalApi = api;
+      const snapshot = { prefs: structuredClone(state.panePrefs), revision: state.uiRevision, baseline: structuredClone(state.lastUiState) };
+      const desktop = name => ({ name, minimized: [], windows: {}, viewport: null });
+      const baseState = structuredClone(uiPayload());
+      state.lastUiState = structuredClone(baseState);
+      state.panePrefs.desktops['retry-local'] = desktop('Retry local');
+      state.panePrefs.desktopOrder.push('retry-local');
+      let remote = structuredClone(baseState);
+      let puts = 0;
+      api = async (method, path, body) => {
+        puts += 1;
+        if (puts <= 3) {
+          const id = 'retry-remote-' + puts;
+          remote.panePrefs.desktops[id] = desktop('Retry remote ' + puts);
+          remote.panePrefs.desktopOrder.push(id);
+          remote.revision += 1;
+          const error = new Error('conflict');
+          error.status = 409;
+          error.data = structuredClone(remote);
+          throw error;
+        }
+        return { ...structuredClone(body), revision: remote.revision + 1 };
+      };
+      saveUiState();
+      for (let i = 0; i < 40 && (puts < 4 || uiSavePending()); i += 1) await new Promise(resolve => setTimeout(resolve, 50));
+      const result = { puts, pending: uiSavePending(), ids: state.panePrefs.desktopOrder.filter(id => id.startsWith('retry-')) };
+      clearTimeout(state.saveTimer);
+      state.saveTimer = null;
+      state.saveInFlight = 0;
+      api = originalApi;
+      state.uiRevision = snapshot.revision;
+      state.lastUiState = snapshot.baseline;
+      loadPanePrefs(snapshot.prefs);
+      renderSwitcher();
+      return result;
+    })()`);
+    assert.deepStrictEqual(repeatedConflictReplay, { puts: 4, pending: false, ids: ['retry-local', 'retry-remote-1', 'retry-remote-2', 'retry-remote-3'] }, 'three consecutive 409 responses must retain local changes and retry them against every remote revision');
+    const serializedSaves = await evalExpr(cdp, sid, `(async () => {
+      const originalApi = api;
+      const snapshot = { prefs: structuredClone(state.panePrefs), revision: state.uiRevision, baseline: structuredClone(state.lastUiState), queued: state.saveQueued };
+      const targetId = state.panePrefs.desktopOrder[0];
+      const baseState = structuredClone(uiPayload());
+      state.lastUiState = structuredClone(baseState);
+      let releaseFirst;
+      const firstGate = new Promise(resolve => { releaseFirst = resolve; });
+      let puts = 0;
+      let concurrent = 0;
+      let maxConcurrent = 0;
+      api = async (_method, _path, body) => {
+        puts += 1;
+        const call = puts;
+        concurrent += 1;
+        maxConcurrent = Math.max(maxConcurrent, concurrent);
+        if (call === 1) await firstGate;
+        concurrent -= 1;
+        return { ...structuredClone(body), revision: state.uiRevision + call + 10 };
+      };
+      state.panePrefs.desktops[targetId].name = 'Serialized first';
+      saveUiState();
+      for (let i = 0; i < 20 && puts < 1; i += 1) await new Promise(resolve => setTimeout(resolve, 25));
+      state.panePrefs.desktops[targetId].name = 'Serialized latest';
+      saveUiState();
+      await new Promise(resolve => setTimeout(resolve, 250));
+      const putsBeforeRelease = puts;
+      releaseFirst();
+      for (let i = 0; i < 60 && (puts < 2 || uiSavePending()); i += 1) await new Promise(resolve => setTimeout(resolve, 25));
+      const result = { putsBeforeRelease, puts, maxConcurrent, revision: state.uiRevision, savedName: state.lastUiState?.panePrefs?.desktops?.[targetId]?.name };
+      clearTimeout(state.saveTimer);
+      state.saveTimer = null;
+      state.saveInFlight = 0;
+      state.saveQueued = snapshot.queued;
+      api = originalApi;
+      state.uiRevision = snapshot.revision;
+      state.lastUiState = snapshot.baseline;
+      loadPanePrefs(snapshot.prefs);
+      renderSwitcher();
+      return result;
+    })()`);
+    assert.deepStrictEqual(serializedSaves, { putsBeforeRelease: 1, puts: 2, maxConcurrent: 1, revision: serializedSaves.revision, savedName: 'Serialized latest' }, 'UI saves must serialize so a delayed older response cannot regress the baseline or overlap a newer save');
+    const unloadDraft = await evalExpr(cdp, sid, `(() => {
+      const originalFetch = window.fetch;
+      const targetId = state.panePrefs.desktopOrder[0];
+      const originalName = state.panePrefs.desktops[targetId].name;
+      let fetches = 0;
+      window.fetch = () => { fetches += 1; return Promise.resolve({ ok: true }); };
+      state.panePrefs.desktops[targetId].name = 'Unload latest';
+      persistUiDraft();
+      state.saveInFlight = 1;
+      state.saveQueued = true;
+      flushUiState();
+      const draft = readUiDraft();
+      const result = { fetches, savedName: draft?.local?.panePrefs?.desktops?.[targetId]?.name, hasBase: Boolean(draft?.base) };
+      state.saveInFlight = 0;
+      state.saveQueued = false;
+      state.panePrefs.desktops[targetId].name = originalName;
+      clearUiDraft();
+      window.fetch = originalFetch;
+      return result;
+    })()`);
+    assert.deepStrictEqual(unloadDraft, { fetches: 0, savedName: 'Unload latest', hasBase: true }, 'unload during an in-flight save must preserve the newest state as a recoverable local draft instead of racing a stale revision');
     const chromeToggleResize = await evalExpr(cdp, sid, `(async () => {
       const id = '${madeSessions[0]}';
       const prefs = windowPrefs();
@@ -348,6 +511,202 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await waitEval(cdp, peerSid, 'document.readyState === "complete" && document.querySelectorAll(".term-panel").length >= 11');
     await waitEval(cdp, sid, `!state.hydrating && state.saveTimer == null`);
     await waitEval(cdp, peerSid, `!state.hydrating && state.saveTimer == null`);
+    const addDesktopReady = await evalExpr(cdp, sid, `(() => ({ count: state.panePrefs.desktopOrder.length, disabled: document.getElementById('addDesktop').disabled, max: MAX_DESKTOPS }))()`);
+    assert.deepStrictEqual(addDesktopReady, { count: 1, disabled: false, max: 3 }, 'add desktop must stay enabled below the three-desktop limit');
+    await evalExpr(cdp, sid, `document.getElementById('addDesktop').click()`);
+    await sleep(250);
+    const desktopCreation = await evalExpr(cdp, sid, `(() => ({
+      count: state.panePrefs.desktopOrder.length,
+      active: state.activeDesktopId,
+      name: activeDesktop().name,
+      visiblePanels: [...document.querySelectorAll('.term-panel:not(.layout-hidden)')].length,
+      local: localDesktopView().activeDesktopId
+    }))()`);
+    assert.strictEqual(desktopCreation.count, 2, 'Add desktop must create one shared desktop');
+    assert.strictEqual(desktopCreation.name, 'Desktop 2', 'new desktops need a predictable default name');
+    assert.strictEqual(desktopCreation.active, desktopCreation.local, 'new desktop must become active only in this client');
+    assert.strictEqual(desktopCreation.visiblePanels, 0, 'new desktop must start empty without stopping existing panes');
+    await waitEval(cdp, peerSid, `state.panePrefs.desktopOrder.length === 2`);
+    const peerDesktopSelection = await evalExpr(cdp, peerSid, `(() => ({ active: state.activeDesktopId, visiblePanels: [...document.querySelectorAll('.term-panel:not(.layout-hidden)')].length }))()`);
+    assert.strictEqual(peerDesktopSelection.active, 'desktop-1', 'shared desktop updates must not switch another client locally');
+    assert.ok(peerDesktopSelection.visiblePanels > 0, 'another client must keep rendering its locally selected desktop');
+    const desktopLimit = await evalExpr(cdp, sid, `(() => {
+      const prefs = structuredClone(state.panePrefs);
+      const active = state.activeDesktopId;
+      const wasHydrating = state.hydrating;
+      state.hydrating = true;
+      createDesktop();
+      createDesktop();
+      renderDesktops();
+      const result = { count: state.panePrefs.desktopOrder.length, addDisabled: document.getElementById('addDesktop').disabled };
+      loadPanePrefs(prefs);
+      state.activeDesktopId = active;
+      state.hydrating = wasHydrating;
+      saveLocalDesktopView();
+      renderSwitcher();
+      return result;
+    })()`);
+    assert.deepStrictEqual(desktopLimit, { count: 3, addDisabled: true }, 'desktop creation must stop at the initial maximum of three');
+    await evalExpr(cdp, sid, `document.querySelector('[data-desktop-id="desktop-1"]').click()`);
+    await waitEval(cdp, sid, `state.activeDesktopId === 'desktop-1'`);
+    const desktopMoveChoices = await evalExpr(cdp, sid, `(() => {
+      state.sessions.get('${madeSessions[0]}').el.querySelector('.arrange').click();
+      return [...document.querySelectorAll('#layoutAssist [data-target-desktop-id]')].map(button => button.textContent.trim());
+    })()`);
+    assert.deepStrictEqual(desktopMoveChoices, ['Move to Desktop 2'], 'Arrange menu must offer every other desktop as a move target');
+    const movedPane = await evalExpr(cdp, sid, `(async () => {
+      document.querySelector('#layoutAssist [data-target-desktop-id]').click();
+      await new Promise(resolve => setTimeout(resolve, 200));
+      const entry = state.sessions.get('${madeSessions[0]}');
+      return {
+        desktopId: state.panePrefs.paneDesktop['${madeSessions[0]}'],
+        sourceVisible: !entry.el.classList.contains('layout-hidden'),
+        socketLive: entry.el.dataset.connectionStatus === 'live'
+      };
+    })()`);
+    assert.strictEqual(movedPane.desktopId, desktopCreation.active, 'move action must assign the pane to the target desktop');
+    assert.strictEqual(movedPane.sourceVisible, false, 'moved pane must disappear from the source desktop');
+    assert.strictEqual(movedPane.socketLive, true, 'moving a pane must not reconnect or stop its terminal session');
+    await waitEval(cdp, sid, `state.saveTimer === null && state.panePrefs.paneDesktop['${madeSessions[0]}'] === '${desktopCreation.active}'`);
+    await waitEval(cdp, peerSid, `state.panePrefs.paneDesktop['${madeSessions[0]}'] === '${desktopCreation.active}'`);
+    const crossDesktopActive = await evalExpr(cdp, sid, `(() => {
+      const wasHydrating = state.hydrating;
+      state.hydrating = true;
+      selectAuthoritativePane('${madeSessions[0]}');
+      state.hydrating = wasHydrating;
+      applyLayoutVisibility();
+      return {
+        selectedForeignPane: state.activeId === '${madeSessions[0]}',
+        hidden: state.sessions.get('${madeSessions[0]}').el.classList.contains('layout-hidden'),
+        pollutedCurrentGeometry: Boolean(windowPrefs()['${madeSessions[0]}']),
+        fallbackLocal: state.panePrefs.paneDesktop[nextActivePaneId()] === state.activeDesktopId
+      };
+    })()`);
+    assert.deepStrictEqual(crossDesktopActive, { selectedForeignPane: false, hidden: true, pollutedCurrentGeometry: false, fallbackLocal: true }, 'shared active-pane state and close fallback must never select or create geometry for a pane on another local desktop');
+    await evalExpr(cdp, sid, `(() => { movePaneToDesktop('${madeSessions[0]}', 'desktop-1'); selectDesktop('desktop-1'); })()`);
+    await waitEval(cdp, sid, `state.panePrefs.paneDesktop['${madeSessions[0]}'] === 'desktop-1' && state.activeDesktopId === 'desktop-1' && state.saveTimer === null`);
+    const desktopShortcuts = await evalExpr(cdp, sid, `(() => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: '2', code: 'Digit2', altKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+      const direct = state.activeDesktopId;
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', code: 'ArrowLeft', altKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+      const previous = state.activeDesktopId;
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', code: 'ArrowRight', altKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+      const next = state.activeDesktopId;
+      selectDesktop('desktop-1');
+      return { direct, previous, next };
+    })()`);
+    assert.deepStrictEqual(desktopShortcuts, { direct: desktopCreation.active, previous: 'desktop-1', next: desktopCreation.active }, 'Alt/Option+Shift desktop shortcuts must support direct and cyclic switching');
+    const renamePoint = await evalExpr(cdp, sid, `(() => {
+      selectDesktop('desktop-1');
+      const rect = document.querySelector('[data-desktop-id="${desktopCreation.active}"]').getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    })()`);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: renamePoint.x, y: renamePoint.y, button: 'left', clickCount: 1 }, sid);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: renamePoint.x, y: renamePoint.y, button: 'left', clickCount: 1 }, sid);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: renamePoint.x, y: renamePoint.y, button: 'left', clickCount: 2 }, sid);
+    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: renamePoint.x, y: renamePoint.y, button: 'left', clickCount: 2 }, sid);
+    await waitEval(cdp, sid, `document.activeElement?.classList.contains('desktop-rename')`);
+    await cdp.send('Input.insertText', { text: 'Ops' }, sid);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, sid);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, sid);
+    await waitEval(cdp, sid, `state.panePrefs.desktops['${desktopCreation.active}']?.name === 'Ops'`);
+    const attentionStability = await evalExpr(cdp, sid, `(() => {
+      const activeId = state.activeId;
+      const pingId = desktopPaneIds().find(id => id !== activeId) || activeId;
+      state.sessions.get(activeId)?.term.focus();
+      const focused = document.activeElement;
+      const revision = state.uiRevision;
+      const baseline = structuredClone(state.lastUiState);
+      const remote = structuredClone(uiPayload());
+      remote.revision = revision + 1;
+      remote.activeId = pingId;
+      applyAuthoritativeUiState(remote);
+      const authoritativeStable = state.activeId === activeId && document.activeElement === focused;
+      const desktopTab = document.querySelector('[data-desktop-id="desktop-1"]');
+      const sessionTab = document.querySelector('[data-switcher-pane-id="' + pingId + '"]');
+      pulsePaneTitlebar(pingId);
+      const result = {
+        activeStable: state.activeId === activeId,
+        focusStable: document.activeElement === focused,
+        authoritativeStable,
+        desktopDomStable: document.querySelector('[data-desktop-id="desktop-1"]') === desktopTab,
+        sessionDomStable: document.querySelector('[data-switcher-pane-id="' + pingId + '"]') === sessionTab,
+        marked: sessionTab?.classList.contains('response-pulse') === true
+      };
+      clearResponseAttention(pingId);
+      state.uiRevision = revision;
+      state.lastUiState = baseline;
+      return result;
+    })()`);
+    assert.deepStrictEqual(attentionStability, { activeStable: true, focusStable: true, authoritativeStable: true, desktopDomStable: true, sessionDomStable: true, marked: true }, 'background response attention and incoming shared state must not replace or refocus the active local chat UI');
+    const desktopLifecycle = await evalExpr(cdp, sid, `(async () => {
+      const target = '${desktopCreation.active}';
+      const beforeSessions = state.sessions.size;
+      const renamed = state.panePrefs.desktops[target]?.name;
+      movePaneToDesktop('${madeSessions[0]}', target);
+      state.sessions.get('${madeSessions[0]}').responseAttention = true;
+      renderSwitcher();
+      const attention = document.querySelector('[data-desktop-id="' + target + '"]').classList.contains('attention');
+      state.sessions.get('${madeSessions[0]}').responseAttention = false;
+      window.confirm = () => true;
+      document.querySelector('[data-desktop-id="' + target + '"]').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+      await new Promise(resolve => setTimeout(resolve, 220));
+      return {
+        renamed,
+        removed: !state.panePrefs.desktops[target],
+        paneDesktop: state.panePrefs.paneDesktop['${madeSessions[0]}'],
+        attention,
+        sessionsUnchanged: state.sessions.size === beforeSessions
+      };
+    })()`);
+    assert.deepStrictEqual(desktopLifecycle, { renamed: 'Ops', removed: true, paneDesktop: 'desktop-1', attention: true, sessionsUnchanged: true }, 'rename/delete must preserve panes and hidden desktops must surface response attention');
+    await waitEval(cdp, sid, `state.saveTimer === null && state.panePrefs.desktopOrder.length === 1`);
+    await waitEval(cdp, peerSid, `state.panePrefs.desktopOrder.length === 1`);
+    const launchDesktop = await evalExpr(cdp, sid, `(async () => {
+      state.panePrefs.desktops['desktop-1'].name = 'Work';
+      renderDesktops();
+      document.getElementById('addDesktop').click();
+      const target = state.activeDesktopId;
+      const defaultName = state.panePrefs.desktops[target].name;
+      startDesktopRename('desktop-1', document.querySelector('[data-desktop-id="desktop-1"]'));
+      const rename = document.querySelector('.desktop-rename');
+      rename.value = defaultName;
+      rename.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      const duplicateRejected = state.panePrefs.desktops['desktop-1'].name === 'Work';
+      const before = new Set(state.order);
+      await launch('/bin/bash');
+      const id = state.order.find(paneId => !before.has(paneId));
+      await new Promise(resolve => setTimeout(resolve, 200));
+      return {
+        id,
+        assigned: state.panePrefs.paneDesktop[id],
+        target,
+        defaultName,
+        duplicateRejected,
+        visible: id ? !state.sessions.get(id).el.classList.contains('layout-hidden') : false
+      };
+    })()`);
+    assert.deepStrictEqual(
+      { assigned: launchDesktop.assigned, target: launchDesktop.target, defaultName: launchDesktop.defaultName, duplicateRejected: launchDesktop.duplicateRejected, visible: launchDesktop.visible },
+      { assigned: launchDesktop.target, target: launchDesktop.target, defaultName: 'Desktop 1', duplicateRejected: true, visible: true },
+      'new desktops must reuse the lowest free default name, reject duplicate names and receive new sessions'
+    );
+    await waitEval(cdp, peerSid, `state.sessions.has('${launchDesktop.id}') && state.panePrefs.paneDesktop['${launchDesktop.id}'] === '${launchDesktop.target}'`);
+    const remoteLaunchIsolation = await evalExpr(cdp, peerSid, `(() => ({
+      selectedRemote: state.activeId === '${launchDesktop.id}',
+      hidden: state.sessions.get('${launchDesktop.id}').el.classList.contains('layout-hidden'),
+      pollutedCurrentGeometry: Boolean(windowPrefs()['${launchDesktop.id}'])
+    }))()`);
+    assert.deepStrictEqual(remoteLaunchIsolation, { selectedRemote: false, hidden: true, pollutedCurrentGeometry: false }, 'a session launched on another client desktop must not steal focus or geometry locally');
+    const launchCleanup = await evalExpr(cdp, sid, `(async () => {
+      await closePanel('${launchDesktop.id}');
+      const staleAssignment = Boolean(state.panePrefs.paneDesktop['${launchDesktop.id}']);
+      window.confirm = () => true;
+      deleteDesktop('${launchDesktop.target}');
+      return { staleAssignment };
+    })()`);
+    assert.deepStrictEqual(launchCleanup, { staleAssignment: false }, 'closed sessions must remove their desktop assignment');
+    await waitEval(cdp, sid, `state.saveTimer === null && state.panePrefs.desktopOrder.length === 1`);
     const afterDesktopPeerInit = await requestJson(base, 'GET', '/api/ui-state');
     const desktopPeerRect = afterDesktopPeerInit.panePrefs?.windows?.desktop?.[madeSessions[0]];
     assert.deepStrictEqual(
@@ -1477,6 +1836,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.deepStrictEqual(minimizedSwitcher, { before: { text: 'Minimized Window Name', tooltip: 'Restore Minimized Window Name', nativeTitle: '', tag: 'BUTTON', closeTag: 'BUTTON', closeNested: false, hidden: true }, restored: true, minimizedAgain: true }, 'taskbar must use sibling native buttons; pane activation must restore/minimize without swallowing close keyboard input');
 
+    await waitEval(cdp, sid, 'state.saveTimer === null');
     const keyboardCloseId = await evalExpr(cdp, sid, `(() => {
       const close = document.querySelector('#sessionSwitcher .switcher-close');
       close.focus();
@@ -1585,6 +1945,40 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       return out;
     })()`);
     assert.deepStrictEqual(altScreenWheel, { scrollCalls: 0, mouseEvents: 2, wheelStable: true, canceled: true, capturePrevented: false }, 'Hermes TUI wheel must reach the TUI before and after resumed-session output without scrolling xterm/browser chrome');
+
+    const resizedNormalBufferTuiWheel = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const oldCommand = entry.session.meta.command;
+      entry.session.meta.command = 'hermes --tui';
+      const mouseData = [];
+      let scrollCalls = 0;
+      const dataListener = entry.term.onData(data => mouseData.push(data));
+      const oldScrollLines = entry.term.scrollLines.bind(entry.term);
+      entry.term.scrollLines = n => { scrollCalls += 1; return oldScrollLines(n); };
+      entry.term.reset();
+      await new Promise(resolve => entry.term.write('\\x1b[?1000h\\x1b[?1006h' + Array.from({ length: entry.term.rows + 25 }, (_, i) => 'resize-history-' + i + '\\r\\n').join(''), resolve));
+      entry.term.scrollToBottom();
+      const target = entry.el.querySelector('.xterm-viewport') || entry.el.querySelector('.terminal');
+      const r = target.getBoundingClientRect();
+      const before = { baseY: entry.term.buffer.active.baseY, viewportY: entry.term.buffer.active.viewportY };
+      const event = new WheelEvent('wheel', { deltaY: -180, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 });
+      const dispatched = target.dispatchEvent(event);
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const out = {
+        bufferType: entry.term.buffer.active.type,
+        hadScrollback: before.baseY > 0,
+        mouseEvents: mouseData.filter(data => data.includes('\\x1b[<')).length,
+        scrollCalls,
+        viewportStable: entry.term.buffer.active.viewportY === before.viewportY,
+        canceled: !dispatched || event.defaultPrevented
+      };
+      await new Promise(resolve => entry.term.write('\\x1b[?1000l\\x1b[?1006l', resolve));
+      dataListener.dispose();
+      entry.term.scrollLines = oldScrollLines;
+      entry.session.meta.command = oldCommand;
+      return out;
+    })()`);
+    assert.deepStrictEqual(resizedNormalBufferTuiWheel, { bufferType: 'normal', hadScrollback: true, mouseEvents: 1, scrollCalls: 0, viewportStable: true, canceled: true }, 'resized Hermes TUI in a normal xterm buffer must keep wheel routed to the TUI even when baseY is nonzero');
 
     const uploadInteraction = await evalExpr(cdp, sid, `(async () => {
       const entry = activeTerminalEntry();
@@ -1822,6 +2216,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       return { visible, expectedVisible: state.sessions.size - window.__mobileUserMinimized.length, transient: state.responsiveMinimized.size, minimized: persistentMinimizedIds(), expectedMinimized: window.__mobileUserMinimized };
     })()`);
     assert.deepStrictEqual(restoredDesktop, { visible: restoredDesktop.expectedVisible, expectedVisible: restoredDesktop.expectedVisible, transient: 0, minimized: restoredDesktop.expectedMinimized, expectedMinimized: restoredDesktop.expectedMinimized }, 'widening must restore only responsive-minimized panes and preserve user minimization');
+    await waitEval(cdp, sid, `!uiSavePending()`);
 
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 760, height: 700, deviceScaleFactor: 1, mobile: false }, sid);
     await waitEval(cdp, sid, 'innerWidth === 760');
@@ -1832,7 +2227,8 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const ui = uiPayload();
       ui.revision = state.uiRevision + 1;
       ui.panePrefs = structuredClone(state.panePrefs);
-      ui.panePrefs.minimized = [...new Set([...persistentMinimizedIds(), id])];
+      const desktop = ui.panePrefs.desktops[state.activeDesktopId];
+      desktop.minimized = [...new Set([...persistentMinimizedIds(), id])];
       applyAuthoritativeUiState(ui);
       return id;
     })()`);

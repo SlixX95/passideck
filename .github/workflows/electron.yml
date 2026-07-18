@@ -1,0 +1,38 @@
+name: electron
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feat/electron-portable-wrapper
+
+permissions:
+  contents: read
+
+jobs:
+  windows-portable:
+    runs-on: [self-hosted, Windows, X64]
+    steps:
+      - name: Refuse wrong runner
+        run: |
+          if ('${{ runner.name }}' -ne 'ai-server-passideck-dev') {
+            throw "Wrong runner: ${{ runner.name }}. Expected ai-server-passideck-dev."
+          }
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --include=dev
+      - run: node --check packages/server/src/index.js
+      - run: node --check packages/client/public/app.js
+      - run: node --check packages/electron/main.js
+      - run: node --check packages/electron/preload.js
+      - run: npm run prepare-assets
+      - run: node tests/ui-static.test.js
+      - run: npm run test:electron
+      - run: npm run dist:electron:win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: passideck-windows-portable
+          path: dist/electron/*.exe
