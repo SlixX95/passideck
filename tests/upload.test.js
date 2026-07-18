@@ -19,5 +19,5 @@ try {
   );
   console.log('upload ok');
 } finally {
-  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 }
