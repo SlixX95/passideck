@@ -1379,6 +1379,7 @@ function installTerminalWheelScroll(termEl, term, session = null) {
     const isHermes = /\bhermes\b/.test(command);
     if (e.ctrlKey) return true;
     const buffer = term.buffer?.active;
+    if (buffer?.type === 'alternate') return true;
     if (!buffer || buffer.baseY <= 0) {
       if (isHermes) e.preventDefault();
       return true;
@@ -1401,6 +1402,7 @@ function installTerminalWheelScroll(termEl, term, session = null) {
     const isHermes = /\bhermes\b/.test(command);
     if (!isHermes || e.ctrlKey) return;
     const buffer = term.buffer?.active;
+    if (buffer?.type === 'alternate') return;
     if (!buffer || buffer.baseY <= 0) {
       e.preventDefault();
       return;

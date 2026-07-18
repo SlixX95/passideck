@@ -1550,25 +1550,41 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const oldCommand = entry.session.meta.command;
       entry.session.meta.command = 'hermes --tui';
       let scrollCalls = 0;
+      const mouseData = [];
+      const dataListener = entry.term.onData(data => mouseData.push(data));
       const oldScrollLines = entry.term.scrollLines.bind(entry.term);
       entry.term.scrollLines = n => { scrollCalls += 1; return oldScrollLines(n); };
-      await new Promise(resolve => entry.term.write('\\x1b[?1049h\\x1b[?1000h', resolve));
+      await new Promise(resolve => entry.term.write('\\x1b[?1049h\\x1b[?1000h\\x1b[?1006h', resolve));
       const target = entry.el.querySelector('.xterm-viewport') || entry.el.querySelector('.terminal');
       const termEl = entry.el.querySelector('.terminal');
       let capturePrevented = null;
       const captureProbe = e => { capturePrevented = e.defaultPrevented; };
       termEl.addEventListener('wheel', captureProbe, { capture: true, once: true });
       const r = target.getBoundingClientRect();
-      const event = new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 });
-      const dispatched = target.dispatchEvent(event);
+      const baseBeforeFirst = entry.term.buffer.active.baseY;
+      const first = new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 });
+      const firstDispatched = target.dispatchEvent(first);
+      const baseAfterFirst = entry.term.buffer.active.baseY;
+      await new Promise(resolve => entry.term.write(Array.from({ length: entry.term.rows + 5 }, (_, i) => 'resumed-response-' + i + '\\r\\n').join(''), resolve));
+      const baseBeforeSecond = entry.term.buffer.active.baseY;
+      const second = new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 });
+      const secondDispatched = target.dispatchEvent(second);
+      const baseAfterSecond = entry.term.buffer.active.baseY;
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-      const out = { scrollCalls, baseY: entry.term.buffer.active.baseY, canceled: !dispatched || event.defaultPrevented, capturePrevented };
-      await new Promise(resolve => entry.term.write('\\x1b[?1000l\\x1b[?1049l', resolve));
+      const out = {
+        scrollCalls,
+        mouseEvents: mouseData.filter(data => data.includes('\\x1b[<')).length,
+        wheelStable: baseBeforeFirst === baseAfterFirst && baseBeforeSecond === baseAfterSecond,
+        canceled: !firstDispatched || first.defaultPrevented || !secondDispatched || second.defaultPrevented,
+        capturePrevented
+      };
+      await new Promise(resolve => entry.term.write('\\x1b[?1000l\\x1b[?1006l\\x1b[?1049l', resolve));
+      dataListener.dispose();
       entry.term.scrollLines = oldScrollLines;
       entry.session.meta.command = oldCommand;
       return out;
     })()`);
-    assert.deepStrictEqual(altScreenWheel, { scrollCalls: 0, baseY: 0, canceled: true, capturePrevented: true }, 'Hermes TUI alternate-screen wheel must not scroll xterm/browser chrome when no scrollback exists');
+    assert.deepStrictEqual(altScreenWheel, { scrollCalls: 0, mouseEvents: 2, wheelStable: true, canceled: true, capturePrevented: false }, 'Hermes TUI wheel must reach the TUI before and after resumed-session output without scrolling xterm/browser chrome');
 
     const uploadInteraction = await evalExpr(cdp, sid, `(async () => {
       const entry = activeTerminalEntry();
