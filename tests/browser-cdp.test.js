@@ -569,6 +569,11 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.strictEqual(movedPane.socketLive, true, 'moving a pane must not reconnect or stop its terminal session');
     await waitEval(cdp, sid, `state.saveTimer === null && state.panePrefs.paneDesktop['${madeSessions[0]}'] === '${desktopCreation.active}'`);
     await waitEval(cdp, peerSid, `state.panePrefs.paneDesktop['${madeSessions[0]}'] === '${desktopCreation.active}'`);
+    const desktopLayoutIsolation = await evalExpr(cdp, sid, `(() => ({
+      foreignIncluded: visibleWindowIds().includes('${madeSessions[0]}'),
+      allLocal: visibleWindowIds().every(id => state.panePrefs.paneDesktop[id] === state.activeDesktopId)
+    }))()`);
+    assert.deepStrictEqual(desktopLayoutIsolation, { foreignIncluded: false, allLocal: true }, 'layout and drag helpers must only include panes on the active desktop');
     const crossDesktopActive = await evalExpr(cdp, sid, `(() => {
       const wasHydrating = state.hydrating;
       state.hydrating = true;

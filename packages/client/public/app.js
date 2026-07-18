@@ -826,7 +826,7 @@ function applyFreeSlotSnap(id, rect) {
 
 
 function visibleWindowIds(firstId = null) {
-  const ids = state.order.filter(id => state.sessions.has(id) && !state.minimized.has(id));
+  const ids = desktopPaneIds().filter(id => !state.minimized.has(id));
   if (!firstId || !ids.includes(firstId)) return ids;
   return [firstId, ...ids.filter(id => id !== firstId)];
 }
