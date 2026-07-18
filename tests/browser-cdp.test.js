@@ -1985,6 +1985,20 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.deepStrictEqual(resizedNormalBufferTuiWheel, { bufferType: 'normal', hadScrollback: true, mouseEvents: 1, scrollCalls: 0, viewportStable: true, canceled: true }, 'resized Hermes TUI in a normal xterm buffer must keep wheel routed to the TUI even when baseY is nonzero');
 
+    const tuiScrollbar = await evalExpr(cdp, sid, `(() => {
+      const panel = [...state.sessions.values()][0].el;
+      panel.classList.add('hermes-tui');
+      const viewport = panel.querySelector('.xterm-viewport');
+      const out = {
+        firefox: getComputedStyle(viewport).scrollbarWidth,
+        webkit: getComputedStyle(viewport, '::-webkit-scrollbar').display
+      };
+      panel.classList.remove('hermes-tui');
+      return out;
+    })()`);
+    assert.strictEqual(tuiScrollbar.firefox, 'none', `Hermes TUI xterm scrollbar must stay hidden after resize: ${JSON.stringify(tuiScrollbar)}`);
+    assert.strictEqual(tuiScrollbar.webkit, 'none', `Hermes TUI WebKit scrollbar must stay hidden after resize: ${JSON.stringify(tuiScrollbar)}`);
+
     const uploadInteraction = await evalExpr(cdp, sid, `(async () => {
       const entry = activeTerminalEntry();
       const sent = [];

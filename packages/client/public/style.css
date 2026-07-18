@@ -453,6 +453,8 @@ body.shared-resizing-y { cursor: row-resize; user-select: none; }
 }
 .term-panel.free-window .term-header { cursor: move; }
 .term-panel.free-window.dragging { opacity: .82; transform: none; pointer-events: auto; }
+.term-panel.hermes-tui .xterm-viewport { scrollbar-width: none; }
+.term-panel.hermes-tui .xterm-viewport::-webkit-scrollbar { display: none; }
 
 .term-panel.active.input-focused { border-color: var(--tg-accent); box-shadow: 0 0 0 2px var(--tg-accent), inset 3px 0 0 var(--tg-accent), 0 0 34px color-mix(in srgb, var(--tg-accent) 22%, transparent); }
 .term-panel.dragging { opacity: .82; border-color: var(--tg-accent); transform: none; pointer-events: auto; }

@@ -22,13 +22,20 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 (async () => {
   try {
-    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, parseCodexLimits, readHermesCodexAuth, saveHermesCodexAuth } = require('../packages/server/src/index');
+    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, parseCodexLimits, readHermesCodexAuth, saveHermesCodexAuth } = require('../packages/server/src/index');
     assert.strictEqual(
       hermesResumeIdFromArgv(['/venv/bin/python3', '/venv/bin/hermes', '--resume', '20260716_180100_5dbdcf']),
       '20260716_180100_5dbdcf',
       'the active Hermes resume id must be parsed from the real Python launcher argv shape'
     );
     assert.strictEqual(hermesResumeIdFromArgv(['/bin/bash']), null, 'ordinary shell panes must not be treated as resumed Hermes sessions');
+    const tuiActiveSessionFile = path.join(home, 'tui-active-session.json');
+    fs.writeFileSync(tuiActiveSessionFile, JSON.stringify({ session_id: '20260718_210406_6404d7' }));
+    assert.strictEqual(
+      hermesActiveSessionIdFromEnv([`HERMES_TUI_ACTIVE_SESSION_FILE=${tuiActiveSessionFile}`]),
+      '20260718_210406_6404d7',
+      'Hermes TUI panes must resolve the currently selected live session from the TUI breadcrumb'
+    );
     const weeklyOnly = parseCodexLimits({
       rate_limit: {
         primary_window: { used_percent: 13, limit_window_seconds: 604800, reset_at: 1784672642 }

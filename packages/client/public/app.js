@@ -2414,6 +2414,7 @@ function createPanel(session, opts = {}) {
   const grid = document.getElementById('termGrid');
   const el = document.createElement('section');
   el.className = 'term-panel';
+  el.classList.toggle('hermes-tui', isHermesTuiEntry({ session }));
   el.id = `panel-${id}`;
   el.dataset.paneId = id;
   el.dataset.connectionStatus = 'reconnecting';

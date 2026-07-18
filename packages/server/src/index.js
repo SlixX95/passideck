@@ -649,6 +649,18 @@ function hermesResumeIdFromArgv(argv) {
   return null;
 }
 
+function hermesActiveSessionIdFromEnv(env) {
+  const entry = (Array.isArray(env) ? env : []).find(value => String(value).startsWith('HERMES_TUI_ACTIVE_SESSION_FILE='));
+  const file = entry ? String(entry).slice('HERMES_TUI_ACTIVE_SESSION_FILE='.length) : '';
+  if (!file) return null;
+  try {
+    const stat = fs.statSync(file);
+    if (!stat.isFile() || stat.size > 4096) return null;
+    const id = String(JSON.parse(fs.readFileSync(file, 'utf8'))?.session_id || '');
+    return /^[A-Za-z0-9_.:-]{1,160}$/.test(id) ? id : null;
+  } catch { return null; }
+}
+
 function activeHermesResumeId(session) {
   const name = String(session?.tmuxName || '');
   if (!name || process.platform !== 'linux') return null;
@@ -665,6 +677,10 @@ function activeHermesResumeId(session) {
     const pid = queue.shift();
     if (seen.has(pid)) continue;
     seen.add(pid);
+    try {
+      const activeId = hermesActiveSessionIdFromEnv(fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0'));
+      if (activeId) return activeId;
+    } catch {}
     let argv = [];
     try {
       argv = fs.readFileSync(`/proc/${pid}/cmdline`).toString('utf8').split('\0').filter(Boolean);
@@ -954,7 +970,7 @@ function createServer(config = loadConfig()) {
   return { app, server, wss, sessions, close };
 }
 
-module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, saveHermesCodexAuth, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, UPLOAD_MIME_ALLOWLIST };
+module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, saveHermesCodexAuth, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, UPLOAD_MIME_ALLOWLIST };
 
 if (require.main === module) {
   const config = loadConfig();
