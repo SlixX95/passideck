@@ -1525,6 +1525,13 @@ function scheduleTerminalFit(opts = {}) {
 
 function installTerminalDragSelection(termEl, term, session) {
   let start = null;
+  let origin = null;
+  let replaying = false;
+  const isTui = () => isHermesTuiEntry({ session });
+  const block = event => {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  };
   const cell = event => {
     const screen = termEl.querySelector('.xterm-screen');
     const rect = screen?.getBoundingClientRect();
@@ -1535,19 +1542,43 @@ function installTerminalDragSelection(termEl, term, session) {
     };
   };
   termEl.addEventListener('pointerdown', event => {
-    if (event.button === 0 && isHermesTuiEntry({ session })) start = cell(event);
+    if (event.button !== 0 || !isTui()) return;
+    start = cell(event);
+    origin = { target: event.target, clientX: event.clientX, clientY: event.clientY };
+    if (start) block(event);
+  }, true);
+  termEl.addEventListener('pointermove', event => {
+    if (start && !replaying) block(event);
   }, true);
   termEl.addEventListener('pointerup', event => {
     const end = start && cell(event);
-    if (!start || !end) return void (start = null);
+    if (!start || !end) return void (start = origin = null);
+    block(event);
     const first = start.row < end.row || (start.row === end.row && start.col <= end.col) ? start : end;
     const last = first === start ? end : start;
-    start = null;
     const length = (last.row - first.row) * term.cols + last.col - first.col + 1;
-    if (length < 2) return;
-    term.select(first.col, (term.buffer.active.viewportY || 0) + first.row, length);
+    const click = length < 2;
+    start = null;
+    if (!click) {
+      term.select(first.col, (term.buffer.active.viewportY || 0) + first.row, length);
+      origin = null;
+      return;
+    }
+    term.clearSelection();
+    term.focus();
+    replaying = true;
+    const options = { button: 0, buttons: 1, clientX: origin.clientX, clientY: origin.clientY, bubbles: true, cancelable: true };
+    origin.target.dispatchEvent(new MouseEvent('mousedown', options));
+    origin.target.dispatchEvent(new MouseEvent('mouseup', { ...options, buttons: 0 }));
+    replaying = false;
+    origin = null;
   }, true);
-  termEl.addEventListener('pointercancel', () => { start = null; }, true);
+  for (const type of ['mousedown', 'mousemove', 'mouseup']) {
+    termEl.addEventListener(type, event => {
+      if (start && !replaying) block(event);
+    }, true);
+  }
+  termEl.addEventListener('pointercancel', () => { start = origin = null; }, true);
 }
 
 function installTerminalWheelScroll(termEl, term, session = null) {
