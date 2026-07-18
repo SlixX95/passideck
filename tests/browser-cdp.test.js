@@ -2506,6 +2506,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
 
     await cdp.send('Page.navigate', { url: `${base}/?token=secret-token#keep` }, sid);
     await waitEval(cdp, sid, 'document.readyState === "complete"');
+    await waitEval(cdp, sid, 'state?.activeId && state.sessions.has(state.activeId)');
     const scrubbedAuthToken = await waitEval(cdp, sid, `(() => ({ token: sessionStorage.getItem('passideck:auth-token'), search: location.search, hash: location.hash }))()`);
     assert.deepStrictEqual(scrubbedAuthToken, { token: 'secret-token', search: '', hash: '#keep' }, 'auth token must move to session storage and be removed from browser history/address bar');
 
