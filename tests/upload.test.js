@@ -10,6 +10,7 @@ process.env.PASSIDECK_HOME = home;
 
 try {
   const { saveUploadedBlob } = require('../packages/server/src/index');
+  assert.ok(!fs.existsSync(path.join(home, 'passideck.db')), 'importing an upload helper must not open the server database');
   const saved = saveUploadedBlob({ name: 'ok.txt', type: 'text/plain', data: 'Zm9v' });
   assert.strictEqual(fs.readFileSync(saved.path, 'utf8'), 'foo');
   assert.throws(

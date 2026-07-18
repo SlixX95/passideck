@@ -19,9 +19,15 @@ let dbModule = null;
 try {
   Database = require('better-sqlite3');
   dbModule = require('./database');
-  db = dbModule.initDatabase(Database);
 } catch (err) {
   console.warn('[db] SQLite not available:', err.message);
+}
+
+function ensureDatabase() {
+  if (db || !Database || !dbModule) return db;
+  try { db = dbModule.initDatabase(Database); }
+  catch (err) { console.warn('[db] SQLite not available:', err.message); }
+  return db;
 }
 
 const UI_LAYOUTS = new Set(['auto', '1x1', '1x2', '2x1', '1x3', '3x1', '1x4', '4x1']);
@@ -681,6 +687,7 @@ function restoreTmuxSessions(sessions) {
 }
 
 function createServer(config = loadConfig()) {
+  ensureDatabase();
   const app = express();
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: '/ws', maxPayload: TERMINAL_MAX_INPUT_BYTES });
@@ -847,6 +854,8 @@ function createServer(config = loadConfig()) {
     await new Promise(resolve => wss.close(() => resolve()));
     if (server.listening) await new Promise(resolve => server.close(() => resolve()));
     try { hermesDb?.close(); } catch {}
+    try { db?.close(); } catch {}
+    db = null;
   }
 
   return { app, server, wss, sessions, close };
