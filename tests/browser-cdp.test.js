@@ -686,6 +686,170 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.deepStrictEqual(splitCenterGapDock.horizontal.choices.left, { type: 'free', rect: splitCenterGapDock.horizontal.left }, `left center gap option must remain selectable: ${JSON.stringify(splitCenterGapDock)}`);
     assert.deepStrictEqual(splitCenterGapDock.horizontal.choices.full, { type: 'free', rect: splitCenterGapDock.horizontal.full }, `full-width center gap option must remain selectable: ${JSON.stringify(splitCenterGapDock)}`);
     assert.deepStrictEqual(splitCenterGapDock.horizontal.choices.right, { type: 'free', rect: splitCenterGapDock.horizontal.right }, `right center gap option must remain selectable: ${JSON.stringify(splitCenterGapDock)}`);
+    const independentlySplitCenterGapDock = await evalExpr(cdp, sid, `(() => {
+      const source = '${madeSessions[1]}';
+      const blockers = ['${madeSessions[2]}', '${madeSessions[3]}'];
+      const prefs = windowPrefs();
+      const savedPrefs = JSON.parse(JSON.stringify(prefs));
+      const savedMinimized = [...state.minimized];
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      const left = Math.round(grid.width / 3);
+      const right = Math.round(grid.width * 2 / 3);
+      const middle = grid.height / 2;
+      const top = { x: left, y: 0, w: right - left, h: middle };
+      const full = { x: left, y: 0, w: right - left, h: grid.height };
+      const bottom = { x: left, y: middle, w: right - left, h: grid.height - middle };
+      state.sessions.forEach((entry, id) => {
+        if (id === source || blockers.includes(id)) state.minimized.delete(id);
+        else state.minimized.add(id);
+      });
+      Object.assign(prefs[source], { ...full, z: 40 });
+      Object.assign(prefs[blockers[0]], { x: 0, y: 0, w: left, h: grid.height, z: 30 });
+      Object.assign(prefs[blockers[1]], { x: right, y: 0, w: grid.width - right, h: grid.height, z: 29 });
+      [source, ...blockers].forEach(applyFreeWindow);
+      const px = grid.left + left + (right - left) / 2;
+      const points = {
+        top: { x: px, y: grid.top + grid.height / 4 },
+        full: { x: px, y: grid.top + grid.height / 2 },
+        bottom: { x: px, y: grid.top + grid.height * 3 / 4 }
+      };
+      const choiceAt = point => {
+        const choice = chooseDesktopSlotAt(point.x, point.y, source);
+        return { type: choice.type, rect: choice.rect || null };
+      };
+      const choices = Object.fromEntries(Object.entries(points).map(([name, point]) => [name, choiceAt(point)]));
+      const title = state.sessions.get(source).el.querySelector('.term-title');
+      const titleRect = title.getBoundingClientRect();
+      const persistPanePrefs = savePanePrefs;
+      savePanePrefs = () => {};
+      title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: titleRect.left + 20, clientY: titleRect.top + 12, pointerId: 32, pointerType: 'mouse' }));
+      const visible = {};
+      for (const [name, point] of Object.entries(points)) {
+        updatePointerDrag({ preventDefault(){}, clientX: point.x, clientY: point.y });
+        visible[name] = [...document.querySelectorAll('#desktopSlotSuggestions .desktop-slot')].map(el => ({
+          x: parseFloat(el.style.left), y: parseFloat(el.style.top), w: parseFloat(el.style.width), h: parseFloat(el.style.height)
+        }));
+      }
+      endPointerDrag({ preventDefault(){} });
+      const docked = { x: prefs[source].x, y: prefs[source].y, w: prefs[source].w, h: prefs[source].h };
+      savePanePrefs = persistPanePrefs;
+      state.panePrefs.windows.desktop = savedPrefs;
+      state.minimized.clear();
+      savedMinimized.forEach(id => state.minimized.add(id));
+      restorePanelOrder();
+      return { top, full, bottom, choices, visible, docked };
+    })()`);
+    assert.deepStrictEqual(independentlySplitCenterGapDock.choices.top, { type: 'free', rect: independentlySplitCenterGapDock.top }, `free columns must offer an upper half without neighboring horizontal edges: ${JSON.stringify(independentlySplitCenterGapDock)}`);
+    assert.deepStrictEqual(independentlySplitCenterGapDock.choices.full, { type: 'free', rect: independentlySplitCenterGapDock.full }, `free columns must retain the full-height option: ${JSON.stringify(independentlySplitCenterGapDock)}`);
+    assert.deepStrictEqual(independentlySplitCenterGapDock.choices.bottom, { type: 'free', rect: independentlySplitCenterGapDock.bottom }, `free columns must offer a lower half without neighboring horizontal edges: ${JSON.stringify(independentlySplitCenterGapDock)}`);
+    assert.deepStrictEqual(independentlySplitCenterGapDock.visible, {
+      top: [independentlySplitCenterGapDock.top],
+      full: [independentlySplitCenterGapDock.full],
+      bottom: [independentlySplitCenterGapDock.bottom]
+    }, `independently split gaps must show one pointer-selected target at a time: ${JSON.stringify(independentlySplitCenterGapDock)}`);
+    assert.deepStrictEqual(independentlySplitCenterGapDock.docked, independentlySplitCenterGapDock.bottom, `drop must use the selected lower split of the free column: ${JSON.stringify(independentlySplitCenterGapDock)}`);
+    const independentlySplitCenterRowDock = await evalExpr(cdp, sid, `(() => {
+      const source = '${madeSessions[1]}';
+      const blockers = ['${madeSessions[2]}', '${madeSessions[3]}'];
+      const prefs = windowPrefs();
+      const savedPrefs = JSON.parse(JSON.stringify(prefs));
+      const savedMinimized = [...state.minimized];
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      const top = Math.round(grid.height / 3);
+      const bottom = Math.round(grid.height * 2 / 3);
+      const middle = grid.width / 2;
+      const left = { x: 0, y: top, w: middle, h: bottom - top };
+      const full = { x: 0, y: top, w: grid.width, h: bottom - top };
+      const right = { x: middle, y: top, w: grid.width - middle, h: bottom - top };
+      state.sessions.forEach((entry, id) => {
+        if (id === source || blockers.includes(id)) state.minimized.delete(id);
+        else state.minimized.add(id);
+      });
+      Object.assign(prefs[source], { ...full, z: 40 });
+      Object.assign(prefs[blockers[0]], { x: 0, y: 0, w: grid.width, h: top, z: 30 });
+      Object.assign(prefs[blockers[1]], { x: 0, y: bottom, w: grid.width, h: grid.height - bottom, z: 29 });
+      [source, ...blockers].forEach(applyFreeWindow);
+      const py = grid.top + top + (bottom - top) / 2;
+      const points = {
+        left: { x: grid.left + grid.width / 4, y: py },
+        full: { x: grid.left + grid.width / 2, y: py },
+        right: { x: grid.left + grid.width * 3 / 4, y: py }
+      };
+      const choiceAt = point => {
+        const choice = chooseDesktopSlotAt(point.x, point.y, source);
+        return { type: choice.type, rect: choice.rect || null };
+      };
+      const choices = Object.fromEntries(Object.entries(points).map(([name, point]) => [name, choiceAt(point)]));
+      const title = state.sessions.get(source).el.querySelector('.term-title');
+      const titleRect = title.getBoundingClientRect();
+      const persistPanePrefs = savePanePrefs;
+      savePanePrefs = () => {};
+      title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: titleRect.left + 20, clientY: titleRect.top + 12, pointerId: 33, pointerType: 'mouse' }));
+      const visible = {};
+      for (const [name, point] of Object.entries(points)) {
+        updatePointerDrag({ preventDefault(){}, clientX: point.x, clientY: point.y });
+        visible[name] = [...document.querySelectorAll('#desktopSlotSuggestions .desktop-slot')].map(el => ({
+          x: parseFloat(el.style.left), y: parseFloat(el.style.top), w: parseFloat(el.style.width), h: parseFloat(el.style.height)
+        }));
+      }
+      endPointerDrag({ preventDefault(){} });
+      const docked = { x: prefs[source].x, y: prefs[source].y, w: prefs[source].w, h: prefs[source].h };
+      savePanePrefs = persistPanePrefs;
+      state.panePrefs.windows.desktop = savedPrefs;
+      state.minimized.clear();
+      savedMinimized.forEach(id => state.minimized.add(id));
+      restorePanelOrder();
+      return { left, full, right, choices, visible, docked };
+    })()`);
+    assert.deepStrictEqual(independentlySplitCenterRowDock.choices.left, { type: 'free', rect: independentlySplitCenterRowDock.left }, `free rows must offer a left half without neighboring vertical edges: ${JSON.stringify(independentlySplitCenterRowDock)}`);
+    assert.deepStrictEqual(independentlySplitCenterRowDock.choices.full, { type: 'free', rect: independentlySplitCenterRowDock.full }, `free rows must retain the full-width option: ${JSON.stringify(independentlySplitCenterRowDock)}`);
+    assert.deepStrictEqual(independentlySplitCenterRowDock.choices.right, { type: 'free', rect: independentlySplitCenterRowDock.right }, `free rows must offer a right half without neighboring vertical edges: ${JSON.stringify(independentlySplitCenterRowDock)}`);
+    assert.deepStrictEqual(independentlySplitCenterRowDock.visible, {
+      left: [independentlySplitCenterRowDock.left],
+      full: [independentlySplitCenterRowDock.full],
+      right: [independentlySplitCenterRowDock.right]
+    }, `independently split rows must show one pointer-selected target at a time: ${JSON.stringify(independentlySplitCenterRowDock)}`);
+    assert.deepStrictEqual(independentlySplitCenterRowDock.docked, independentlySplitCenterRowDock.right, `drop must use the selected right split of the free row: ${JSON.stringify(independentlySplitCenterRowDock)}`);
+    const dynamicGapQuadrants = await evalExpr(cdp, sid, `(() => {
+      const source = '${madeSessions[1]}';
+      const blockers = ['${madeSessions[2]}', '${madeSessions[3]}'];
+      const prefs = windowPrefs();
+      const savedPrefs = JSON.parse(JSON.stringify(prefs));
+      const savedMinimized = [...state.minimized];
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      const gap = { x: grid.width / 4, y: 0, w: grid.width / 2, h: grid.height };
+      state.sessions.forEach((entry, id) => {
+        if (id === source || blockers.includes(id)) state.minimized.delete(id);
+        else state.minimized.add(id);
+      });
+      Object.assign(prefs[source], { ...gap, z: 40 });
+      Object.assign(prefs[blockers[0]], { x: 0, y: 0, w: gap.x, h: grid.height, z: 30 });
+      Object.assign(prefs[blockers[1]], { x: gap.x + gap.w, y: 0, w: grid.width - gap.x - gap.w, h: grid.height, z: 29 });
+      [source, ...blockers].forEach(applyFreeWindow);
+      const point = (x, y) => ({ x: grid.left + gap.x + gap.w * x, y: grid.top + gap.y + gap.h * y });
+      const choiceAt = (x, y) => {
+        const choice = chooseDesktopSlotAt(point(x, y).x, point(x, y).y, source);
+        return choice.rect || null;
+      };
+      const choices = {
+        topLeft: choiceAt(1 / 6, 1 / 6),
+        top: choiceAt(1 / 2, 1 / 6),
+        left: choiceAt(1 / 6, 1 / 2),
+        full: choiceAt(1 / 2, 1 / 2),
+        bottomRight: choiceAt(5 / 6, 5 / 6)
+      };
+      state.panePrefs.windows.desktop = savedPrefs;
+      state.minimized.clear();
+      savedMinimized.forEach(id => state.minimized.add(id));
+      restorePanelOrder();
+      return { gap, choices };
+    })()`);
+    const quadrantGap = dynamicGapQuadrants.gap;
+    assert.deepStrictEqual(dynamicGapQuadrants.choices.topLeft, { x: quadrantGap.x, y: quadrantGap.y, w: quadrantGap.w / 2, h: quadrantGap.h / 2 }, `large free regions must expose pointer-selected quadrants: ${JSON.stringify(dynamicGapQuadrants)}`);
+    assert.deepStrictEqual(dynamicGapQuadrants.choices.top, { x: quadrantGap.x, y: quadrantGap.y, w: quadrantGap.w, h: quadrantGap.h / 2 }, `large free regions must retain edge halves between corner zones: ${JSON.stringify(dynamicGapQuadrants)}`);
+    assert.deepStrictEqual(dynamicGapQuadrants.choices.left, { x: quadrantGap.x, y: quadrantGap.y, w: quadrantGap.w / 2, h: quadrantGap.h }, `large free regions must retain side halves between corner zones: ${JSON.stringify(dynamicGapQuadrants)}`);
+    assert.deepStrictEqual(dynamicGapQuadrants.choices.full, quadrantGap, `large free regions must retain their full center target: ${JSON.stringify(dynamicGapQuadrants)}`);
+    assert.deepStrictEqual(dynamicGapQuadrants.choices.bottomRight, { x: quadrantGap.x + quadrantGap.w / 2, y: quadrantGap.y + quadrantGap.h / 2, w: quadrantGap.w / 2, h: quadrantGap.h / 2 }, `large free regions must expose the opposite quadrant: ${JSON.stringify(dynamicGapQuadrants)}`);
     const overlappingBlockerCoverage = await evalExpr(cdp, sid, `(() => {
       const source = '${madeSessions[1]}';
       const blockers = ['${madeSessions[2]}', '${madeSessions[3]}'];

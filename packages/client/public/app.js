@@ -627,6 +627,22 @@ function similarRect(a, b) {
   return Math.abs(a.x - b.x) < 8 && Math.abs(a.y - b.y) < 8 && Math.abs(a.w - b.w) < 8 && Math.abs(a.h - b.h) < 8;
 }
 
+function pointerGapSlotRect(rect, x, y) {
+  const halfW = rect.w / 2;
+  const halfH = rect.h / 2;
+  const edgeZone = ratio => ratio < 1 / 3 ? -1 : ratio > 2 / 3 ? 1 : 0;
+  const horizontal = halfW >= 300 ? edgeZone((x - rect.x) / rect.w) : 0;
+  const vertical = halfH >= 190 ? edgeZone((y - rect.y) / rect.h) : 0;
+  if (!horizontal && !vertical) return rect;
+  return {
+    ...rect,
+    x: horizontal > 0 ? rect.x + halfW : rect.x,
+    y: vertical > 0 ? rect.y + halfH : rect.y,
+    w: horizontal ? halfW : rect.w,
+    h: vertical ? halfH : rect.h
+  };
+}
+
 function slotRectsForDrag(sourceId, pointerX = null, pointerY = null) {
   const prefs = windowPrefs();
   const occupied = state.order
@@ -661,7 +677,7 @@ function slotRectsForDrag(sourceId, pointerX = null, pointerY = null) {
     if (pointed.length) {
       const distance = c => Math.hypot(pointerX - c.x - c.w / 2, pointerY - c.y - c.h / 2);
       pointed.sort((a, b) => distance(a) - distance(b) || (b.w * b.h) - (a.w * a.h));
-      candidates = [pointed[0]];
+      candidates = [pointerGapSlotRect(pointed[0], pointerX, pointerY)];
     }
   }
   const free = [];
