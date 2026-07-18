@@ -705,13 +705,17 @@ function slotRectsForDrag(sourceId, pointerX = null, pointerY = null) {
     const overlap = rectCoveredArea(c, occupiedRects);
     return area >= 300 * 190 && overlap / Math.max(1, area) <= 0.12;
   };
-  if (hasPointer && !candidates.some(c => pointInRect(pointerX, pointerY, c) && isAvailable(c))) {
-    const gaps = occupied.length ? desktopGapSlotRects(occupied) : [];
+  if (hasPointer) {
+    const gaps = desktopGapSlotRects(occupied);
     const pointed = gaps.filter(c => pointInRect(pointerX, pointerY, c) && isAvailable(c));
     if (pointed.length) {
       const distance = c => Math.hypot(pointerX - c.x - c.w / 2, pointerY - c.y - c.h / 2);
       pointed.sort((a, b) => distance(a) - distance(b) || (b.w * b.h) - (a.w * a.h));
-      candidates = [pointerGapSlotRect(pointed[0], pointerX, pointerY)];
+      const gapTarget = pointerGapSlotRect(pointed[0], pointerX, pointerY);
+      const standardTarget = candidates.find(c => pointInRect(pointerX, pointerY, c) && isAvailable(c));
+      candidates = !standardTarget || gapTarget.w * gapTarget.h >= standardTarget.w * standardTarget.h
+        ? [gapTarget]
+        : [standardTarget];
     }
   }
   const free = [];

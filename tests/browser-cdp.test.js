@@ -910,6 +910,50 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       horizontalHalfDock.top,
       `top-center drop must adopt the upper half geometry: ${JSON.stringify(horizontalHalfDock)}`
     );
+    const equalGapChoices = await evalExpr(cdp, sid, `(() => {
+      const source = '${madeSessions[1]}';
+      const blocker = '${madeSessions[2]}';
+      const prefs = windowPrefs();
+      const savedPrefs = JSON.parse(JSON.stringify(prefs));
+      const savedMinimized = [...state.minimized];
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      const third = grid.width / 3;
+      state.sessions.forEach((entry, id) => {
+        if (id === source || id === blocker) state.minimized.delete(id);
+        else state.minimized.add(id);
+      });
+      const choiceAt = x => {
+        const choice = chooseDesktopSlotAt(grid.left + x, grid.top + grid.height / 2, source);
+        return { type: choice.type, rect: choice.rect || null };
+      };
+      Object.assign(prefs[source], { x: 0, y: 0, w: third * 2, h: grid.height, z: 40 });
+      Object.assign(prefs[blocker], { x: third * 2, y: 0, w: third, h: grid.height, z: 30 });
+      [source, blocker].forEach(applyFreeWindow);
+      const rounded = value => Math.round(value * 1000) / 1000;
+      const leftGap = { x: 0, y: 0, w: rounded(third * 2), h: grid.height };
+      const left = [choiceAt(grid.width * 0.30), choiceAt(grid.width * 0.37)];
+      Object.assign(prefs[source], { x: third, y: 0, w: third * 2, h: grid.height, z: 40 });
+      Object.assign(prefs[blocker], { x: 0, y: 0, w: third, h: grid.height, z: 30 });
+      [source, blocker].forEach(applyFreeWindow);
+      const rightX = rounded(third);
+      const rightGap = { x: rightX, y: 0, w: grid.width - rightX, h: grid.height };
+      const right = [choiceAt(grid.width * 0.63), choiceAt(grid.width * 0.70)];
+      state.panePrefs.windows.desktop = savedPrefs;
+      state.minimized.clear();
+      savedMinimized.forEach(id => state.minimized.add(id));
+      restorePanelOrder();
+      return { leftGap, rightGap, left, right };
+    })()`);
+    assert.deepStrictEqual(
+      equalGapChoices.left,
+      [{ type: 'free', rect: equalGapChoices.leftGap }, { type: 'free', rect: equalGapChoices.leftGap }],
+      `the same left free area must offer the same full-gap placement across pointer zones: ${JSON.stringify(equalGapChoices)}`
+    );
+    assert.deepStrictEqual(
+      equalGapChoices.right,
+      [{ type: 'free', rect: equalGapChoices.rightGap }, { type: 'free', rect: equalGapChoices.rightGap }],
+      `the mirrored right free area must offer the same full-gap placement across pointer zones: ${JSON.stringify(equalGapChoices)}`
+    );
     const dynamicFreeGapDock = await evalExpr(cdp, sid, `(() => {
       const source = '${madeSessions[1]}';
       const blockers = ['${madeSessions[2]}', '${madeSessions[3]}', '${madeSessions[4]}', '${madeSessions[5]}', '${madeSessions[6]}', '${madeSessions[7]}'];
