@@ -1188,9 +1188,9 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       calls: ['complete', 'complete', 'clear'],
       immediate: true,
       immediateTab: true,
-      tabIterations: 'infinite',
+      tabIterations: '1',
       headerDuration: '1.6s',
-      tabDuration: '1.6s',
+      tabDuration: '0s',
       badgeContent: 'none',
       persistent: true,
       persistentTab: true,
@@ -1200,6 +1200,69 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       otherBeforeSwitcherClick: true,
       otherClearedBySwitcher: true
     }, 'pane acknowledgement must preserve backend attention while another pane waits, and switcher selection must clear the selected pane plus the backend after the final acknowledgement');
+
+    const notifyBlinkingBehavior = await evalExpr(cdp, sid, `(() => {
+      const entries = [...state.sessions.values()];
+      const active = entries[0];
+      const inactive = entries[1];
+      const originalActiveId = state.activeId;
+      const originalNotifyBlinking = state.notifyBlinking;
+      const originalHydrating = state.hydrating;
+      selectPanel(active.session.id, { persist: false });
+      setNotifyBlinking(true, { persist: false });
+      pulsePaneTitlebar(active.session.id);
+      pulsePaneTitlebar(inactive.session.id);
+      const activeTab = document.querySelector('[data-switcher-pane-id="' + active.session.id + '"]');
+      const inactiveTab = document.querySelector('[data-switcher-pane-id="' + inactive.session.id + '"]');
+      const activeHeader = active.el.querySelector('.term-header');
+      const inactiveHeader = inactive.el.querySelector('.term-header');
+      const on = {
+        select: document.getElementById('notifyBlinkingSelect').value,
+        activeTabAnimation: getComputedStyle(activeTab).animationName,
+        inactiveTabAnimation: getComputedStyle(inactiveTab).animationName,
+        activeHeaderAnimation: getComputedStyle(activeHeader).animationName
+      };
+      state.hydrating = true;
+      const select = document.getElementById('notifyBlinkingSelect');
+      select.value = 'off';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      state.hydrating = originalHydrating;
+      const off = {
+        state: state.notifyBlinking,
+        select: select.value,
+        activeTabAnimation: getComputedStyle(activeTab).animationName,
+        inactiveTabAnimation: getComputedStyle(inactiveTab).animationName,
+        activeHeaderAnimation: getComputedStyle(activeHeader).animationName,
+        inactiveHeaderAnimation: getComputedStyle(inactiveHeader).animationName,
+        activeTabFilter: getComputedStyle(activeTab).filter,
+        inactiveTabFilter: getComputedStyle(inactiveTab).filter,
+        headerPeakVisible: getComputedStyle(activeHeader).boxShadow !== 'none',
+        attentionHeld: active.responseAttention && inactive.responseAttention
+      };
+      clearResponseAttention(active.session.id);
+      clearResponseAttention(inactive.session.id);
+      setNotifyBlinking(originalNotifyBlinking, { persist: false });
+      if (state.activeId !== originalActiveId) selectPanel(originalActiveId, { persist: false });
+      return { on, off };
+    })()`);
+    assert.deepStrictEqual(notifyBlinkingBehavior.on, {
+      select: 'on',
+      activeTabAnimation: 'none',
+      inactiveTabAnimation: 'switcher-response-pulse',
+      activeHeaderAnimation: 'pane-response-pulse'
+    }, 'Notify blinking On must animate pending panes and inactive tabs while the already-active tab stays at the static peak');
+    assert.deepStrictEqual(notifyBlinkingBehavior.off, {
+      state: false,
+      select: 'off',
+      activeTabAnimation: 'none',
+      inactiveTabAnimation: 'none',
+      activeHeaderAnimation: 'none',
+      inactiveHeaderAnimation: 'none',
+      activeTabFilter: 'brightness(1.3)',
+      inactiveTabFilter: 'brightness(1.3)',
+      headerPeakVisible: true,
+      attentionHeld: true
+    }, 'Notify blinking Off must stop every animation without clearing the persistent bright attention peak');
 
     const fontSizeDropdown = await evalExpr(cdp, sid, `(async () => {
       const select = document.getElementById('fontSizeSelect');

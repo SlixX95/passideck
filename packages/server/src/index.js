@@ -63,7 +63,7 @@ const CODEX_OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 const CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 300;
 const UPLOAD_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
-const UI_STATE_DEFAULT = { revision: 0, layout: 'auto', baseLayout: 'auto', focusedId: null, primaryId: null, activeId: null, minimized: [], theme: 'blue', skin: 'neon', fontSize: 13, chromeHidden: false, systemMonitor: false, panePrefs: { titles: {}, order: [], minimized: [], windows: {}, viewport: null }, updatedAt: null };
+const UI_STATE_DEFAULT = { revision: 0, layout: 'auto', baseLayout: 'auto', focusedId: null, primaryId: null, activeId: null, minimized: [], theme: 'blue', skin: 'neon', fontSize: 13, notifyBlinking: true, chromeHidden: false, systemMonitor: false, panePrefs: { titles: {}, order: [], minimized: [], windows: {}, viewport: null }, updatedAt: null };
 
 function uiStatePath() {
   return path.join(configDir(), 'ui-state.json');
@@ -117,6 +117,7 @@ function sanitizeUiState(input) {
   if (UI_THEMES.has(src.theme)) out.theme = src.theme;
   if (UI_SKINS.has(src.skin)) out.skin = src.skin;
   out.fontSize = Math.max(10, Math.min(24, Number(src.fontSize) || UI_STATE_DEFAULT.fontSize));
+  out.notifyBlinking = src.notifyBlinking !== false;
   out.chromeHidden = Boolean(src.chromeHidden);
   out.systemMonitor = Boolean(src.systemMonitor);
   out.panePrefs = sanitizePanePrefs(src.panePrefs);

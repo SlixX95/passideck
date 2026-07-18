@@ -40,6 +40,7 @@ const state = {
   responseSoundMode: 'background',
   responseSoundTone: 'soft',
   responseSoundVolume: 60,
+  notifyBlinking: true,
   minimized: new Set(),
   responsiveMinimized: new Set(),
   saveTimer: null,
@@ -959,6 +960,7 @@ function uiPayload() {
     theme: state.theme,
     skin: state.skin,
     fontSize: state.fontSize,
+    notifyBlinking: state.notifyBlinking,
     chromeHidden: document.body.classList.contains('chrome-hidden'),
     systemMonitor: document.body.classList.contains('system-monitor-on'),
     panePrefs: state.panePrefs
@@ -1135,6 +1137,15 @@ function loadResponseSoundPrefs() {
   setResponseSoundMode(prefs.mode, { persist: false });
   setResponseSoundTone(prefs.tone, { persist: false });
   setResponseSoundVolume(prefs.volume ?? 60, { persist: false });
+}
+
+function setNotifyBlinking(enabled, opts = {}) {
+  state.notifyBlinking = Boolean(enabled);
+  document.body.classList.toggle('notify-blinking', state.notifyBlinking);
+  const select = document.getElementById('notifyBlinkingSelect');
+  if (select) select.value = state.notifyBlinking ? 'on' : 'off';
+  window.passideckDesktop?.setNotifyBlinking?.(state.notifyBlinking);
+  if (opts.persist !== false) saveUiState();
 }
 
 function shouldPlayResponseSound(id, hasDocumentFocus = document.hasFocus(), hidden = document.hidden) {
@@ -1578,6 +1589,7 @@ function applyAuthoritativeUiState(ui) {
   setTheme(ui.theme || 'green', { persist: false });
   setSkin(ui.skin || 'neon', { persist: false });
   setFontSize(ui.fontSize || state.fontSize, { persist: false });
+  setNotifyBlinking(ui.notifyBlinking !== false, { persist: false });
   setChromeHidden(Boolean(ui.chromeHidden), { persist: false, resize: false });
   setSystemMonitorVisible(Boolean(ui.systemMonitor), { persist: false });
   restorePanelOrder();
@@ -2845,6 +2857,7 @@ async function init() {
   setTheme(ui?.theme || 'green', { persist: false });
   setSkin(ui?.skin || 'neon', { persist: false });
   setFontSize(ui?.fontSize || state.fontSize, { persist: false });
+  setNotifyBlinking(ui?.notifyBlinking !== false, { persist: false });
   setChromeHidden(Boolean(ui?.chromeHidden), { persist: false, resize: false });
   setSystemMonitorVisible(Boolean(ui?.systemMonitor), { persist: false });
   startCodexLimitsPolling();
@@ -2906,6 +2919,7 @@ document.getElementById('chromePeek').onclick = toggleChrome;
 document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
 document.getElementById('skinSelect').onchange = e => setSkin(e.target.value);
 document.getElementById('fontSizeSelect').onchange = e => previewFontSize(Number(e.target.value));
+document.getElementById('notifyBlinkingSelect').onchange = e => setNotifyBlinking(e.target.value === 'on');
 document.getElementById('responseSoundModeSelect').onchange = e => setResponseSoundMode(e.target.value);
 document.getElementById('responseSoundToneSelect').onchange = e => setResponseSoundTone(e.target.value);
 document.getElementById('responseSoundVolume').oninput = e => setResponseSoundVolume(e.target.value);

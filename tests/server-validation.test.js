@@ -124,10 +124,11 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     const saved = await fetch(`${base}/api/ui-state`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...initialUi, revision: initialUi.revision, activeId: 'validation' })
+      body: JSON.stringify({ ...initialUi, revision: initialUi.revision, activeId: 'validation', notifyBlinking: false })
     });
     assert.strictEqual(saved.status, 200);
     const savedUi = await saved.json();
+    assert.strictEqual(savedUi.notifyBlinking, false, 'UI state must persist Notify blinking Off instead of dropping it during validation');
     assert.ok(savedUi.revision > initialUi.revision, 'accepted UI changes must advance the server revision');
     const eventChunk = new TextDecoder().decode((await reader.read()).value || new Uint8Array());
     assert.ok(eventChunk.includes('"activeId":"validation"') && eventChunk.includes(`"revision":${savedUi.revision}`), 'accepted UI changes must broadcast to every browser');

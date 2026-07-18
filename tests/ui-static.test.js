@@ -33,7 +33,7 @@ assert.ok(html.includes('vendor/xterm.js') && !html.includes('cdn.jsdelivr.net')
 assert.ok(html.includes("location.port === '8792' ? 'PassiDeck Dev' : 'PassiDeck'"), 'browser tab title must distinguish dev port 8792 from normal/live');
 assert.ok(!style.includes('.response-pulse { animation: none'), 'response attention must keep pulsing even when the OS requests reduced motion');
 assert.ok(!style.includes('#ff3158') && !style.includes("content: 'NEW'"), 'response attention must stay theme-colored and must not add a NEW badge');
-assert.ok(html.includes('app.js?v=20260718-dynamic-gap-docking') && html.includes('style.css?v=20260718-calm-attention-pulse'), 'client cache keys must activate dynamic gap docking and the calm recognizable response pulse after reload');
+assert.ok(html.includes('app.js?v=20260718-notify-blinking-setting') && html.includes('style.css?v=20260718-notify-blinking-setting'), 'client cache keys must activate the Notify blinking setting and static active-tab peak after reload');
 assert.ok(!html.includes('status-chip') && !html.includes('stat-active') && !html.includes('saveState'), 'window/save status chip should stay removed so launch controls start at the left edge');
 assert.ok(!style.includes('.status-chip') && !style.includes('#saveState'), 'removed window/save status chip must not leave dead CSS');
 assert.ok(!app.includes('setSaveState') && !app.includes("saveState: 'saved'"), 'removed save indicator must not leave display-only state logic');
@@ -51,6 +51,26 @@ for (const script of ['prepare', 'predev', 'preserver', 'prestart']) {
 assert.ok(html.includes('role="region" aria-labelledby="settingsTitle"'), 'settings must use non-modal region semantics');
 assert.ok(html.includes('aria-controls="settingsPanel"'), 'settings toggle must identify its controlled region');
 assert.ok(html.includes('id="fontSizeSelect"') && !html.includes('id="fontSizeSlider"'), 'terminal text size must use a visible dropdown instead of a slider');
+assert.ok(
+  html.includes('id="notifyBlinkingSelect"') &&
+  html.includes('<option value="on">On</option>') &&
+  html.includes('<option value="off">Off</option>'),
+  'Notifications settings must expose persistent Notify blinking On/Off choices'
+);
+assert.ok(
+  app.includes('notifyBlinking: true') &&
+  app.includes('notifyBlinking: state.notifyBlinking') &&
+  app.includes('function setNotifyBlinking') &&
+  app.includes('window.passideckDesktop?.setNotifyBlinking?.(state.notifyBlinking)'),
+  'Notify blinking must default on, persist in shared UI state, and synchronize the Electron shell'
+);
+assert.ok(
+  style.includes('.term-header.response-pulse {') &&
+  style.includes('.switcher-btn.response-pulse {') &&
+  style.includes('body.notify-blinking .term-header.response-pulse') &&
+  style.includes('body.notify-blinking .switcher-btn.response-pulse:not(.active)'),
+  'pending responses must keep a static peak while animation is gated by the setting and never runs on the active tab'
+);
 for (const section of ['Appearance', 'Terminal', 'Notifications', 'Interface']) assert.ok(html.includes(`>${section}</h2>`), `settings must keep the ${section} section`);
 assert.ok(style.includes('.settings-group') && style.includes('max-height: calc(100dvh - 44px)'), 'settings must stay grouped and viewport-bounded');
 assert.ok(app.includes('function previewFontSize') && app.includes('setTimeout(() => setFontSize(size), 250)'), 'font-size selection must apply live after the intent delay');
