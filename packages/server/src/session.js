@@ -10,6 +10,9 @@ class Session {
     this.pid = null;
     this.clients = new Set();
     this._outputBuffer = '';
+    this._hermesCompletionBaselineAt = Date.now() / 1000;
+    this._hermesCompletionSessionId = null;
+    this._hermesCompletionMessageId = 0;
     this.meta = {
       label: options.label || options.command || 'Terminal',
       command: options.command || '',

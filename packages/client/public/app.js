@@ -2644,7 +2644,7 @@ function createPanel(session, opts = {}) {
   const hasSnapshot = hasTerminalSnapshot(id);
   state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, arrangeCleanup: dismissArrange, restored: hasSnapshot, snapshotTimer: null, titleSource: '', lastSentCols: 0, lastSentRows: 0 });
   term.onWriteParsed?.(() => refreshTitleFromTerminal(id));
-  term.onBell?.(() => notifyResponseComplete(id));
+
   if (state.minimized.has(id)) el.classList.add('minimized');
   const replaceId = opts.replaceId;
   const replaceIndex = replaceId ? state.order.indexOf(replaceId) : -1;
@@ -2773,6 +2773,7 @@ function attachSocket(id, term, el) {
     }
     const entry = state.sessions.get(id);
     if (msg.type === 'meta') applySessionMeta(id, msg.session);
+    if (msg.type === 'response-complete') notifyResponseComplete(id);
     if (msg.type === 'replay') {
       // The server intentionally does not replay PTY history anymore. Do not print its
       // reconnect marker into the terminal: that visibly changes shell contents on every
