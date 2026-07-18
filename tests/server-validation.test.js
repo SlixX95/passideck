@@ -22,7 +22,13 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 (async () => {
   try {
-    const { createServer, syncHermesTitles, parseCodexLimits, readHermesCodexAuth, saveHermesCodexAuth } = require('../packages/server/src/index');
+    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, parseCodexLimits, readHermesCodexAuth, saveHermesCodexAuth } = require('../packages/server/src/index');
+    assert.strictEqual(
+      hermesResumeIdFromArgv(['/venv/bin/python3', '/venv/bin/hermes', '--resume', '20260716_180100_5dbdcf']),
+      '20260716_180100_5dbdcf',
+      'the active Hermes resume id must be parsed from the real Python launcher argv shape'
+    );
+    assert.strictEqual(hermesResumeIdFromArgv(['/bin/bash']), null, 'ordinary shell panes must not be treated as resumed Hermes sessions');
     const weeklyOnly = parseCodexLimits({
       rate_limit: {
         primary_window: { used_percent: 13, limit_window_seconds: 604800, reset_at: 1784672642 }
@@ -74,6 +80,26 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.strictEqual(syncHermesTitles(app.sessions, hermesDb), 1, 'restart recovery must restore the latest non-empty title');
     assert.strictEqual(session.meta.title, 'Canonical Hermes Title');
     assert.strictEqual(session.meta.hermesSessionId, 'hermes-1');
+
+    hermesDb.prepare('INSERT INTO sessions (id, source, started_at, title) VALUES (?, ?, ?, ?)').run('hermes-resumed', 'passideck:former-pane', 3, 'Resumed Session Title');
+    session.meta.title = '';
+    session.meta.hermesSessionId = null;
+    assert.strictEqual(
+      syncHermesTitles(app.sessions, hermesDb, () => 'hermes-resumed'),
+      1,
+      'an active hermes --resume session must resolve by its exact session id even after the PassiDeck pane id changes'
+    );
+    assert.strictEqual(session.meta.title, 'Resumed Session Title');
+    assert.strictEqual(session.meta.hermesSessionId, 'hermes-resumed');
+
+    hermesDb.prepare('INSERT INTO sessions (id, source, started_at, title) VALUES (?, ?, ?, ?)').run('hermes-resumed-blank', 'passideck:former-pane', 4, null);
+    assert.strictEqual(
+      syncHermesTitles(app.sessions, hermesDb, () => 'hermes-resumed-blank'),
+      0,
+      'an active resumed session without a generated title must not erase the visible title'
+    );
+    assert.strictEqual(session.meta.title, 'Resumed Session Title');
+    assert.strictEqual(session.meta.hermesSessionId, 'hermes-resumed');
     hermesDb.close();
     await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
     const port = app.server.address().port;

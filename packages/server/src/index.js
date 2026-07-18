@@ -592,24 +592,72 @@ function openHermesStateDb(dbPath) {
   catch (err) { console.warn('[hermes-title] state DB unavailable:', err.message); return null; }
 }
 
-function syncHermesTitles(sessions, hermesDb) {
+function hermesResumeIdFromArgv(argv) {
+  const hermesIndex = argv.findIndex(arg => path.basename(String(arg)) === 'hermes');
+  if (hermesIndex < 0) return null;
+  for (let i = hermesIndex + 1; i < argv.length; i += 1) {
+    const arg = String(argv[i]);
+    const candidate = arg === '--resume' || arg === '-r'
+      ? String(argv[i + 1] || '')
+      : (arg.startsWith('--resume=') ? arg.slice('--resume='.length) : '');
+    if (candidate && /^[A-Za-z0-9_.:-]{1,160}$/.test(candidate)) return candidate;
+  }
+  return null;
+}
+
+function activeHermesResumeId(session) {
+  const name = String(session?.tmuxName || '');
+  if (!name || process.platform !== 'linux') return null;
+
+  let panePid;
+  try {
+    panePid = Number(String(execFileSync(TMUX_CMD, tmuxArgs(['list-panes', '-t', name, '-F', '#{pane_pid}']), { encoding: 'utf8' })).trim().split(/\s+/)[0]);
+  } catch { return null; }
+  if (!Number.isInteger(panePid) || panePid < 2) return null;
+
+  const queue = [panePid];
+  const seen = new Set();
+  while (queue.length && seen.size < 256) {
+    const pid = queue.shift();
+    if (seen.has(pid)) continue;
+    seen.add(pid);
+    let argv = [];
+    try {
+      argv = fs.readFileSync(`/proc/${pid}/cmdline`).toString('utf8').split('\0').filter(Boolean);
+    } catch {}
+    const resumedId = hermesResumeIdFromArgv(argv);
+    if (resumedId) return resumedId;
+    try {
+      const children = fs.readFileSync(`/proc/${pid}/task/${pid}/children`, 'utf8').trim().split(/\s+/).filter(Boolean).map(Number);
+      for (const child of children) if (Number.isInteger(child) && child > 1) queue.push(child);
+    } catch {}
+  }
+  return null;
+}
+
+function syncHermesTitles(sessions, hermesDb, resolveActiveSessionId = activeHermesResumeId) {
   if (!hermesDb) return 0;
   let findLatest;
+  let findById;
   try {
     findLatest = hermesDb.prepare("SELECT id, title FROM sessions WHERE source = ? AND TRIM(COALESCE(title, '')) <> '' ORDER BY started_at DESC LIMIT 1");
+    findById = hermesDb.prepare('SELECT id, title FROM sessions WHERE id = ? LIMIT 1');
   } catch (err) {
     console.warn('[hermes-title] title query unavailable:', err.message);
     return 0;
   }
   let changed = 0;
   for (const session of sessions.sessions.values()) {
-    const row = findLatest.get(hermesSource(session.id));
+    const activeId = resolveActiveSessionId(session);
+    const activeRow = activeId ? findById.get(activeId) : null;
+    if (activeRow && !String(activeRow.title || '').trim()) continue;
+    const row = activeRow || findLatest.get(hermesSource(session.id));
     if (!row) continue;
     const title = String(row.title || '').trim().slice(0, 160);
-    if (!title) continue;
-    if (session.meta.hermesSessionId === row.id && session.meta.title === title) continue;
+    if (session.meta.hermesSessionId === row.id && String(session.meta.title || '') === title) continue;
     session.meta.hermesSessionId = row.id;
-    session.meta.title = title;
+    if (title) session.meta.title = title;
+    else delete session.meta.title;
     session.broadcast({ type: 'meta', session: session.toJSON() });
     changed += 1;
   }
@@ -862,7 +910,7 @@ function createServer(config = loadConfig()) {
   return { app, server, wss, sessions, close };
 }
 
-module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, saveHermesCodexAuth, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, UPLOAD_MIME_ALLOWLIST };
+module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, saveHermesCodexAuth, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, UPLOAD_MIME_ALLOWLIST };
 
 if (require.main === module) {
   const config = loadConfig();
