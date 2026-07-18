@@ -1527,7 +1527,21 @@ function installTerminalDragSelection(termEl, term, session) {
   let start = null;
   let origin = null;
   let replaying = false;
+  let suspendedMouse = null;
   const isTui = () => isHermesTuiEntry({ session });
+  const suspendMouse = () => {
+    const service = term?._core?.coreMouseService;
+    if (!service || service.activeProtocol === 'NONE') return;
+    suspendedMouse = { service, protocol: service.activeProtocol, encoding: service.activeEncoding };
+    service.activeProtocol = 'NONE';
+  };
+  const resumeMouse = () => {
+    if (!suspendedMouse) return;
+    suspendedMouse.service.activeEncoding = suspendedMouse.encoding;
+    suspendedMouse.service.activeProtocol = suspendedMouse.protocol;
+    suspendedMouse = null;
+  };
+  term.__passideckResumeMouse = resumeMouse;
   const block = event => {
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -1541,18 +1555,25 @@ function installTerminalDragSelection(termEl, term, session) {
       row: Math.max(0, Math.min(term.rows - 1, Math.floor((event.clientY - rect.top) / (rect.height / term.rows))))
     };
   };
-  termEl.addEventListener('pointerdown', event => {
-    if (event.button !== 0 || !isTui()) return;
+  window.addEventListener('pointerdown', event => {
+    if (event.button !== 0 || !termEl.contains(event.target) || !isTui()) return;
     start = cell(event);
     origin = { target: event.target, clientX: event.clientX, clientY: event.clientY };
-    if (start) block(event);
+    if (start) {
+      suspendMouse();
+      block(event);
+    }
   }, true);
-  termEl.addEventListener('pointermove', event => {
+  window.addEventListener('pointermove', event => {
     if (start && !replaying) block(event);
   }, true);
-  termEl.addEventListener('pointerup', event => {
+  window.addEventListener('pointerup', event => {
     const end = start && cell(event);
-    if (!start || !end) return void (start = origin = null);
+    if (!start || !end) {
+      start = origin = null;
+      resumeMouse();
+      return;
+    }
     block(event);
     const first = start.row < end.row || (start.row === end.row && start.col <= end.col) ? start : end;
     const last = first === start ? end : start;
@@ -1566,6 +1587,7 @@ function installTerminalDragSelection(termEl, term, session) {
     }
     term.clearSelection();
     term.focus();
+    resumeMouse();
     replaying = true;
     const options = { button: 0, buttons: 1, clientX: origin.clientX, clientY: origin.clientY, bubbles: true, cancelable: true };
     origin.target.dispatchEvent(new MouseEvent('mousedown', options));
@@ -1574,11 +1596,14 @@ function installTerminalDragSelection(termEl, term, session) {
     origin = null;
   }, true);
   for (const type of ['mousedown', 'mousemove', 'mouseup']) {
-    termEl.addEventListener(type, event => {
+    window.addEventListener(type, event => {
       if (start && !replaying) block(event);
     }, true);
   }
-  termEl.addEventListener('pointercancel', () => { start = origin = null; }, true);
+  window.addEventListener('pointercancel', () => {
+    start = origin = null;
+    resumeMouse();
+  }, true);
 }
 
 function installTerminalWheelScroll(termEl, term, session = null) {
@@ -1588,7 +1613,11 @@ function installTerminalWheelScroll(termEl, term, session = null) {
     const isHermes = /\bhermes\b/.test(command);
     const isHermesTui = /\bhermes\b[^\n]*\s--tui\b/.test(command);
     if (e.ctrlKey) return true;
-    if (isHermesTui) return true;
+    if (isHermesTui) {
+      term.clearSelection();
+      term.__passideckResumeMouse?.();
+      return true;
+    }
     const buffer = term.buffer?.active;
     if (buffer?.type === 'alternate') return true;
     if (!buffer || buffer.baseY <= 0) {
@@ -1613,7 +1642,11 @@ function installTerminalWheelScroll(termEl, term, session = null) {
     const isHermes = /\bhermes\b/.test(command);
     const isHermesTui = /\bhermes\b[^\n]*\s--tui\b/.test(command);
     if (!isHermes || e.ctrlKey) return;
-    if (isHermesTui) return;
+    if (isHermesTui) {
+      term.clearSelection();
+      term.__passideckResumeMouse?.();
+      return;
+    }
     const buffer = term.buffer?.active;
     if (buffer?.type === 'alternate') return;
     if (!buffer || buffer.baseY <= 0) {
@@ -3134,7 +3167,10 @@ async function copyTextToClipboard(text) {
 }
 
 function clearCopiedSelection(entry) {
-  if (entry?.term) entry.term.clearSelection();
+  if (entry?.term) {
+    entry.term.clearSelection();
+    entry.term.__passideckResumeMouse?.();
+  }
   window.getSelection?.()?.removeAllRanges();
 }
 

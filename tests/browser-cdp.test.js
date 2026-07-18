@@ -2022,6 +2022,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const y = rect.top + cellHeight / 2;
       const x1 = rect.left + cellWidth;
       const x2 = rect.left + cellWidth * 18;
+      const mouseProtocolBeforeDrag = entry.term._core.coreMouseService.activeProtocol;
       screen.dispatchEvent(new PointerEvent('pointerdown', { button: 0, buttons: 1, clientX: x1, clientY: y, bubbles: true, cancelable: true }));
       screen.dispatchEvent(new MouseEvent('mousedown', { button: 0, buttons: 1, clientX: x1, clientY: y, bubbles: true, cancelable: true }));
       screen.dispatchEvent(new PointerEvent('pointermove', { button: 0, buttons: 1, clientX: x2, clientY: y, bubbles: true, cancelable: true }));
@@ -2029,12 +2030,18 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       screen.dispatchEvent(new PointerEvent('pointerup', { button: 0, buttons: 0, clientX: x2, clientY: y, bubbles: true, cancelable: true }));
       screen.dispatchEvent(new MouseEvent('mouseup', { button: 0, buttons: 0, clientX: x2, clientY: y, bubbles: true, cancelable: true }));
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-      const out = { selection: entry.term.getSelection(), mouseData: mouseData.length };
+      const out = {
+        selection: entry.term.getSelection(),
+        mouseData: mouseData.length,
+        mouseProtocolBeforeDrag,
+        mouseProtocol: entry.term._core.coreMouseService.activeProtocol
+      };
       dataListener.dispose();
       return out;
     })()`);
     assert.ok(tuiDragSelection.selection.includes('drag-to-copy'), `plain left-drag in Hermes TUI must visibly select copyable terminal text: ${JSON.stringify(tuiDragSelection)}`);
     assert.strictEqual(tuiDragSelection.mouseData, 0, `text drag must not leak mouse events into Hermes TUI and redraw away the selection: ${JSON.stringify(tuiDragSelection)}`);
+    assert.strictEqual(tuiDragSelection.mouseProtocol, 'NONE', `mouse reporting must stay suspended while the copy selection is visible: ${JSON.stringify(tuiDragSelection)}`);
 
     const tuiKeyboardCopy = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
@@ -2044,10 +2051,15 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', code: 'KeyC', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }));
       await new Promise(r => setTimeout(r, 0));
       delete window.passideckDesktop;
-      return { copied, selection: entry.term.getSelection() };
+      return {
+        copied,
+        selection: entry.term.getSelection(),
+        mouseProtocol: entry.term._core.coreMouseService.activeProtocol
+      };
     })()`);
     assert.ok(tuiKeyboardCopy.copied[0]?.includes('drag-to-copy'), `Ctrl+Shift+C must copy the visible TUI selection through the desktop bridge: ${JSON.stringify(tuiKeyboardCopy)}`);
     assert.strictEqual(tuiKeyboardCopy.selection, '', `copy must clear the visible TUI selection: ${JSON.stringify(tuiKeyboardCopy)}`);
+    assert.strictEqual(tuiKeyboardCopy.mouseProtocol, tuiDragSelection.mouseProtocolBeforeDrag, `copy must restore Hermes TUI mouse reporting after clearing the selection: ${JSON.stringify({ tuiDragSelection, tuiKeyboardCopy })}`);
 
     const tuiClick = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
@@ -2056,15 +2068,59 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const mouseData = [];
       const listener = entry.term.onData(data => { if (data.includes('\\x1b[<')) mouseData.push(data); });
       const x = rect.left + rect.width / entry.term.cols * 4;
+      const x2 = rect.left + rect.width / entry.term.cols * 9;
       const y = rect.top + rect.height / entry.term.rows * 2;
+      screen.dispatchEvent(new PointerEvent('pointerdown', { button: 0, buttons: 1, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+      screen.dispatchEvent(new PointerEvent('pointermove', { button: 0, buttons: 1, clientX: x2, clientY: y, bubbles: true, cancelable: true }));
+      screen.dispatchEvent(new PointerEvent('pointerup', { button: 0, buttons: 0, clientX: x2, clientY: y, bubbles: true, cancelable: true }));
+      const protocolDuringSelection = entry.term._core.coreMouseService.activeProtocol;
       screen.dispatchEvent(new PointerEvent('pointerdown', { button: 0, buttons: 1, clientX: x, clientY: y, bubbles: true, cancelable: true }));
       screen.dispatchEvent(new PointerEvent('pointerup', { button: 0, buttons: 0, clientX: x, clientY: y, bubbles: true, cancelable: true }));
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
       listener.dispose();
-      return { mouseData: mouseData.length, selection: entry.term.getSelection() };
+      return {
+        mouseData: mouseData.length,
+        selection: entry.term.getSelection(),
+        protocolDuringSelection,
+        mouseProtocol: entry.term._core.coreMouseService.activeProtocol
+      };
     })()`);
     assert.ok(tuiClick.mouseData > 0, `a plain TUI click must still reach Hermes after drag-selection handling: ${JSON.stringify(tuiClick)}`);
     assert.strictEqual(tuiClick.selection, '', `a click must not leave a one-character terminal selection: ${JSON.stringify(tuiClick)}`);
+    assert.strictEqual(tuiClick.protocolDuringSelection, 'NONE', `a drag before a plain click must suspend TUI mouse reporting: ${JSON.stringify(tuiClick)}`);
+    assert.strictEqual(tuiClick.mouseProtocol, tuiDragSelection.mouseProtocolBeforeDrag, `a plain click must restore TUI mouse reporting: ${JSON.stringify(tuiClick)}`);
+
+    const tuiWheelAfterSelection = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const screen = entry.el.querySelector('.xterm-screen');
+      const rect = screen.getBoundingClientRect();
+      const cellWidth = rect.width / entry.term.cols;
+      const cellHeight = rect.height / entry.term.rows;
+      const x1 = rect.left + cellWidth * 4;
+      const x2 = rect.left + cellWidth * 9;
+      const y = rect.top + cellHeight * 2;
+      screen.dispatchEvent(new PointerEvent('pointerdown', { button: 0, buttons: 1, clientX: x1, clientY: y, bubbles: true, cancelable: true }));
+      screen.dispatchEvent(new PointerEvent('pointermove', { button: 0, buttons: 1, clientX: x2, clientY: y, bubbles: true, cancelable: true }));
+      screen.dispatchEvent(new PointerEvent('pointerup', { button: 0, buttons: 0, clientX: x2, clientY: y, bubbles: true, cancelable: true }));
+      const protocolDuringSelection = entry.term._core.coreMouseService.activeProtocol;
+      const mouseData = [];
+      const listener = entry.term.onData(data => { if (data.includes('\\x1b[<')) mouseData.push(data); });
+      screen.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true, clientX: x1, clientY: y }));
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      listener.dispose();
+      return {
+        mouseData: mouseData.length,
+        selection: entry.term.getSelection(),
+        protocolDuringSelection,
+        mouseProtocol: entry.term._core.coreMouseService.activeProtocol
+      };
+    })()`);
+    assert.deepStrictEqual(tuiWheelAfterSelection, {
+      mouseData: 1,
+      selection: '',
+      protocolDuringSelection: 'NONE',
+      mouseProtocol: tuiDragSelection.mouseProtocolBeforeDrag
+    }, `TUI wheel must clear the copy selection, restore mouse reporting and reach Hermes: ${JSON.stringify(tuiWheelAfterSelection)}`);
 
     const reloadedTuiMouseMode = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
