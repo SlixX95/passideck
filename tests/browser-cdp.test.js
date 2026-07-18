@@ -985,7 +985,12 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const switcher = document.querySelector('[data-switcher-pane-id="' + entries[0].session.id + '"]');
       const immediate = header.classList.contains('response-pulse');
       const immediateTab = switcher.classList.contains('response-pulse');
-      const tabIterations = getComputedStyle(switcher).animationIterationCount;
+      const headerStyle = getComputedStyle(header);
+      const tabStyle = getComputedStyle(switcher);
+      const tabIterations = tabStyle.animationIterationCount;
+      const headerDuration = headerStyle.animationDuration;
+      const tabDuration = tabStyle.animationDuration;
+      const newBadge = getComputedStyle(header, '::after').content;
       await new Promise(resolve => setTimeout(resolve, 1700));
       const persistent = header.classList.contains('response-pulse');
       const persistentTab = switcher.classList.contains('response-pulse');
@@ -1000,6 +1005,9 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         immediate,
         immediateTab,
         tabIterations,
+        headerDuration,
+        tabDuration,
+        newBadge,
         persistent,
         persistentTab,
         cleared: !header.classList.contains('response-pulse'),
@@ -1017,6 +1025,9 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       immediate: true,
       immediateTab: true,
       tabIterations: 'infinite',
+      headerDuration: '0.9s',
+      tabDuration: '0.9s',
+      newBadge: '"NEW"',
       persistent: true,
       persistentTab: true,
       cleared: true,
