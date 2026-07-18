@@ -33,7 +33,7 @@ assert.ok(html.includes('vendor/xterm.js') && !html.includes('cdn.jsdelivr.net')
 assert.ok(html.includes("location.port === '8792' ? 'PassiDeck Dev' : 'PassiDeck'"), 'browser tab title must distinguish dev port 8792 from normal/live');
 assert.ok(!style.includes('.response-pulse { animation: none'), 'response attention must keep pulsing even when the OS requests reduced motion');
 assert.ok(!style.includes('#ff3158') && !style.includes("content: 'NEW'"), 'response attention must stay theme-colored and must not add a NEW badge');
-assert.ok(html.includes('app.js?v=20260718-desktop-state-safe') && html.includes('style.css?v=20260718-desktop-state-safe'), 'client cache keys must activate conflict-safe desktop persistence and native TUI wheel routing');
+assert.ok(html.includes('app.js?v=20260718-tui-resize-wheel') && html.includes('style.css?v=20260718-tui-resize-wheel'), 'client cache keys must activate conflict-safe desktop persistence and resize-safe native TUI wheel routing');
 assert.ok(html.includes('id="desktopSwitcher"') && html.includes('id="addDesktop"'), 'multi-desktop controls must be present in the shared browser/Electron renderer');
 assert.ok(app.includes('handleDesktopShortcut') && app.includes('movePaneToDesktop') && app.includes('DESKTOP_VIEW_KEY'), 'desktop switching, pane movement and per-window local selection must stay wired');
 assert.ok(app.includes("window.addEventListener('pagehide', flushUiState)") && app.includes('UI_DRAFT_KEY'), 'page exit must retain unsaved desktop state without racing an in-flight revision');
