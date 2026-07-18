@@ -33,7 +33,7 @@ assert.ok(html.includes('vendor/xterm.js') && !html.includes('cdn.jsdelivr.net')
 assert.ok(html.includes("location.port === '8792' ? 'PassiDeck Dev' : 'PassiDeck'"), 'browser tab title must distinguish dev port 8792 from normal/live');
 assert.ok(!style.includes('.response-pulse { animation: none'), 'response attention must keep pulsing even when the OS requests reduced motion');
 assert.ok(!style.includes('#ff3158') && !style.includes("content: 'NEW'"), 'response attention must stay theme-colored and must not add a NEW badge');
-assert.ok(html.includes('app.js?v=20260718-tui-reload-mouse') && html.includes('style.css?v=20260718-tui-reload-mouse'), 'client cache keys must activate TUI titles, hidden scrollbars and reload-safe mouse tracking');
+assert.ok(html.includes('app.js?v=20260718-tui-copy-scrollbar') && html.includes('style.css?v=20260718-tui-copy-scrollbar'), 'client cache keys must activate TUI drag/copy, wheel routing and outer scrollbar containment');
 assert.ok(app.includes("el.classList.toggle('hermes-tui', isHermesTuiEntry({ session }))"), 'Hermes TUI panes must carry a narrow styling hook');
 assert.ok(style.includes('.term-panel.hermes-tui .xterm-viewport') && style.includes('scrollbar-width: none'), 'Hermes TUI panes must hide xterm scrollbars without disabling TUI scrolling');
 assert.ok(html.includes('id="desktopSwitcher"') && html.includes('id="addDesktop"'), 'multi-desktop controls must be present in the shared browser/Electron renderer');

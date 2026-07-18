@@ -1523,6 +1523,33 @@ function scheduleTerminalFit(opts = {}) {
   });
 }
 
+function installTerminalDragSelection(termEl, term, session) {
+  let start = null;
+  const cell = event => {
+    const screen = termEl.querySelector('.xterm-screen');
+    const rect = screen?.getBoundingClientRect();
+    if (!rect?.width || !rect?.height) return null;
+    return {
+      col: Math.max(0, Math.min(term.cols - 1, Math.floor((event.clientX - rect.left) / (rect.width / term.cols)))),
+      row: Math.max(0, Math.min(term.rows - 1, Math.floor((event.clientY - rect.top) / (rect.height / term.rows))))
+    };
+  };
+  termEl.addEventListener('pointerdown', event => {
+    if (event.button === 0 && isHermesTuiEntry({ session })) start = cell(event);
+  }, true);
+  termEl.addEventListener('pointerup', event => {
+    const end = start && cell(event);
+    if (!start || !end) return void (start = null);
+    const first = start.row < end.row || (start.row === end.row && start.col <= end.col) ? start : end;
+    const last = first === start ? end : start;
+    start = null;
+    const length = (last.row - first.row) * term.cols + last.col - first.col + 1;
+    if (length < 2) return;
+    term.select(first.col, (term.buffer.active.viewportY || 0) + first.row, length);
+  }, true);
+  termEl.addEventListener('pointercancel', () => { start = null; }, true);
+}
+
 function installTerminalWheelScroll(termEl, term, session = null) {
   let wheelRemainder = 0;
   term.attachCustomWheelEventHandler?.(e => {
@@ -2531,6 +2558,7 @@ function createPanel(session, opts = {}) {
   const termEl = el.querySelector('.terminal');
   term.open(termEl);
   installTerminalWheelScroll(termEl, term, session);
+  installTerminalDragSelection(termEl, term, session);
 
   const ro = new ResizeObserver(() => {
     scheduleTerminalFit();
@@ -3057,8 +3085,9 @@ function terminalEntryForTarget(target) {
   return panel ? state.sessions.get(panel.dataset.paneId) : null;
 }
 
-function copyTextToClipboard(text) {
+async function copyTextToClipboard(text) {
   if (!text) return false;
+  if (window.passideckDesktop?.copyText) return Boolean(await window.passideckDesktop.copyText(text));
   const previousFocus = document.activeElement;
   const helper = document.createElement('textarea');
   helper.value = text;
@@ -3078,13 +3107,35 @@ function clearCopiedSelection(entry) {
   window.getSelection?.()?.removeAllRanges();
 }
 
-async function handleTerminalContextMenu(event) {
-  const entry = terminalEntryForTarget(event.target);
-  const text = entry?.term?.getSelection?.() || window.getSelection?.()?.toString() || '';
-  if (!entry || !text) return;
+function clearHermesTuiSelection(entry) {
+  if (!isHermesTuiEntry(entry) || entry.ws?.readyState !== WebSocket.OPEN) return;
+  entry.ws.send(JSON.stringify({ type: 'input', data: '\x1b' }));
+}
+
+async function copyTerminalSelection(entry) {
+  const text = entry?.term?.getSelection?.() || '';
+  if (!text || !await copyTextToClipboard(text)) return false;
+  clearCopiedSelection(entry);
+  clearHermesTuiSelection(entry);
+  return true;
+}
+
+function handleTerminalCopyShortcut(event) {
+  const key = String(event.key || '').toLowerCase();
+  if (key !== 'c' || !(event.ctrlKey || event.metaKey) || event.altKey) return;
+  const entry = terminalEntryForTarget(event.target) || activeTerminalEntry();
+  if (!entry?.term?.getSelection?.()) return;
   event.preventDefault();
   event.stopImmediatePropagation();
-  if (await copyTextToClipboard(text)) clearCopiedSelection(entry);
+  void copyTerminalSelection(entry);
+}
+
+async function handleTerminalContextMenu(event) {
+  const entry = terminalEntryForTarget(event.target);
+  if (!entry || !entry.term?.getSelection?.()) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  await copyTerminalSelection(entry);
 }
 
 function readFileAsDataUrl(file) {
@@ -3417,6 +3468,7 @@ document.getElementById('closeModal').addEventListener('click', e => {
 
 document.addEventListener('keydown', handleCloseModalKeydown, true);
 document.addEventListener('keydown', letBrowserOwnTerminalPasteShortcut, true);
+document.addEventListener('keydown', handleTerminalCopyShortcut, true);
 document.addEventListener('paste', handleTerminalPaste, true);
 document.addEventListener('contextmenu', handleTerminalContextMenu, true);
 document.addEventListener('dragover', handleUploadDragOver, true);

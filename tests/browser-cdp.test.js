@@ -1999,6 +1999,48 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.strictEqual(tuiScrollbar.firefox, 'none', `Hermes TUI xterm scrollbar must stay hidden after resize: ${JSON.stringify(tuiScrollbar)}`);
     assert.strictEqual(tuiScrollbar.webkit, 'none', `Hermes TUI WebKit scrollbar must stay hidden after resize: ${JSON.stringify(tuiScrollbar)}`);
 
+    const outerScrollbar = await evalExpr(cdp, sid, `(() => ({
+      htmlOverflow: getComputedStyle(document.documentElement).overflow,
+      bodyOverflow: getComputedStyle(document.body).overflow,
+      widthFits: document.documentElement.scrollWidth <= innerWidth,
+      heightFits: document.documentElement.scrollHeight <= innerHeight
+    }))()`);
+    assert.deepStrictEqual(outerScrollbar, { htmlOverflow: 'hidden', bodyOverflow: 'hidden', widthFits: true, heightFits: true }, `window resize must never expose a second browser/Electron scrollbar: ${JSON.stringify(outerScrollbar)}`);
+
+    const tuiDragSelection = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      entry.session.meta.command = 'hermes --tui';
+      entry.term.reset();
+      await new Promise(resolve => entry.term.write('drag-to-copy-this-text\\r\\n', resolve));
+      const termEl = entry.el.querySelector('.terminal');
+      const screen = termEl.querySelector('.xterm-screen');
+      const rect = screen.getBoundingClientRect();
+      const cellWidth = rect.width / entry.term.cols;
+      const cellHeight = rect.height / entry.term.rows;
+      const y = rect.top + cellHeight / 2;
+      const x1 = rect.left + cellWidth;
+      const x2 = rect.left + cellWidth * 18;
+      termEl.dispatchEvent(new PointerEvent('pointerdown', { button: 0, buttons: 1, clientX: x1, clientY: y, bubbles: true, cancelable: true }));
+      termEl.dispatchEvent(new PointerEvent('pointermove', { button: 0, buttons: 1, clientX: x2, clientY: y, bubbles: true, cancelable: true }));
+      termEl.dispatchEvent(new PointerEvent('pointerup', { button: 0, buttons: 0, clientX: x2, clientY: y, bubbles: true, cancelable: true }));
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      return entry.term.getSelection();
+    })()`);
+    assert.ok(tuiDragSelection.includes('drag-to-copy'), `plain left-drag in Hermes TUI must visibly select copyable terminal text: ${JSON.stringify(tuiDragSelection)}`);
+
+    const tuiKeyboardCopy = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const copied = [];
+      window.passideckDesktop = { copyText: async text => { copied.push(text); return true; } };
+      const textarea = entry.el.querySelector('.xterm-helper-textarea');
+      textarea.dispatchEvent(new KeyboardEvent('keydown', { key: 'c', code: 'KeyC', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true }));
+      await new Promise(r => setTimeout(r, 0));
+      delete window.passideckDesktop;
+      return { copied, selection: entry.term.getSelection() };
+    })()`);
+    assert.ok(tuiKeyboardCopy.copied[0]?.includes('drag-to-copy'), `Ctrl+Shift+C must copy the visible TUI selection through the desktop bridge: ${JSON.stringify(tuiKeyboardCopy)}`);
+    assert.strictEqual(tuiKeyboardCopy.selection, '', `copy must clear the visible TUI selection: ${JSON.stringify(tuiKeyboardCopy)}`);
+
     const reloadedTuiMouseMode = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
       const oldCommand = entry.session.meta.command;
