@@ -7,9 +7,14 @@ const { normalizeBackend, normalizeConfig, normalizeUrl } = require('./backend-p
 const LEGACY_DEV_URL = 'http://42.69.42.44:8792/';
 const DEFAULT_URL = 'http://42.69.42.44:8791/';
 const TITLEBAR_HEIGHT = 30;
+const RESIZE_BORDER = process.platform === 'win32' ? 6 : 0;
+const RESIZE_DIRECTIONS = new Set(['top', 'right', 'bottom', 'left', 'top-left', 'top-right', 'bottom-left', 'bottom-right']);
+const MIN_WINDOW_WIDTH = 800;
+const MIN_WINDOW_HEIGHT = 500;
 let mainWindow;
 let config;
 let dialogOpen = false;
+let resizeDrag = null;
 const backendViews = new Map();
 
 function configPath() {
@@ -62,7 +67,9 @@ function shellState() {
         attentionAt: entry?.attentionAt || 0,
         responsePulse: Boolean(entry?.responsePulse),
         hiddenDesktopAttention: Boolean(entry?.hiddenDesktopAttention),
-        notifyBlinking: entry?.notifyBlinking ?? config.notifyBlinking
+        notifyBlinking: entry?.notifyBlinking ?? config.notifyBlinking,
+        transparencyMode: entry?.transparencyMode || 'off',
+        transparencyOpacity: entry?.transparencyOpacity || 78
       };
     })
   };
@@ -114,7 +121,12 @@ function fitActiveView() {
   const view = activeView();
   if (!view || !mainWindow || dialogOpen) return;
   const [width, height] = mainWindow.getContentSize();
-  view.setBounds({ x: 0, y: TITLEBAR_HEIGHT, width, height: Math.max(0, height - TITLEBAR_HEIGHT) });
+  view.setBounds({
+    x: RESIZE_BORDER,
+    y: TITLEBAR_HEIGHT,
+    width: Math.max(0, width - (RESIZE_BORDER * 2)),
+    height: Math.max(0, height - TITLEBAR_HEIGHT - RESIZE_BORDER)
+  });
 }
 
 function setDialogOpen(open) {
@@ -145,6 +157,31 @@ function setGlobalSoundEnabled(enabled) {
   writeConfig();
   notifyShell();
   return shellState();
+}
+
+function normalizeTransparency(value) {
+  return {
+    mode: ['off', 'desktop', 'full'].includes(value?.mode) ? value.mode : 'off',
+    opacity: Math.max(35, Math.min(95, Math.round(Number(value?.opacity) || 78)))
+  };
+}
+
+function applyActiveTransparency() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const entry = backendViews.get(config.activeBackendId);
+  const normalized = normalizeTransparency(entry || {});
+  mainWindow.webContents.send('passideck:transparency-changed', normalized);
+}
+
+function setBackendTransparency(event, value) {
+  const id = backendIdForSender(event);
+  const entry = backendViews.get(id);
+  if (!entry) return;
+  const normalized = normalizeTransparency(value);
+  entry.transparencyMode = normalized.mode;
+  entry.transparencyOpacity = normalized.opacity;
+  if (id === config.activeBackendId) applyActiveTransparency();
+  notifyShell();
 }
 
 async function setNotifyBlinking(event, enabled) {
@@ -194,9 +231,9 @@ function createBackendView(backend) {
       sandbox: true
     }
   });
-  const entry = { view, status: 'loading', notifyBlinking: config.notifyBlinking };
+  const entry = { view, status: 'loading', notifyBlinking: config.notifyBlinking, transparencyMode: 'off', transparencyOpacity: 78 };
   backendViews.set(backend.id, entry);
-  view.setBackgroundColor('#020505');
+  view.setBackgroundColor('#00000000');
   view.webContents.setAudioMuted(!config.globalSoundEnabled);
   view.webContents.on('dom-ready', () => { void view.webContents.insertCSS('#chromePeek { display: none !important; }'); });
   view.webContents.on('did-start-loading', () => setViewStatus(backend.id, 'loading'));
@@ -237,6 +274,7 @@ function selectBackend(id) {
   }
   writeConfig();
   notifyShell();
+  applyActiveTransparency();
   return shellState();
 }
 
@@ -280,6 +318,41 @@ function assertShellSender(event) {
   }
 }
 
+function resizeWindowFromShell(event, phase, value = {}) {
+  assertShellSender(event);
+  if (process.platform !== 'win32' || !mainWindow || mainWindow.isDestroyed()) return;
+  if (phase === 'end') {
+    resizeDrag = null;
+    return;
+  }
+  const screenX = Number(value.screenX);
+  const screenY = Number(value.screenY);
+  if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return;
+  if (phase === 'start') {
+    if (!RESIZE_DIRECTIONS.has(value.direction) || mainWindow.isMaximized()) return;
+    resizeDrag = { direction: value.direction, screenX, screenY, bounds: mainWindow.getBounds() };
+    return;
+  }
+  if (phase !== 'move' || !resizeDrag) return;
+  const dx = screenX - resizeDrag.screenX;
+  const dy = screenY - resizeDrag.screenY;
+  const start = resizeDrag.bounds;
+  let left = start.x;
+  let right = start.x + start.width;
+  let top = start.y;
+  let bottom = start.y + start.height;
+  if (resizeDrag.direction.includes('left')) left = Math.min(right - MIN_WINDOW_WIDTH, start.x + dx);
+  if (resizeDrag.direction.includes('right')) right = Math.max(left + MIN_WINDOW_WIDTH, start.x + start.width + dx);
+  if (resizeDrag.direction.includes('top')) top = Math.min(bottom - MIN_WINDOW_HEIGHT, start.y + dy);
+  if (resizeDrag.direction.includes('bottom')) bottom = Math.max(top + MIN_WINDOW_HEIGHT, start.y + start.height + dy);
+  mainWindow.setBounds({
+    x: Math.round(left),
+    y: Math.round(top),
+    width: Math.round(right - left),
+    height: Math.round(bottom - top)
+  });
+}
+
 function createWindow() {
   const windowChrome = process.platform === 'darwin'
     ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 12, y: 8 } }
@@ -291,7 +364,9 @@ function createWindow() {
     ...windowChrome,
     autoHideMenuBar: true,
     show: process.env.PASSIDECK_SMOKE_HIDDEN !== '1',
-    backgroundColor: '#020505',
+    // Transparent windows are intentionally Windows-only; the packaged AI-Server smoke verifies alpha and programmatic resize.
+    transparent: process.platform === 'win32',
+    backgroundColor: process.platform === 'win32' ? '#00000000' : '#020505',
     webPreferences: {
       preload: path.join(__dirname, 'shell-preload.js'),
       nodeIntegration: false,
@@ -332,12 +407,20 @@ app.whenReady().then(() => {
   ipcMain.handle('passideck:ui-hidden', event => { assertShellSender(event); return activeUiHidden(); });
   ipcMain.handle('passideck:toggle-ui', event => { assertShellSender(event); return activeUiHidden(true); });
   ipcMain.handle('passideck:set-global-sound-enabled', (event, enabled) => { assertShellSender(event); return setGlobalSoundEnabled(enabled); });
+  ipcMain.on('passideck:window-resize', resizeWindowFromShell);
   ipcMain.handle('passideck:get-app-version', event => { backendIdForSender(event); return app.getVersion(); });
   ipcMain.on('passideck:set-notify-blinking', (event, enabled) => {
     try {
       setNotifyBlinking(event, enabled);
     } catch (error) {
       console.error(`[attention] ${error.message}`);
+    }
+  });
+  ipcMain.on('passideck:set-transparency', (event, value) => {
+    try {
+      setBackendTransparency(event, value);
+    } catch (error) {
+      console.error(`[transparency] ${error.message}`);
     }
   });
   ipcMain.handle('passideck:copy-text', (event, text) => {

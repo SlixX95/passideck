@@ -2532,6 +2532,67 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
 
     await evalExpr(cdp, sid, `document.getElementById('settingsToggle').click()`);
     await waitEval(cdp, sid, `document.activeElement?.id === 'themeSelect'`);
+    const browserTransparency = await evalExpr(cdp, sid, `({
+      modeHidden: document.getElementById('transparencyModeRow').hidden,
+      opacityHidden: document.getElementById('transparencyOpacityRow').hidden,
+      modeDisplay: getComputedStyle(document.getElementById('transparencyModeRow')).display,
+      opacityDisplay: getComputedStyle(document.getElementById('transparencyOpacityRow')).display,
+      desktopClass: document.body.classList.contains('desktop-app')
+    })`);
+    assert.deepStrictEqual(browserTransparency, { modeHidden: true, opacityHidden: true, modeDisplay: 'none', opacityDisplay: 'none', desktopClass: false }, 'normal browser settings must hide Electron-only transparency controls');
+    const desktopTransparency = await evalExpr(cdp, sid, `(() => {
+      const originalSkin = state.skin;
+      window.passideckDesktop = { isDesktop: true, supportsTransparency: true, setTransparency: value => { window.__transparencyProbe = value; } };
+      configureTransparencyControls();
+      setTransparencyMode('full', { persist: false });
+      setTransparencyOpacity(64, { persist: false });
+      const skins = {};
+      const panel = document.querySelector('.term-panel');
+      for (const skin of ['neon', 'stealth', 'prism']) {
+        setSkin(skin, { persist: false });
+        const style = getComputedStyle(document.body);
+        const panelStyle = getComputedStyle(panel);
+        skins[skin] = {
+          radius: style.getPropertyValue('--tg-panel-radius').trim(),
+          shadow: style.getPropertyValue('--tg-panel-shadow').trim(),
+          borderTop: panelStyle.borderTopColor,
+          borderBottom: panelStyle.borderBottomColor,
+          borderImage: panelStyle.borderImageSource
+        };
+      }
+      const entry = activeTerminalEntry();
+      const result = {
+        modeHidden: document.getElementById('transparencyModeRow').hidden,
+        opacityHidden: document.getElementById('transparencyOpacityRow').hidden,
+        mode: document.body.dataset.transparency,
+        opacity: getComputedStyle(document.body).getPropertyValue('--surface-opacity').trim(),
+        label: document.getElementById('transparencyOpacityLabel').textContent,
+        bridge: window.__transparencyProbe,
+        terminalBackground: entry?.term?.options?.theme?.background || '',
+        skins
+      };
+      setTransparencyMode('off', { persist: false });
+      setTransparencyOpacity(78, { persist: false });
+      setSkin(originalSkin, { persist: false });
+      delete window.__transparencyProbe;
+      delete window.passideckDesktop;
+      configureTransparencyControls();
+      return result;
+    })()`);
+    assert.strictEqual(desktopTransparency.modeHidden, false, 'desktop app must reveal the transparency mode');
+    assert.strictEqual(desktopTransparency.opacityHidden, false, 'active transparency must reveal the opacity slider');
+    assert.strictEqual(desktopTransparency.mode, 'full');
+    assert.strictEqual(desktopTransparency.opacity, '64%');
+    assert.strictEqual(desktopTransparency.label, '64%');
+    assert.deepStrictEqual(desktopTransparency.bridge, { mode: 'full', opacity: 64 }, 'desktop bridge must receive the clamped live transparency state');
+    assert.ok(/a3$/i.test(desktopTransparency.terminalBackground), 'full transparency must apply 64% alpha to xterm background pixels');
+    assert.deepStrictEqual(
+      Object.fromEntries(Object.entries(desktopTransparency.skins).map(([skin, value]) => [skin, value.radius])),
+      { neon: '8px', stealth: '0px', prism: '2px' },
+      'surface styles must expose visibly distinct panel geometry'
+    );
+    assert.strictEqual(new Set(Object.values(desktopTransparency.skins).map(value => value.shadow)).size, 3, 'surface styles must expose three distinct depth treatments');
+    assert.notStrictEqual(desktopTransparency.skins.prism.borderImage, 'none', 'prism must retain a visible gradient edge even when an outer shadow is clipped');
     await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 12, y: 120, button: 'left', clickCount: 1 }, sid);
     await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 12, y: 120, button: 'left', clickCount: 1 }, sid);
     await waitEval(cdp, sid, `document.getElementById('settingsPanel').hidden`);

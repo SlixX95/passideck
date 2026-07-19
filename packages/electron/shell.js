@@ -8,6 +8,30 @@ const globalSoundToggle = document.getElementById('globalSoundToggle');
 document.documentElement.dataset.platform = window.passideckShell.platform;
 let state = { backends: [], activeBackendId: '' };
 
+if (window.passideckShell.platform === 'win32') {
+  document.querySelectorAll('.resize-handle').forEach(handle => {
+    let resizing = false;
+    handle.addEventListener('pointerdown', event => {
+      if (event.button !== 0) return;
+      resizing = true;
+      handle.setPointerCapture(event.pointerId);
+      window.passideckShell.windowResize('start', { direction: handle.dataset.resize, screenX: event.screenX, screenY: event.screenY });
+      event.preventDefault();
+    });
+    handle.addEventListener('pointermove', event => {
+      if (!resizing) return;
+      window.passideckShell.windowResize('move', { screenX: event.screenX, screenY: event.screenY });
+    });
+    const finishResize = event => {
+      if (!resizing) return;
+      resizing = false;
+      window.passideckShell.windowResize('end', { screenX: event.screenX, screenY: event.screenY });
+    };
+    handle.addEventListener('pointerup', finishResize);
+    handle.addEventListener('pointercancel', finishResize);
+  });
+}
+
 function updateColorPreview() {
   const color = backendColor.value.trim();
   backendColorPreview.style.background = /^#[0-9a-f]{6}$/i.test(color) ? color : 'transparent';
@@ -18,6 +42,13 @@ function applyAccent() {
   const backend = state.backends.find(item => item.id === state.activeBackendId);
   document.documentElement.style.setProperty('--accent', backend?.color || '#5fffd1');
   document.title = backend ? `${backend.name} · PassiDeck` : 'PassiDeck';
+}
+
+function applyTransparency(value = {}) {
+  const mode = ['off', 'desktop', 'full'].includes(value.mode) ? value.mode : 'off';
+  const opacity = Math.max(35, Math.min(95, Math.round(Number(value.opacity) || 78)));
+  document.documentElement.dataset.transparency = mode;
+  document.documentElement.style.setProperty('--surface-opacity', mode === 'off' ? '100%' : `${opacity}%`);
 }
 
 function renderUiToggle(hidden) {
@@ -71,6 +102,8 @@ function render(next) {
     return tab;
   }));
   applyAccent();
+  const activeBackend = state.backends.find(backend => backend.id === state.activeBackendId);
+  applyTransparency({ mode: activeBackend?.transparencyMode, opacity: activeBackend?.transparencyOpacity });
 }
 
 async function openDialog(backend = null) {
@@ -134,4 +167,5 @@ document.querySelectorAll('#windowControls button[data-action]').forEach(button 
 });
 
 window.passideckShell.onBackendsChanged(render);
+window.passideckShell.onTransparencyChanged(applyTransparency);
 window.passideckShell.listBackends().then(render);

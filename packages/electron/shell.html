@@ -1,14 +1,16 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-transparency="off">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>PassiDeck</title>
   <style>
-    :root { color-scheme: dark; --accent: #5fffd1; --bg: #020505; --surface: #09110f; --border: #21443b; --text: #d6fff8; --dim: #78948d; }
+    :root { color-scheme: dark; --accent: #5fffd1; --bg: #020505; --surface: #09110f; --border: #21443b; --text: #d6fff8; --dim: #78948d; --surface-opacity: 100%; }
     * { box-sizing: border-box; }
-    html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; color: var(--text); font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; }
+    html[data-transparency="off"], html[data-transparency="off"] body { background: var(--bg); }
     #titlebar { position: relative; -webkit-app-region: drag; height: 30px; display: flex; align-items: stretch; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--border)); border-bottom-color: var(--accent); background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 86%, var(--accent) 14%), var(--bg)); box-shadow: 0 0 15px color-mix(in srgb, var(--accent) 24%, transparent); }
+    html[data-transparency="desktop"] #titlebar, html[data-transparency="full"] #titlebar { background: color-mix(in srgb, var(--surface) var(--surface-opacity), transparent); backdrop-filter: blur(16px) saturate(1.18); }
     html[data-platform="darwin"] #titlebar { padding-left: 76px; }
     html[data-platform="darwin"] #windowControls button[data-action]:not([data-action="reload"]) { display: none; }
     #backendTabs, #addBackend, #windowControls { -webkit-app-region: no-drag; display: flex; align-items: stretch; }
@@ -34,6 +36,21 @@
     #windowControls #globalSoundToggle { width: auto; min-width: 68px; padding: 0 8px; }
     #addBackend:hover, #windowControls button:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
     #dragSpace { flex: 1; min-width: 24px; }
+    .resize-handle { display: none; position: fixed; z-index: 100; -webkit-app-region: no-drag; }
+    html[data-platform="win32"] .resize-handle { display: block; }
+    .resize-handle[data-resize="top"], .resize-handle[data-resize="bottom"] { left: 10px; right: 10px; height: 6px; }
+    .resize-handle[data-resize="top"] { top: 0; cursor: ns-resize; }
+    .resize-handle[data-resize="bottom"] { bottom: 0; cursor: ns-resize; }
+    .resize-handle[data-resize="left"], .resize-handle[data-resize="right"] { top: 10px; bottom: 10px; width: 6px; }
+    .resize-handle[data-resize="left"] { left: 0; cursor: ew-resize; }
+    .resize-handle[data-resize="right"] { right: 0; cursor: ew-resize; }
+    .resize-handle[data-resize$="left"], .resize-handle[data-resize$="right"] { width: 10px; height: 10px; }
+    .resize-handle[data-resize^="top"] { top: 0; }
+    .resize-handle[data-resize^="bottom"] { bottom: 0; }
+    .resize-handle[data-resize$="left"] { left: 0; }
+    .resize-handle[data-resize$="right"] { right: 0; }
+    .resize-handle[data-resize="top-left"], .resize-handle[data-resize="bottom-right"] { cursor: nwse-resize; }
+    .resize-handle[data-resize="top-right"], .resize-handle[data-resize="bottom-left"] { cursor: nesw-resize; }
     #windowControls .close:hover { background: #b9434c; color: white; }
     dialog { position: fixed; inset: 50% auto auto 50%; transform: translate(-50%, -50%); z-index: 10; width: min(500px, calc(100vw - 32px)); border: 1px solid var(--accent); background: #07100e; color: var(--text); box-shadow: 0 20px 70px #000; padding: 18px; }
     dialog::backdrop { background: rgba(0,0,0,.62); }
@@ -49,6 +66,14 @@
   </style>
 </head>
 <body>
+  <span class="resize-handle" data-resize="top"></span>
+  <span class="resize-handle" data-resize="right"></span>
+  <span class="resize-handle" data-resize="bottom"></span>
+  <span class="resize-handle" data-resize="left"></span>
+  <span class="resize-handle" data-resize="top-left"></span>
+  <span class="resize-handle" data-resize="top-right"></span>
+  <span class="resize-handle" data-resize="bottom-left"></span>
+  <span class="resize-handle" data-resize="bottom-right"></span>
   <header id="titlebar">
     <nav id="backendTabs" aria-label="PassiDeck backends"></nav>
     <button id="addBackend" aria-label="Add backend">+</button>
