@@ -702,18 +702,22 @@ function syncHermesTitles(sessions, hermesDb, resolveActiveSessionId = activeHer
   let findLatestSession;
   let findById;
   let findCompletion;
+  let findLatestCompletion;
   try {
     findLatest = hermesDb.prepare("SELECT id, title FROM sessions WHERE source = ? AND TRIM(COALESCE(title, '')) <> '' ORDER BY started_at DESC LIMIT 1");
     findLatestSession = hermesDb.prepare('SELECT id, title FROM sessions WHERE source = ? ORDER BY started_at DESC LIMIT 1');
     findById = hermesDb.prepare('SELECT id, title FROM sessions WHERE id = ? LIMIT 1');
     try {
-      findCompletion = hermesDb.prepare("SELECT id, timestamp FROM messages WHERE session_id = ? AND role = 'assistant' AND active = 1 AND TRIM(COALESCE(content, '')) <> '' AND COALESCE(finish_reason, '') <> 'tool_calls' ORDER BY id DESC LIMIT 1");
+      findCompletion = hermesDb.prepare("SELECT id FROM messages WHERE session_id = ? AND role = 'assistant' AND active = 1 AND TRIM(COALESCE(content, '')) <> '' AND COALESCE(finish_reason, '') <> 'tool_calls' ORDER BY id DESC LIMIT 1");
+      findLatestCompletion = hermesDb.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM messages WHERE role = 'assistant' AND active = 1 AND TRIM(COALESCE(content, '')) <> '' AND COALESCE(finish_reason, '') <> 'tool_calls'");
     } catch {}
   } catch (err) {
     console.warn('[hermes-title] title query unavailable:', err.message);
     return 0;
   }
   let changed = 0;
+  const previousCompletionId = sessions._hermesCompletionMessageId;
+  const latestCompletionId = Number(findLatestCompletion?.get()?.id) || 0;
   for (const session of sessions.sessions.values()) {
     const activeId = resolveActiveSessionId(session);
     const activeRow = activeId ? findById.get(activeId) : null;
@@ -729,17 +733,9 @@ function syncHermesTitles(sessions, hermesDb, resolveActiveSessionId = activeHer
     if (!findCompletion || !latestSession) continue;
     const completion = findCompletion.get(latestSession.id);
     const completionId = Number(completion?.id) || 0;
-    if (session._hermesCompletionSessionId !== latestSession.id) {
-      session._hermesCompletionSessionId = latestSession.id;
-      session._hermesCompletionMessageId = completionId;
-      if (completionId && Number(completion.timestamp) > session._hermesCompletionBaselineAt) {
-        session.broadcast({ type: 'response-complete' });
-      }
-    } else if (completionId > session._hermesCompletionMessageId) {
-      session._hermesCompletionMessageId = completionId;
-      session.broadcast({ type: 'response-complete' });
-    }
+    if (previousCompletionId !== undefined && completionId > previousCompletionId) session.broadcast({ type: 'response-complete' });
   }
+  sessions._hermesCompletionMessageId = Math.max(previousCompletionId || 0, latestCompletionId);
   return changed;
 }
 
