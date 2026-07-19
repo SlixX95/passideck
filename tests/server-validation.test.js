@@ -61,7 +61,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     fs.writeFileSync(hermesAuthPath, JSON.stringify({
       credential_pool: {
         'openai-codex': [
-          { id: 'finch', label: '#1Finch', source: 'manual:device_code', priority: 0, access_token: 'finch-access', refresh_token: 'finch-refresh' },
+          { id: 'finch', label: '#1Finch', source: 'manual:device_code', priority: 0, access_token: 'finch-access', refresh_token: 'finch-refresh', last_status: 'exhausted' },
           { id: 'passi', label: '#2Passi', source: 'manual:device_code', priority: 1, access_token: 'passi-access', refresh_token: 'passi-refresh' }
         ]
       }
@@ -71,6 +71,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
       [1, '#1Finch', 'finch-access'],
       [2, '#2Passi', 'passi-access']
     ], 'every native Hermes Codex pool account must be exposed independently and in priority order');
+    assert.deepStrictEqual(pooledAuths.map(auth => auth.active), [false, true], 'the first non-exhausted fill-first credential must be marked active');
     saveHermesCodexAuth(pooledAuths[0], { access_token: 'finch-refreshed', refresh_token: 'finch-refresh-2' });
     const refreshedPool = JSON.parse(fs.readFileSync(hermesAuthPath, 'utf8'));
     assert.strictEqual(refreshedPool.credential_pool['openai-codex'][0].access_token, 'finch-refreshed', 'refresh must update the matching pool account');

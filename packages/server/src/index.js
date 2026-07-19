@@ -390,16 +390,19 @@ function readHermesCodexAuths() {
         label: entry.label || `#${offset + 1}`
       }))
       .filter(Boolean);
-    if (pooled.length) return pooled;
+    if (pooled.length) {
+      const active = pooled.find(auth => !['exhausted', 'dead'].includes(String(auth.state?.last_status || '').toLowerCase()));
+      return pooled.map(auth => ({ ...auth, active: auth === active }));
+    }
   }
   const state = store.providers?.['openai-codex'] || store['openai-codex'];
   const hermesAuth = authResult(store, state, authPath, 'hermes', { index: 1, label: state?.label || '#1' });
-  if (hermesAuth) return [hermesAuth];
+  if (hermesAuth) return [{ ...hermesAuth, active: true }];
 
   const fallbackPath = legacyCodexAuthPath();
   const fallbackStore = readAuthFile(fallbackPath, 'Codex auth');
   const fallbackAuth = authResult(fallbackStore, fallbackStore, fallbackPath, 'codex', { index: 1, label: '#1' });
-  if (fallbackAuth) return [fallbackAuth];
+  if (fallbackAuth) return [{ ...fallbackAuth, active: true }];
   throw new Error(`Codex auth at ${fallbackPath} is missing access_token or refresh_token`);
 }
 
@@ -576,9 +579,9 @@ async function readCodexLimits() {
   for (const auth of auths) {
     try {
       const limits = await readCodexLimitsForAuth(auth);
-      accounts.push({ ...limits, index: auth.index, label: auth.label });
+      accounts.push({ ...limits, index: auth.index, label: auth.label, active: auth.active });
     } catch (err) {
-      accounts.push({ ok: false, index: auth.index, label: auth.label, primary: null, secondary: null, error: err.message });
+      accounts.push({ ok: false, index: auth.index, label: auth.label, active: auth.active, primary: null, secondary: null, error: err.message });
     }
   }
   if (!accounts.some(account => account.ok)) throw new Error(accounts[0]?.error || 'Codex limits unavailable');

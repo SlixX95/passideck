@@ -1424,7 +1424,7 @@ function renderCodexLimitCells(accounts) {
   const root = document.getElementById('codexLimits');
   if (!root) return;
   const list = accounts.length ? accounts : [{ index: 1 }];
-  const signature = list.map(account => `${account.index}:${account.label || ''}`).join('|');
+  const signature = list.map(account => `${account.index}:${account.label || ''}:${account.active ? 1 : 0}`).join('|');
   if (root.dataset.signature === signature) return;
   root.dataset.signature = signature;
   root.replaceChildren();
@@ -1443,6 +1443,12 @@ function renderCodexLimitCells(accounts) {
       label.textContent = kind === 'primary' ? `${prefix}5h` : `${prefix}7d`;
       const value = document.createElement('b');
       value.textContent = '--%';
+      if (account.active && kind === 'primary') {
+        const dot = document.createElement('i');
+        dot.className = 'codex-active-dot';
+        dot.setAttribute('aria-hidden', 'true');
+        cell.append(dot);
+      }
       cell.append(label, value);
       root.append(cell);
     }
@@ -1452,13 +1458,14 @@ function renderCodexLimitCells(accounts) {
 function setCodexLimitCell(account, kind, limit) {
   const cell = document.querySelector(`#codexLimits [data-account-index="${account.index}"][data-limit="${kind}"]`);
   if (!cell) return;
+  cell.classList.toggle('active-account', Boolean(account.active));
   cell.classList.toggle('limit-reached', Boolean(account.rateLimitReachedType));
   const windowName = kind === 'primary' ? '5h' : '7d';
   const accountName = account.label || `#${account.index}`;
   if (!limit) {
     cell.classList.add('unavailable');
     cell.querySelector('b').textContent = '--%';
-    setTooltip(cell, `Codex ${accountName} ${windowName} unavailable${account.error ? ` · ${account.error}` : ''}`);
+    setTooltip(cell, `Codex ${accountName} ${windowName}${account.active ? ' · currently active' : ''} unavailable${account.error ? ` · ${account.error}` : ''}`);
     return;
   }
   const used = Math.max(0, Math.min(100, Math.round(Number(limit.usedPercent) || 0)));
@@ -1466,7 +1473,7 @@ function setCodexLimitCell(account, kind, limit) {
   cell.classList.remove('unavailable');
   cell.style.setProperty('--v', `${left}%`);
   cell.querySelector('b').textContent = `${left}%`;
-  setTooltip(cell, `Codex ${accountName} ${windowName}: ${left}% left (${used}% used) · ${formatReset(limit.resetsAt)}`);
+  setTooltip(cell, `Codex ${accountName} ${windowName}${account.active ? ' · currently active' : ''}: ${left}% left (${used}% used) · ${formatReset(limit.resetsAt)}`);
 }
 
 function updateCodexLimits(data) {
