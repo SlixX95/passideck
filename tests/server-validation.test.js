@@ -22,7 +22,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 (async () => {
   try {
-    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, parseCodexLimits, readHermesCodexAuth, saveHermesCodexAuth } = require('../packages/server/src/index');
+    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, parseCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth } = require('../packages/server/src/index');
     assert.strictEqual(
       hermesResumeIdFromArgv(['/venv/bin/python3', '/venv/bin/hermes', '--resume', '20260716_180100_5dbdcf']),
       '20260716_180100_5dbdcf',
@@ -57,6 +57,25 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     const refreshedAuth = JSON.parse(fs.readFileSync(codexAuthPath, 'utf8'));
     assert.strictEqual(refreshedAuth.tokens.access_token, 'refreshed-access', 'fallback refresh must preserve the Codex auth schema');
     assert.strictEqual(refreshedAuth.providers, undefined, 'fallback refresh must not write Hermes provider fields');
+
+    fs.writeFileSync(hermesAuthPath, JSON.stringify({
+      credential_pool: {
+        'openai-codex': [
+          { id: 'finch', label: '#1Finch', source: 'manual:device_code', priority: 0, access_token: 'finch-access', refresh_token: 'finch-refresh' },
+          { id: 'passi', label: '#2Passi', source: 'manual:device_code', priority: 1, access_token: 'passi-access', refresh_token: 'passi-refresh' }
+        ]
+      }
+    }));
+    const pooledAuths = readHermesCodexAuths();
+    assert.deepStrictEqual(pooledAuths.map(auth => [auth.index, auth.label, auth.tokens.access_token]), [
+      [1, '#1Finch', 'finch-access'],
+      [2, '#2Passi', 'passi-access']
+    ], 'every native Hermes Codex pool account must be exposed independently and in priority order');
+    saveHermesCodexAuth(pooledAuths[0], { access_token: 'finch-refreshed', refresh_token: 'finch-refresh-2' });
+    const refreshedPool = JSON.parse(fs.readFileSync(hermesAuthPath, 'utf8'));
+    assert.strictEqual(refreshedPool.credential_pool['openai-codex'][0].access_token, 'finch-refreshed', 'refresh must update the matching pool account');
+    assert.strictEqual(refreshedPool.credential_pool['openai-codex'][1].access_token, 'passi-access', 'refresh must not overwrite another pool account');
+    assert.strictEqual(refreshedPool.providers, undefined, 'pool refresh must not recreate the collapsing Codex singleton');
     delete process.env.PASSIDECK_HERMES_AUTH_PATH;
     delete process.env.PASSIDECK_CODEX_AUTH_PATH;
 

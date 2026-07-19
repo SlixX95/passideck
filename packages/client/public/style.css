@@ -195,7 +195,7 @@ body.notify-blinking .switcher-btn.response-pulse:not(.active) { animation: swit
 .codex-limit b { color: var(--tg-accent); font-weight: 800; }
 .codex-limit:hover { color: var(--tg-accent); border-color: var(--tg-accent-dim); }
 .codex-limit.unavailable b { color: var(--tg-red); }
-.codex-limits.limit-reached .codex-limit { border-color: var(--tg-red); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tg-red) 35%, transparent); }
+.codex-limit.limit-reached { border-color: var(--tg-red); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tg-red) 35%, transparent); }
 
 
 .app-tooltip {

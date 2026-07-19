@@ -367,31 +367,62 @@ function readAuthFile(authPath, label) {
   catch (err) { throw new Error(`${label} unavailable at ${authPath}: ${err.message}`); }
 }
 
-function authResult(store, state, authPath, source) {
-  const tokens = state?.tokens;
+function authResult(store, state, authPath, source, metadata = {}) {
+  const tokens = state?.tokens || state;
   const accessToken = typeof tokens?.access_token === 'string' ? tokens.access_token.trim() : '';
   const refreshToken = typeof tokens?.refresh_token === 'string' ? tokens.refresh_token.trim() : '';
   return accessToken && refreshToken
-    ? { store, state, tokens: { ...tokens, access_token: accessToken, refresh_token: refreshToken }, authPath, source }
+    ? { store, state, tokens: { ...tokens, access_token: accessToken, refresh_token: refreshToken }, authPath, source, ...metadata }
     : null;
 }
 
-function readHermesCodexAuth() {
+function readHermesCodexAuths() {
   const authPath = codexAuthPath();
   const store = readAuthFile(authPath, 'Hermes Codex auth');
+  const pool = store.credential_pool?.['openai-codex'];
+  if (Array.isArray(pool)) {
+    const pooled = pool
+      .filter(entry => entry && typeof entry === 'object')
+      .sort((a, b) => Number(a.priority || 0) - Number(b.priority || 0))
+      .map((entry, offset) => authResult(store, entry, authPath, 'hermes-pool', {
+        credentialId: entry.id,
+        index: offset + 1,
+        label: entry.label || `#${offset + 1}`
+      }))
+      .filter(Boolean);
+    if (pooled.length) return pooled;
+  }
   const state = store.providers?.['openai-codex'] || store['openai-codex'];
-  const hermesAuth = authResult(store, state, authPath, 'hermes');
-  if (hermesAuth) return hermesAuth;
+  const hermesAuth = authResult(store, state, authPath, 'hermes', { index: 1, label: state?.label || '#1' });
+  if (hermesAuth) return [hermesAuth];
 
   const fallbackPath = legacyCodexAuthPath();
   const fallbackStore = readAuthFile(fallbackPath, 'Codex auth');
-  const fallbackAuth = authResult(fallbackStore, fallbackStore, fallbackPath, 'codex');
-  if (fallbackAuth) return fallbackAuth;
+  const fallbackAuth = authResult(fallbackStore, fallbackStore, fallbackPath, 'codex', { index: 1, label: '#1' });
+  if (fallbackAuth) return [fallbackAuth];
   throw new Error(`Codex auth at ${fallbackPath} is missing access_token or refresh_token`);
+}
+
+function readHermesCodexAuth() {
+  return readHermesCodexAuths()[0];
 }
 
 function saveHermesCodexAuth(auth, tokens) {
   const now = new Date().toISOString();
+  if (auth.source === 'hermes-pool') {
+    const latestStore = readAuthFile(auth.authPath, 'Hermes Codex auth');
+    const pool = latestStore.credential_pool?.['openai-codex'];
+    const entry = Array.isArray(pool) ? pool.find(item => item?.id === auth.credentialId) : null;
+    if (!entry) throw new Error(`Codex pool credential ${auth.credentialId || auth.index} no longer exists`);
+    entry.access_token = tokens.access_token;
+    entry.refresh_token = tokens.refresh_token;
+    entry.last_refresh = now;
+    latestStore.updated_at = now;
+    const tmp = `${auth.authPath}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, `${JSON.stringify(latestStore, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(tmp, auth.authPath);
+    return;
+  }
   if (auth.source === 'codex') {
     const nextStore = { ...auth.store, tokens: { ...(auth.state?.tokens || {}), ...tokens }, last_refresh: now, auth_mode: 'chatgpt' };
     fs.writeFileSync(auth.authPath, `${JSON.stringify(nextStore, null, 2)}\n`, { mode: 0o600 });
@@ -540,7 +571,24 @@ async function fetchCodexUsageWithHermesAuth(tokens) {
 async function readCodexLimits() {
   const now = Date.now();
   if (codexLimitsCache.data && now - codexLimitsCache.at < CODEX_LIMITS_CACHE_MS) return { ...codexLimitsCache.data, cached: true };
-  const auth = readHermesCodexAuth();
+  const auths = readHermesCodexAuths();
+  const accounts = [];
+  for (const auth of auths) {
+    try {
+      const limits = await readCodexLimitsForAuth(auth);
+      accounts.push({ ...limits, index: auth.index, label: auth.label });
+    } catch (err) {
+      accounts.push({ ok: false, index: auth.index, label: auth.label, primary: null, secondary: null, error: err.message });
+    }
+  }
+  if (!accounts.some(account => account.ok)) throw new Error(accounts[0]?.error || 'Codex limits unavailable');
+  const first = accounts[0] || {};
+  const data = { ...first, ok: true, at: new Date().toISOString(), cached: false, accounts };
+  codexLimitsCache = { at: now, data: { ...data, cached: undefined } };
+  return data;
+}
+
+async function readCodexLimitsForAuth(auth) {
   let tokens = auth.tokens;
   if (codexAccessTokenExpiring(tokens.access_token)) tokens = await refreshHermesCodexAuth(auth);
   let body;
@@ -551,9 +599,7 @@ async function readCodexLimits() {
     tokens = await refreshHermesCodexAuth({ ...auth, tokens });
     body = await fetchCodexUsageWithHermesAuth(tokens);
   }
-  const data = parseCodexLimits(body, false);
-  codexLimitsCache = { at: now, data: { ...data, cached: undefined } };
-  return data;
+  return parseCodexLimits(body, false);
 }
 
 function readSystemMetrics() {
@@ -972,7 +1018,7 @@ function createServer(config = loadConfig()) {
   return { app, server, wss, sessions, close };
 }
 
-module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, saveHermesCodexAuth, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, UPLOAD_MIME_ALLOWLIST };
+module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, UPLOAD_MIME_ALLOWLIST };
 
 if (require.main === module) {
   const config = loadConfig();

@@ -1420,13 +1420,45 @@ function formatReset(ts) {
   return `reset ${date.toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}`;
 }
 
-function setCodexLimitCell(kind, limit) {
-  const cell = document.querySelector(`#codexLimits [data-limit="${kind}"]`);
+function renderCodexLimitCells(accounts) {
+  const root = document.getElementById('codexLimits');
+  if (!root) return;
+  const list = accounts.length ? accounts : [{ index: 1 }];
+  const signature = list.map(account => `${account.index}:${account.label || ''}`).join('|');
+  if (root.dataset.signature === signature) return;
+  root.dataset.signature = signature;
+  root.replaceChildren();
+  const indexed = list.length > 1;
+  for (const account of list) {
+    const prefix = indexed ? `#${account.index}-` : '';
+    for (const [kind, suffix] of [['primary', '5h'], ['secondary', '7d']]) {
+      const cell = document.createElement('span');
+      cell.className = 'codex-limit';
+      cell.dataset.accountIndex = String(account.index);
+      cell.dataset.limit = kind;
+      cell.setAttribute('data-account-index', String(account.index));
+      const name = `${prefix}${suffix}`;
+      cell.setAttribute('aria-label', `Codex ${name}`);
+      const label = document.createElement('span');
+      label.textContent = kind === 'primary' ? `${prefix}5h` : `${prefix}7d`;
+      const value = document.createElement('b');
+      value.textContent = '--%';
+      cell.append(label, value);
+      root.append(cell);
+    }
+  }
+}
+
+function setCodexLimitCell(account, kind, limit) {
+  const cell = document.querySelector(`#codexLimits [data-account-index="${account.index}"][data-limit="${kind}"]`);
   if (!cell) return;
+  cell.classList.toggle('limit-reached', Boolean(account.rateLimitReachedType));
+  const windowName = kind === 'primary' ? '5h' : '7d';
+  const accountName = account.label || `#${account.index}`;
   if (!limit) {
     cell.classList.add('unavailable');
     cell.querySelector('b').textContent = '--%';
-    setTooltip(cell, `${kind === 'primary' ? 'Codex 5h' : 'Codex weekly'} unavailable`);
+    setTooltip(cell, `Codex ${accountName} ${windowName} unavailable${account.error ? ` · ${account.error}` : ''}`);
     return;
   }
   const used = Math.max(0, Math.min(100, Math.round(Number(limit.usedPercent) || 0)));
@@ -1434,13 +1466,18 @@ function setCodexLimitCell(kind, limit) {
   cell.classList.remove('unavailable');
   cell.style.setProperty('--v', `${left}%`);
   cell.querySelector('b').textContent = `${left}%`;
-  setTooltip(cell, `${kind === 'primary' ? 'Codex 5h' : 'Codex weekly'}: ${left}% left (${used}% used) · ${formatReset(limit.resetsAt)}`);
+  setTooltip(cell, `Codex ${accountName} ${windowName}: ${left}% left (${used}% used) · ${formatReset(limit.resetsAt)}`);
 }
 
 function updateCodexLimits(data) {
-  setCodexLimitCell('primary', data?.primary);
-  setCodexLimitCell('secondary', data?.secondary);
-  document.getElementById('codexLimits')?.classList.toggle('limit-reached', Boolean(data?.rateLimitReachedType));
+  const accounts = Array.isArray(data?.accounts) && data.accounts.length
+    ? data.accounts
+    : [{ index: 1, label: '#1', primary: data?.primary, secondary: data?.secondary, error: data?.error }];
+  renderCodexLimitCells(accounts);
+  for (const account of accounts) {
+    setCodexLimitCell(account, 'primary', account.primary);
+    setCodexLimitCell(account, 'secondary', account.secondary);
+  }
 }
 
 async function pollCodexLimits() {
