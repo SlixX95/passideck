@@ -129,8 +129,28 @@ button, select { font: inherit; }
 .desktop-tab { flex: 0 1 auto; min-width: 52px; max-width: 128px; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .desktop-rename { height: 21px; min-width: 52px; max-width: 128px; padding: 0 7px; border: 1px solid var(--tg-accent); outline: 0; background: #030707; color: var(--tg-accent); font: 10px var(--tg-mono); }
 .desktop-tab:hover, .desktop-tab.active { color: var(--tg-accent); border-color: var(--tg-accent); background: color-mix(in srgb, var(--tg-accent) 12%, #030707); }
-.desktop-tab.attention { color: var(--tg-accent); box-shadow: 0 0 10px color-mix(in srgb, var(--tg-accent) 45%, transparent); }
-body.notify-blinking .desktop-tab.attention:not(.active) { animation: switcher-response-pulse 1.6s ease-in-out infinite; }
+.desktop-tab.attention {
+  color: var(--tg-accent);
+  border-color: var(--tg-accent);
+  background: color-mix(in srgb, var(--tg-accent) 18%, #030707);
+  font-weight: 700;
+  box-shadow: 0 0 10px color-mix(in srgb, var(--tg-accent) 52%, transparent);
+}
+@keyframes desktop-response-pulse {
+  0%, 100% {
+    filter: brightness(.92);
+    border-color: color-mix(in srgb, var(--tg-accent) 72%, var(--tg-border));
+    background: color-mix(in srgb, var(--tg-accent) 10%, #030707);
+    box-shadow: 0 0 5px color-mix(in srgb, var(--tg-accent) 32%, transparent);
+  }
+  50% {
+    filter: brightness(1.28);
+    border-color: var(--tg-accent);
+    background: color-mix(in srgb, var(--tg-accent) 34%, #030707);
+    box-shadow: 0 0 16px color-mix(in srgb, var(--tg-accent) 68%, transparent);
+  }
+}
+body.notify-blinking .desktop-tab.attention:not(.active) { animation: desktop-response-pulse 1.6s ease-in-out infinite; }
 .desktop-add { flex: 0 0 23px; width: 23px; padding: 0; color: var(--tg-accent); }
 .desktop-add:disabled { cursor: default; opacity: .35; color: var(--tg-text-dim); }
 .desktop-divider { flex: 0 0 1px; height: 17px; margin: 0 3px; background: var(--tg-border); }

@@ -1625,7 +1625,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.deepStrictEqual(hiddenDesktopAttention, {
       activeDesktopStable: true,
       hiddenDesktopMarked: true,
-      hiddenDesktopAnimation: 'switcher-response-pulse',
+      hiddenDesktopAnimation: 'desktop-response-pulse',
       bridgeCall: { hiddenDesktop: true }
     }, 'a Hermes BEL from a hidden virtual desktop must blink that desktop and bubble hidden-desktop attention to the Electron backend tab');
 
