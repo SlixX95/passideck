@@ -1336,7 +1336,9 @@ function pulsePaneTitlebar(id) {
 function notifyResponseComplete(id) {
   pulsePaneTitlebar(id);
   if (shouldPlayResponseSound(id)) playBell(state.responseSoundTone, state.responseSoundVolume);
-  window.passideckDesktop?.notifyResponseComplete?.();
+  window.passideckDesktop?.notifyResponseComplete?.({
+    hiddenDesktop: state.panePrefs.paneDesktop[id] !== state.activeDesktopId
+  });
 }
 
 function setChromeHidden(hidden, opts = {}) {

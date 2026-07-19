@@ -61,6 +61,7 @@ function shellState() {
         attention: Boolean(entry?.attention),
         attentionAt: entry?.attentionAt || 0,
         responsePulse: Boolean(entry?.responsePulse),
+        hiddenDesktopAttention: Boolean(entry?.hiddenDesktopAttention),
         notifyBlinking: entry?.notifyBlinking ?? config.notifyBlinking
       };
     })
@@ -73,10 +74,11 @@ function notifyShell() {
 
 function clearBackendAttention(id, notify = true) {
   const entry = backendViews.get(id);
-  if (!entry || (!entry.attention && !entry.responsePulse)) return;
+  if (!entry || (!entry.attention && !entry.responsePulse && !entry.hiddenDesktopAttention)) return;
   entry.attention = false;
   entry.attentionAt = 0;
   entry.responsePulse = false;
+  entry.hiddenDesktopAttention = false;
   if (notify) notifyShell();
 }
 
@@ -88,12 +90,13 @@ function backendIdForSender(event) {
   throw new Error('Unknown PassiDeck backend');
 }
 
-function markBackendResponseComplete(id) {
+function markBackendResponseComplete(id, details = {}) {
   const entry = backendViews.get(id);
   if (!entry || !mainWindow) return;
   entry.attention = true;
   entry.attentionAt = Date.now();
   entry.responsePulse = true;
+  entry.hiddenDesktopAttention ||= details?.hiddenDesktop === true;
   notifyShell();
 }
 
@@ -329,6 +332,7 @@ app.whenReady().then(() => {
   ipcMain.handle('passideck:ui-hidden', event => { assertShellSender(event); return activeUiHidden(); });
   ipcMain.handle('passideck:toggle-ui', event => { assertShellSender(event); return activeUiHidden(true); });
   ipcMain.handle('passideck:set-global-sound-enabled', (event, enabled) => { assertShellSender(event); return setGlobalSoundEnabled(enabled); });
+  ipcMain.handle('passideck:get-app-version', event => { backendIdForSender(event); return app.getVersion(); });
   ipcMain.on('passideck:set-notify-blinking', (event, enabled) => {
     try {
       setNotifyBlinking(event, enabled);
@@ -336,14 +340,26 @@ app.whenReady().then(() => {
       console.error(`[attention] ${error.message}`);
     }
   });
+  ipcMain.handle('passideck:copy-text', (event, text) => {
+    backendIdForSender(event);
+    if (typeof text !== 'string' || text.length > 4 * 1024 * 1024) throw new Error('Invalid clipboard text');
+    clipboard.writeText(text);
+    return true;
+  });
+  ipcMain.handle('passideck:read-clipboard-text', event => {
+    backendIdForSender(event);
+    return clipboard.readText();
+  });
   ipcMain.handle('passideck:read-clipboard-image', event => {
     backendIdForSender(event);
     const image = clipboard.readImage();
     return image.isEmpty() ? null : image.toDataURL();
   });
-  ipcMain.on('passideck:response-complete', event => {
+  ipcMain.on('passideck:response-complete', (event, details) => {
     try {
-      markBackendResponseComplete(backendIdForSender(event));
+      markBackendResponseComplete(backendIdForSender(event), {
+        hiddenDesktop: details?.hiddenDesktop === true
+      });
     } catch (error) {
       console.error(`[attention] ${error.message}`);
     }

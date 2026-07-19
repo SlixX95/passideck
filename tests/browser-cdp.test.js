@@ -1587,6 +1587,48 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.strictEqual(terminalFocusVisual.reactivated.textareaFocused, true, 'reactivating PassiDeck must focus the last selected terminal for immediate typing');
     assert.deepStrictEqual(terminalFocusVisual.modalFocus, { buttonFocused: true, inputFocused: false }, 'reactivating PassiDeck must not steal focus from an open modal');
 
+    const hiddenDesktopAttention = await evalExpr(cdp, sid, `(() => {
+      const entry = [...state.sessions.values()][0];
+      const originalPrefs = structuredClone(state.panePrefs);
+      const originalActiveDesktopId = state.activeDesktopId;
+      const originalActiveId = state.activeId;
+      const originalDescriptor = Object.getOwnPropertyDescriptor(window, 'passideckDesktop');
+      const calls = [];
+      const hiddenDesktopId = 'desktop-attention-fixture';
+      state.panePrefs.desktopOrder.push(hiddenDesktopId);
+      state.panePrefs.desktops[hiddenDesktopId] = { name: 'Attention fixture', minimized: [], windows: {}, viewport: null };
+      state.panePrefs.paneDesktop[entry.session.id] = hiddenDesktopId;
+      Object.defineProperty(window, 'passideckDesktop', {
+        configurable: true,
+        writable: true,
+        value: { notifyResponseComplete: details => calls.push(details), clearResponseAttention: () => {} }
+      });
+      renderSwitcher();
+      notifyResponseComplete(entry.session.id);
+      const tab = document.querySelector('[data-desktop-id="' + hiddenDesktopId + '"]');
+      const result = {
+        activeDesktopStable: state.activeDesktopId === originalActiveDesktopId,
+        hiddenDesktopMarked: tab?.classList.contains('attention') === true,
+        hiddenDesktopAnimation: getComputedStyle(tab).animationName,
+        bridgeCall: calls[0]
+      };
+      clearResponseAttention(entry.session.id);
+      state.panePrefs = originalPrefs;
+      state.activeDesktopId = originalActiveDesktopId;
+      state.activeId = originalActiveId;
+      renderSwitcher();
+      applyLayoutVisibility();
+      if (originalDescriptor) Object.defineProperty(window, 'passideckDesktop', originalDescriptor);
+      else delete window.passideckDesktop;
+      return result;
+    })()`);
+    assert.deepStrictEqual(hiddenDesktopAttention, {
+      activeDesktopStable: true,
+      hiddenDesktopMarked: true,
+      hiddenDesktopAnimation: 'switcher-response-pulse',
+      bridgeCall: { hiddenDesktop: true }
+    }, 'a Hermes BEL from a hidden virtual desktop must blink that desktop and bubble hidden-desktop attention to the Electron backend tab');
+
     const responseAttentionBridge = await evalExpr(cdp, sid, `(async () => {
       const calls = [];
       const entries = [...state.sessions.values()];

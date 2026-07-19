@@ -49,7 +49,8 @@ assert.ok(shellPreload.includes("ipcRenderer.invoke('passideck:set-global-sound-
 assert.ok(main.includes("ipcMain.handle('passideck:ui-hidden'") && main.includes("ipcMain.handle('passideck:toggle-ui'") && main.includes("document.body.classList.contains('chrome-hidden')"), 'main process must read and toggle the active backend UI through the existing client contract');
 assert.ok(main.includes("insertCSS('#chromePeek { display: none !important; }')"), 'Electron backend views must suppress the right-side UI peek button');
 assert.ok(main.includes("ipcMain.handle('passideck:set-global-sound-enabled'") && main.includes('setAudioMuted(!config.globalSoundEnabled)'), 'main process must mute every backend view from persisted global sound state');
-assert.ok(preload.includes("notifyResponseComplete: () => ipcRenderer.send('passideck:response-complete')"), 'backend completion must use a narrow trusted preload event');
+assert.ok(preload.includes("notifyResponseComplete: details => ipcRenderer.send('passideck:response-complete'"), 'backend completion must use a narrow trusted preload event');
+assert.ok(preload.includes("hiddenDesktop: details?.hiddenDesktop === true"), 'backend completion bridge must preserve only the trusted hidden-desktop attention bit');
 assert.ok(preload.includes("clearResponseAttention: () => ipcRenderer.send('passideck:clear-response-attention')"), 'clicking the notified pane must clear desktop tab attention through a narrow trusted preload event');
 assert.ok(preload.includes("setNotifyBlinking: enabled => ipcRenderer.send('passideck:set-notify-blinking'"), 'backend settings must synchronize Notify blinking through a narrow trusted preload event');
 assert.ok(
@@ -60,13 +61,16 @@ assert.ok(
 );
 assert.ok(
   shellJs.includes("backend.notifyBlinking ? ' response-blinking' : ''") &&
+  shellJs.includes("backend.hiddenDesktopAttention ? ' hidden-desktop-attention' : ''") &&
   shellHtml.includes('.backend-tab.response-pulse.response-blinking:not(.active)') &&
+  shellHtml.includes('.backend-tab.response-pulse.response-blinking.hidden-desktop-attention') &&
   shellHtml.includes('.backend-tab.response-pulse {'),
-  'desktop attention must keep a static peak and animate only inactive backend tabs whose backend has Notify blinking On'
+  'desktop attention must also animate the active backend tab when the waiting response belongs to a hidden virtual desktop'
 );
 assert.ok(
   main.includes("ipcMain.on('passideck:response-complete'") &&
   main.includes('backendIdForSender') &&
+  main.includes('hiddenDesktopAttention') &&
   main.includes('event.senderFrame !== event.sender.mainFrame'),
   'main must map response completion from the trusted backend WebContents instead of accepting a renderer-supplied backend id'
 );
@@ -114,7 +118,7 @@ assert.ok(main.includes('normalizeUrl'), 'backend URLs must be validated by URL 
 assert.ok(!main.includes('backend.url = releaseBackendUrl(backend.url)'), 'saving a backend profile must preserve its validated URL, including the Dev URL');
 assert.ok(main.includes('[backend] invalid URL override'), 'invalid CLI/env backend URLs must not leave a blank window');
 assert.strictEqual((main.match(/before-input-event/g) || []).length, 1, 'desktop may intercept only the dedicated reload shortcut handler');
-assert.strictEqual((main.match(/clipboard\.writeText/g) || []).length, 1, 'desktop may write clipboard only for explicit right-click Copy');
+assert.ok(main.includes("ipcMain.handle('passideck:copy-text'") && main.includes("ipcMain.handle('passideck:read-clipboard-text'"), 'desktop text copy/paste must use sender-validated native clipboard IPC');
 assert.ok(main.includes("ipcMain.handle('passideck:read-clipboard-image'") && main.includes('clipboard.readImage()') && main.includes('backendIdForSender(event)'), 'desktop image paste must use a sender-validated native clipboard fallback');
 assert.ok(main.includes("webContents.on('context-menu'") && main.includes('term.getSelection()'), 'backend views must copy DOM and xterm selections on right click');
 assert.ok(main.includes('term.clearSelection()') && main.includes('removeAllRanges()'), 'desktop right-click copy must clear the copied terminal/DOM selection');
@@ -132,8 +136,13 @@ assert.ok(main.includes("permission === 'notifications'"), 'trusted backends mus
 assert.ok(main.includes('preload.js'), 'backend views should wire the sandboxed preload');
 assert.ok(preload.includes('contextBridge'), 'backend preload should be explicit even if tiny');
 assert.ok(!preload.includes('Object.freeze'), 'contextBridge API must remain callable in the portable exe');
-assert.ok(preload.includes("readImage: () => ipcRenderer.invoke('passideck:read-clipboard-image')"), 'sandboxed backend preload must expose only the native image fallback');
-assert.ok(!preload.includes('copyText(') && !preload.includes('readText('), 'preload must not override terminal text clipboard handling');
+assert.ok(preload.includes("copyText: text => ipcRenderer.invoke('passideck:copy-text'") && preload.includes("readText: () => ipcRenderer.invoke('passideck:read-clipboard-text')"), 'sandboxed backend preload must expose native text clipboard bridges');
+assert.ok(preload.includes("readImage: () => ipcRenderer.invoke('passideck:read-clipboard-image')"), 'sandboxed backend preload must expose the native image fallback');
+assert.ok(
+  preload.includes("getAppVersion: () => ipcRenderer.invoke('passideck:get-app-version')") &&
+  main.includes("ipcMain.handle('passideck:get-app-version'") && main.includes('app.getVersion()'),
+  'desktop renderer must receive the packaged app version through sender-validated IPC'
+);
 
 assert.ok(shellPreload.includes('contextBridge'), 'local shell must use an explicit preload bridge');
 assert.ok(

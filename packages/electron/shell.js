@@ -43,7 +43,7 @@ function render(next) {
   tabs.replaceChildren(...state.backends.map(backend => {
     const tab = document.createElement('button');
     const active = backend.id === state.activeBackendId;
-    tab.className = `backend-tab${active ? ' active' : ''}${backend.attention ? ' attention' : ''}${backend.responsePulse ? ' response-pulse' : ''}${backend.notifyBlinking ? ' response-blinking' : ''}`;
+    tab.className = `backend-tab${active ? ' active' : ''}${backend.attention ? ' attention' : ''}${backend.responsePulse ? ' response-pulse' : ''}${backend.notifyBlinking ? ' response-blinking' : ''}${backend.hiddenDesktopAttention ? ' hidden-desktop-attention' : ''}`;
     tab.style.setProperty('--tab-color', backend.color);
     tab.dataset.backendId = backend.id;
     tab.setAttribute('aria-current', active ? 'page' : 'false');
