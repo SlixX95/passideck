@@ -210,21 +210,21 @@ body.notify-blinking .switcher-btn.response-pulse:not(.active) { animation: swit
 .chrome-btn:hover, .chrome-btn.armed { color: var(--tg-accent); border-color: var(--tg-accent); background: color-mix(in srgb, var(--tg-accent-dim) 40%, transparent); }
 #uploadFileBtn, #clipboardImageBtn { color: var(--tg-accent); }
 .codex-limits { display: flex; align-items: center; gap: 3px; height: 23px; }
-214|.codex-limit { display: inline-flex; align-items: center; height: 21px; gap: 4px; padding: 0 6px; border: 1px solid var(--tg-border); color: var(--tg-text-dim); background: linear-gradient(180deg, var(--tg-surface-hover), #050909); position: relative; }
-215|.codex-limit-part { display: inline-flex; align-items: center; gap: 2px; }
-216|.codex-account-label { font-weight: 800; }
-217|.codex-limit-separator { color: var(--tg-text-dim); }
-218|.codex-limit span { color: var(--tg-text-dim); }
-219|.codex-limit b { color: var(--tg-accent); font-weight: 800; }
-220|.codex-limit:hover { color: var(--tg-accent); border-color: var(--tg-accent-dim); }
-221|.codex-limit.active-account { border-color: var(--tg-accent); color: var(--tg-text-bright); background: color-mix(in srgb, var(--tg-accent) 16%, #050909); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tg-accent) 55%, transparent), 0 0 8px color-mix(in srgb, var(--tg-accent) 35%, transparent); }
-222|.codex-limit.active-account span { color: var(--tg-text-bright); font-weight: 800; }
-223|.codex-active-dot { display: block; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--tg-accent); box-shadow: 0 0 7px var(--tg-accent); }
-224|.codex-limit-part.unavailable b { color: var(--tg-red); }
-225|.codex-limit.limit-reached { border-color: var(--tg-red); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tg-red) 35%, transparent); }
-226|
-227|
-228|
+.codex-limit { display: inline-flex; align-items: center; height: 21px; gap: 4px; padding: 0 6px; border: 1px solid var(--tg-border); color: var(--tg-text-dim); background: linear-gradient(180deg, var(--tg-surface-hover), #050909); position: relative; }
+.codex-limit-part { display: inline-flex; align-items: center; gap: 2px; }
+.codex-account-label { font-weight: 800; }
+.codex-limit-separator { color: var(--tg-text-dim); }
+.codex-limit span { color: var(--tg-text-dim); }
+.codex-limit b { color: var(--tg-accent); font-weight: 800; }
+.codex-limit:hover { color: var(--tg-accent); border-color: var(--tg-accent-dim); }
+.codex-limit.active-account { border-color: var(--tg-accent); color: var(--tg-text-bright); background: color-mix(in srgb, var(--tg-accent) 16%, #050909); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tg-accent) 55%, transparent), 0 0 8px color-mix(in srgb, var(--tg-accent) 35%, transparent); }
+.codex-limit.active-account span { color: var(--tg-text-bright); font-weight: 800; }
+.codex-active-dot { display: block; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--tg-accent); box-shadow: 0 0 7px var(--tg-accent); }
+.codex-limit-part.unavailable b { color: var(--tg-red); }
+.codex-limit.limit-reached { border-color: var(--tg-red); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tg-red) 35%, transparent); }
+
+
+.app-tooltip {
   position: fixed;
   z-index: var(--z-tooltip);
   max-width: min(360px, calc(100vw - 16px));
