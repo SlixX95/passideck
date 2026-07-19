@@ -1430,50 +1430,66 @@ function renderCodexLimitCells(accounts) {
   root.replaceChildren();
   const indexed = list.length > 1;
   for (const account of list) {
-    const prefix = indexed ? `#${account.index}-` : '';
-    for (const [kind, suffix] of [['primary', '5h'], ['secondary', '7d']]) {
-      const cell = document.createElement('span');
-      cell.className = 'codex-limit';
-      cell.dataset.accountIndex = String(account.index);
-      cell.dataset.limit = kind;
-      cell.setAttribute('data-account-index', String(account.index));
-      const name = `${prefix}${suffix}`;
-      cell.setAttribute('aria-label', `Codex ${name}`);
+    const cell = document.createElement('span');
+    cell.className = 'codex-limit';
+    cell.dataset.accountIndex = String(account.index);
+    cell.setAttribute('data-account-index', String(account.index));
+    cell.setAttribute('aria-label', `Codex ${indexed ? `#${account.index}` : ''} limits`);
+    if (account.active) {
+      const dot = document.createElement('i');
+      dot.className = 'codex-active-dot';
+      dot.setAttribute('aria-hidden', 'true');
+      cell.append(dot);
+    }
+    const prefix = indexed ? `#${account.index} ` : '';
+    if (prefix) {
+      const accountLabel = document.createElement('span');
+      accountLabel.className = 'codex-account-label';
+      accountLabel.textContent = prefix.trim();
+      cell.append(accountLabel);
+    }
+    for (const [kind, labelText] of [['primary', '5h'], ['secondary', '7d']]) {
+      if (kind === 'secondary') {
+        const separator = document.createElement('span');
+        separator.className = 'codex-limit-separator';
+        separator.textContent = '/';
+        separator.setAttribute('aria-hidden', 'true');
+        cell.append(separator);
+      }
+      const part = document.createElement('span');
+      part.className = 'codex-limit-part';
+      part.dataset.limit = kind;
       const label = document.createElement('span');
-      label.textContent = kind === 'primary' ? `${prefix}5h` : `${prefix}7d`;
+      label.textContent = labelText;
       const value = document.createElement('b');
       value.textContent = '--%';
-      if (account.active && kind === 'primary') {
-        const dot = document.createElement('i');
-        dot.className = 'codex-active-dot';
-        dot.setAttribute('aria-hidden', 'true');
-        cell.append(dot);
-      }
-      cell.append(label, value);
-      root.append(cell);
+      part.append(label, value);
+      cell.append(part);
     }
+    root.append(cell);
   }
 }
 
 function setCodexLimitCell(account, kind, limit) {
-  const cell = document.querySelector(`#codexLimits [data-account-index="${account.index}"][data-limit="${kind}"]`);
-  if (!cell) return;
+  const cell = document.querySelector(`#codexLimits [data-account-index="${account.index}"]`);
+  const part = cell?.querySelector(`[data-limit="${kind}"]`);
+  if (!cell || !part) return;
   cell.classList.toggle('active-account', Boolean(account.active));
   cell.classList.toggle('limit-reached', Boolean(account.rateLimitReachedType));
   const windowName = kind === 'primary' ? '5h' : '7d';
   const accountName = account.label || `#${account.index}`;
   if (!limit) {
-    cell.classList.add('unavailable');
-    cell.querySelector('b').textContent = '--%';
-    setTooltip(cell, `Codex ${accountName} ${windowName}${account.active ? ' · currently active' : ''} unavailable${account.error ? ` · ${account.error}` : ''}`);
+    part.classList.add('unavailable');
+    part.querySelector('b').textContent = '--%';
+    setTooltip(part, `Codex ${accountName} ${windowName}${account.active ? ' · currently active' : ''} unavailable${account.error ? ` · ${account.error}` : ''}`);
     return;
   }
   const used = Math.max(0, Math.min(100, Math.round(Number(limit.usedPercent) || 0)));
   const left = Math.max(0, 100 - used);
-  cell.classList.remove('unavailable');
-  cell.style.setProperty('--v', `${left}%`);
-  cell.querySelector('b').textContent = `${left}%`;
-  setTooltip(cell, `Codex ${accountName} ${windowName}${account.active ? ' · currently active' : ''}: ${left}% left (${used}% used) · ${formatReset(limit.resetsAt)}`);
+  part.classList.remove('unavailable');
+  part.style.setProperty('--v', `${left}%`);
+  part.querySelector('b').textContent = `${left}%`;
+  setTooltip(part, `Codex ${accountName} ${windowName}${account.active ? ' · currently active' : ''}: ${left}% left (${used}% used) · ${formatReset(limit.resetsAt)}`);
 }
 
 function updateCodexLimits(data) {

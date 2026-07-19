@@ -33,10 +33,11 @@ assert.ok(html.includes('vendor/xterm.js') && !html.includes('cdn.jsdelivr.net')
 assert.ok(html.includes("location.port === '8792' ? 'PassiDeck Dev' : 'PassiDeck'"), 'browser tab title must distinguish dev port 8792 from normal/live');
 assert.ok(
   app.includes('function renderCodexLimitCells') &&
-  app.includes('`${prefix}5h`') &&
-  app.includes('`${prefix}7d`') &&
+  app.includes("const prefix = indexed ? `#${account.index} ` : ''") &&
+  app.includes("separator.textContent = '/'") &&
+  app.includes("part.dataset.limit = kind") &&
   app.includes('data-account-index'),
-  'Codex limit chrome must render compact 5h/7d cells for every credential index'
+  'Codex limit chrome must render one compact 5h / 7d chip per credential index'
 );
 assert.ok(
   app.includes("cell.classList.toggle('active-account', Boolean(account.active))") &&
@@ -50,7 +51,7 @@ assert.ok(
 );
 assert.ok(!style.includes('.response-pulse { animation: none'), 'response attention must keep pulsing even when the OS requests reduced motion');
 assert.ok(!style.includes('#ff3158') && !style.includes("content: 'NEW'"), 'response attention must stay theme-colored and must not add a NEW badge');
-assert.ok(html.includes('app.js?v=20260719-desktop-attention-contrast-codex-active') && html.includes('style.css?v=20260719-desktop-attention-contrast-codex-active-visible'), 'client cache keys must activate stronger hidden-desktop attention and the visible active Codex account marker');
+assert.ok(html.includes('app.js?v=20260719-desktop-attention-contrast-codex-account-group') && html.includes('style.css?v=20260719-desktop-attention-contrast-codex-account-group'), 'client cache keys must activate stronger hidden-desktop attention and grouped Codex account chips');
 assert.ok(style.includes('@keyframes desktop-response-pulse') && style.includes('background: color-mix(in srgb, var(--tg-accent) 34%, #030707)') && style.includes('box-shadow: 0 0 16px color-mix(in srgb, var(--tg-accent) 68%, transparent)'), 'desktop attention must pulse its surface and border clearly without alarm colors');
 assert.ok(app.includes('term.onBell?.(() => notifyResponseComplete(id));'), 'native Hermes terminal completion BEL must drive response attention');
 assert.ok(!app.includes("msg.type === 'response-complete'"), 'PassiDeck must not infer Hermes completion through server database events');
