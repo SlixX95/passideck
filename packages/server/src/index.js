@@ -585,10 +585,22 @@ async function readCodexLimits() {
     }
   }
   if (!accounts.some(account => account.ok)) throw new Error(accounts[0]?.error || 'Codex limits unavailable');
+  const active = selectActiveCodexAccount(accounts);
+  for (const account of accounts) account.active = account === active;
   const first = accounts[0] || {};
   const data = { ...first, ok: true, at: new Date().toISOString(), cached: false, accounts };
   codexLimitsCache = { at: now, data: { ...data, cached: undefined } };
   return data;
+}
+
+function selectActiveCodexAccount(accounts) {
+  const list = Array.isArray(accounts) ? accounts : [];
+  const withCapacity = list.find(account => {
+    if (!account?.ok) return false;
+    const windows = [account.primary, account.secondary].filter(Boolean);
+    return windows.length > 0 && windows.every(window => Number(window.usedPercent) < 100);
+  });
+  return withCapacity || list.find(account => account?.active) || list[0] || null;
 }
 
 async function readCodexLimitsForAuth(auth) {
@@ -1021,7 +1033,7 @@ function createServer(config = loadConfig()) {
   return { app, server, wss, sessions, close };
 }
 
-module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, UPLOAD_MIME_ALLOWLIST };
+module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, UPLOAD_MIME_ALLOWLIST };
 
 if (require.main === module) {
   const config = loadConfig();

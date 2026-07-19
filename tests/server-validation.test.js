@@ -22,7 +22,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 (async () => {
   try {
-    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, parseCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth } = require('../packages/server/src/index');
+    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, parseCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount } = require('../packages/server/src/index');
     assert.strictEqual(
       hermesResumeIdFromArgv(['/venv/bin/python3', '/venv/bin/hermes', '--resume', '20260716_180100_5dbdcf']),
       '20260716_180100_5dbdcf',
@@ -72,6 +72,10 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
       [2, '#2Passi', 'passi-access']
     ], 'every native Hermes Codex pool account must be exposed independently and in priority order');
     assert.deepStrictEqual(pooledAuths.map(auth => auth.active), [false, true], 'the first non-exhausted fill-first credential must be marked active');
+    assert.strictEqual(selectActiveCodexAccount([
+      { index: 1, active: true, ok: true, primary: null, secondary: { usedPercent: 100 } },
+      { index: 2, active: false, ok: true, primary: null, secondary: { usedPercent: 43 } }
+    ]).index, 2, 'a quota-exhausted credential must not remain active when another account has capacity');
     saveHermesCodexAuth(pooledAuths[0], { access_token: 'finch-refreshed', refresh_token: 'finch-refresh-2' });
     const refreshedPool = JSON.parse(fs.readFileSync(hermesAuthPath, 'utf8'));
     assert.strictEqual(refreshedPool.credential_pool['openai-codex'][0].access_token, 'finch-refreshed', 'refresh must update the matching pool account');
