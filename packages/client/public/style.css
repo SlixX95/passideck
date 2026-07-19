@@ -210,12 +210,13 @@ body.notify-blinking .switcher-btn.response-pulse:not(.active) { animation: swit
 .chrome-btn:hover, .chrome-btn.armed { color: var(--tg-accent); border-color: var(--tg-accent); background: color-mix(in srgb, var(--tg-accent-dim) 40%, transparent); }
 #uploadFileBtn, #clipboardImageBtn { color: var(--tg-accent); }
 .codex-limits { display: flex; align-items: center; gap: 3px; height: 23px; }
-.codex-limit { gap: 4px; padding: 0 6px; border-color: var(--tg-border); color: var(--tg-text-dim); background: linear-gradient(180deg, var(--tg-surface-hover), #050909); position: relative; }
+.codex-limit { display: inline-flex; align-items: center; height: 21px; gap: 4px; padding: 0 6px; border: 1px solid var(--tg-border); color: var(--tg-text-dim); background: linear-gradient(180deg, var(--tg-surface-hover), #050909); position: relative; }
 .codex-limit span { color: var(--tg-text-dim); }
 .codex-limit b { color: var(--tg-accent); font-weight: 800; }
 .codex-limit:hover { color: var(--tg-accent); border-color: var(--tg-accent-dim); }
-.codex-limit.active-account { border-color: var(--tg-accent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tg-accent) 35%, transparent), 0 0 7px color-mix(in srgb, var(--tg-accent) 20%, transparent); }
-.codex-active-dot { width: 5px; height: 5px; flex: 0 0 5px; border-radius: 50%; background: var(--tg-accent); box-shadow: 0 0 5px var(--tg-accent); }
+.codex-limit.active-account { border-color: var(--tg-accent); color: var(--tg-text-bright); background: color-mix(in srgb, var(--tg-accent) 16%, #050909); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tg-accent) 55%, transparent), 0 0 8px color-mix(in srgb, var(--tg-accent) 35%, transparent); }
+.codex-limit.active-account span { color: var(--tg-text-bright); font-weight: 800; }
+.codex-active-dot { display: block; width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--tg-accent); box-shadow: 0 0 7px var(--tg-accent); }
 .codex-limit.unavailable b { color: var(--tg-red); }
 .codex-limit.limit-reached { border-color: var(--tg-red); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tg-red) 35%, transparent); }
 

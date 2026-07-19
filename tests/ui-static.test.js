@@ -41,12 +41,16 @@ assert.ok(
 assert.ok(
   app.includes("cell.classList.toggle('active-account', Boolean(account.active))") &&
   app.includes("dot.className = 'codex-active-dot'") &&
-  style.includes('.codex-limit.active-account'),
-  'the currently selected Codex credential must have a compact visible active marker'
+  style.includes('.codex-limit { display: inline-flex;') &&
+  style.includes('border: 1px solid var(--tg-border)') &&
+  style.includes('.codex-limit.active-account {') &&
+  style.includes('background: color-mix(in srgb, var(--tg-accent) 16%, #050909)') &&
+  style.includes('.codex-active-dot { display: block; width: 7px; height: 7px;'),
+  'the currently selected Codex credential must have a genuinely rendered, high-contrast active marker'
 );
 assert.ok(!style.includes('.response-pulse { animation: none'), 'response attention must keep pulsing even when the OS requests reduced motion');
 assert.ok(!style.includes('#ff3158') && !style.includes("content: 'NEW'"), 'response attention must stay theme-colored and must not add a NEW badge');
-assert.ok(html.includes('app.js?v=20260719-desktop-attention-contrast-codex-active') && html.includes('style.css?v=20260719-desktop-attention-contrast-codex-active'), 'client cache keys must activate stronger hidden-desktop attention and the active Codex account marker');
+assert.ok(html.includes('app.js?v=20260719-desktop-attention-contrast-codex-active') && html.includes('style.css?v=20260719-desktop-attention-contrast-codex-active-visible'), 'client cache keys must activate stronger hidden-desktop attention and the visible active Codex account marker');
 assert.ok(style.includes('@keyframes desktop-response-pulse') && style.includes('background: color-mix(in srgb, var(--tg-accent) 34%, #030707)') && style.includes('box-shadow: 0 0 16px color-mix(in srgb, var(--tg-accent) 68%, transparent)'), 'desktop attention must pulse its surface and border clearly without alarm colors');
 assert.ok(app.includes('term.onBell?.(() => notifyResponseComplete(id));'), 'native Hermes terminal completion BEL must drive response attention');
 assert.ok(!app.includes("msg.type === 'response-complete'"), 'PassiDeck must not infer Hermes completion through server database events');
