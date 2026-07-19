@@ -51,7 +51,7 @@ assert.ok(
 );
 assert.ok(!style.includes('.response-pulse { animation: none'), 'response attention must keep pulsing even when the OS requests reduced motion');
 assert.ok(!style.includes('#ff3158') && !style.includes("content: 'NEW'"), 'response attention must stay theme-colored and must not add a NEW badge');
-assert.ok(html.includes('app.js?v=20260719-desktop-attention-contrast-codex-account-group') && html.includes('style.css?v=20260719-desktop-attention-contrast-codex-account-group'), 'client cache keys must activate stronger hidden-desktop attention and grouped Codex account chips');
+assert.ok(html.includes('app.js?v=20260719-desktop-attention-contrast-codex-account-group') && html.includes('style.css?v=20260719-desktop-attention-contrast-codex-account-group-v2'), 'client cache keys must activate stronger hidden-desktop attention and grouped Codex account chips');
 assert.ok(style.includes('@keyframes desktop-response-pulse') && style.includes('background: color-mix(in srgb, var(--tg-accent) 34%, #030707)') && style.includes('box-shadow: 0 0 16px color-mix(in srgb, var(--tg-accent) 68%, transparent)'), 'desktop attention must pulse its surface and border clearly without alarm colors');
 assert.ok(app.includes('term.onBell?.(() => notifyResponseComplete(id));'), 'native Hermes terminal completion BEL must drive response attention');
 assert.ok(!app.includes("msg.type === 'response-complete'"), 'PassiDeck must not infer Hermes completion through server database events');
