@@ -145,6 +145,9 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     const port = app.server.address().port;
     const base = `http://127.0.0.1:${port}`;
 
+    const staticResponse = await fetch(`${base}/app.js`, { headers: { 'Accept-Encoding': 'gzip' } });
+    assert.strictEqual(staticResponse.headers.get('content-encoding'), 'gzip', 'static assets must be compressed when the client supports gzip');
+
     const persistentResponse = await fetch(`${base}/api/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

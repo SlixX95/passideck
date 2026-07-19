@@ -1,4 +1,5 @@
 const express = require('express');
+const compression = require('compression');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const path = require('path');
@@ -881,7 +882,6 @@ function createServer(config = loadConfig()) {
   app.use(express.json({ limit: UPLOAD_JSON_LIMIT }));
   app.use('/api', requestGuard);
   app.use('/uploads', express.static(uploadsRoot(), { setHeaders: setUploadHeaders }));
-  app.use(express.static(path.join(__dirname, '..', '..', 'client', 'public')));
 
   app.get('/api/health', (_req, res) => {
     const mem = process.memoryUsage();
@@ -988,6 +988,8 @@ function createServer(config = loadConfig()) {
     if (db && dbModule) dbModule.markSessionExited(db, req.params.id, 0, 'closed');
     res.json({ ok: true });
   });
+
+  app.use(compression(), express.static(path.join(__dirname, '..', '..', 'client', 'public')));
 
   wss.on('connection', (ws, req) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
