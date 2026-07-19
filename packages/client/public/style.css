@@ -18,7 +18,7 @@
   --tg-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
   --tg-radius: 0;
   --tg-radius-sm: 0;
-  --surface-opacity: 78%;
+
   --z-window-base: 10;
   --z-window-chrome: 20;
   --z-panel-frame: 17;
@@ -299,7 +299,7 @@ body.notify-blinking .switcher-btn.response-pulse:not(.active) { animation: swit
   padding: .45em .75em;
   border-bottom: 1px solid color-mix(in srgb, var(--tg-border) 68%, transparent);
 }
-.settings-row[hidden] { display: none !important; }
+
 .settings-row:last-child, .settings-toggle:last-child { border-bottom: 0; }
 .settings-copy { display: grid; gap: .12em; min-width: 0; }
 .settings-copy label, .settings-copy > span { color: var(--tg-text-bright); font-size: .82em; font-weight: 700; letter-spacing: .01em; }
@@ -1026,27 +1026,7 @@ body[data-skin="prism"] .term-panel::before { background: linear-gradient(135deg
 body[data-skin="prism"] .topbar { border-bottom: 2px solid var(--tg-edge-hot); box-shadow: 0 2px 0 color-mix(in srgb, var(--tg-accent-dim) 55%, transparent), 0 12px 28px rgba(0,0,0,.5); }
 body[data-skin="neon"] .term-panel, body[data-skin="neon"] .settings-panel { border-color: color-mix(in srgb, var(--tg-edge-hot) 58%, var(--tg-hairline)); }
 
-body.desktop-app[data-transparency="desktop"], body.desktop-app[data-transparency="full"] { background: transparent; }
-body.desktop-app[data-transparency="desktop"] .layout-desktop,
-body.desktop-app[data-transparency="full"] .layout-desktop {
-  background:
-    radial-gradient(circle at 8% 7%, color-mix(in srgb, var(--tg-accent) 13%, transparent), transparent 26%),
-    radial-gradient(circle at 90% 82%, color-mix(in srgb, var(--tg-purple) 9%, transparent), transparent 32%),
-    color-mix(in srgb, var(--tg-bg) var(--surface-opacity), transparent);
-  backdrop-filter: blur(9px) saturate(1.08);
-}
-body.desktop-app[data-transparency="full"] .topbar,
-body.desktop-app[data-transparency="full"] .term-panel {
-  background: color-mix(in srgb, var(--tg-panel-bg) var(--surface-opacity), transparent);
-  backdrop-filter: var(--tg-surface-blur);
-}
-body.desktop-app[data-transparency="full"] .term-header,
-body.desktop-app[data-transparency="full"] .terminal {
-  background: color-mix(in srgb, var(--tg-bg) var(--terminal-opacity), transparent);
-}
-body.desktop-app[data-transparency="full"] .settings-panel {
-  background: color-mix(in srgb, var(--tg-bg) 94%, transparent);
-}
+
 @media (prefers-reduced-motion: no-preference) {
   .term-panel, .switcher-btn, .chrome-btn, .topbar-ql-btn { transition: border-color .12s ease, box-shadow .12s ease, background .12s ease, color .12s ease; }
 }

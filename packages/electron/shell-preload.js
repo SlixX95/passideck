@@ -12,6 +12,5 @@ contextBridge.exposeInMainWorld('passideckShell', {
   setGlobalSoundEnabled: enabled => ipcRenderer.invoke('passideck:set-global-sound-enabled', Boolean(enabled)),
   windowAction: action => ipcRenderer.send('passideck:window-action', action),
   windowResize: (phase, value) => ipcRenderer.send('passideck:window-resize', phase, value),
-  onTransparencyChanged: callback => ipcRenderer.on('passideck:transparency-changed', (_event, value) => callback(value)),
   onBackendsChanged: callback => ipcRenderer.on('passideck:backends-changed', (_event, state) => callback(state))
 });

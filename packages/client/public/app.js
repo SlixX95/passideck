@@ -28,21 +28,6 @@ const THEMES = {
   mono:   { background: '#0f1117', foreground: '#c8ccd8', cursor: '#c8ccd8', selectionBackground: '#555b6f' }
 };
 
-function isDesktopApp() {
-  return window.passideckDesktop?.isDesktop === true;
-}
-
-function supportsTransparency() {
-  return isDesktopApp() && window.passideckDesktop?.supportsTransparency === true;
-}
-
-function terminalTheme(theme = state.theme) {
-  const base = THEMES[theme] || THEMES.blue;
-  if (!supportsTransparency() || state.transparencyMode !== 'full') return base;
-  const alpha = Math.round(Math.max(64, state.transparencyOpacity) * 2.55).toString(16).padStart(2, '0');
-  return { ...base, background: `${base.background}${alpha}` };
-}
-
 const state = {
   sessions: new Map(),
   order: [],
@@ -51,8 +36,6 @@ const state = {
   activeId: null,
   theme: 'blue',
   skin: 'neon',
-  transparencyMode: 'off',
-  transparencyOpacity: 78,
   fontSize: 13,
   responseSoundMode: 'background',
   responseSoundTone: 'soft',
@@ -1024,8 +1007,6 @@ function uiPayload() {
     minimized: persistentMinimizedIds(),
     theme: state.theme,
     skin: state.skin,
-    transparencyMode: state.transparencyMode,
-    transparencyOpacity: state.transparencyOpacity,
     fontSize: state.fontSize,
     notifyBlinking: state.notifyBlinking,
     chromeHidden: document.body.classList.contains('chrome-hidden'),
@@ -1242,7 +1223,7 @@ function setTheme(theme, opts = {}) {
   const select = document.getElementById('themeSelect');
   if (select) select.value = theme;
   for (const entry of state.sessions.values()) {
-    entry.term.options.theme = terminalTheme(theme);
+    entry.term.options.theme = THEMES[theme];
   }
   if (opts.persist !== false) saveUiState();
 }
@@ -1256,42 +1237,6 @@ function setSkin(skin, opts = {}) {
   if (opts.persist !== false) saveUiState();
 }
 
-function applyTransparency() {
-  const desktop = supportsTransparency();
-  const appliedMode = desktop ? state.transparencyMode : 'off';
-  document.body.classList.toggle('desktop-app', desktop);
-  document.body.dataset.transparency = appliedMode;
-  document.body.style.setProperty('--surface-opacity', `${state.transparencyOpacity}%`);
-  document.body.style.setProperty('--terminal-opacity', `${Math.max(64, state.transparencyOpacity)}%`);
-  const modeRow = document.getElementById('transparencyModeRow');
-  const opacityRow = document.getElementById('transparencyOpacityRow');
-  const modeSelect = document.getElementById('transparencyModeSelect');
-  const slider = document.getElementById('transparencyOpacity');
-  const label = document.getElementById('transparencyOpacityLabel');
-  if (modeRow) modeRow.hidden = !desktop;
-  if (opacityRow) opacityRow.hidden = !desktop || state.transparencyMode === 'off';
-  if (modeSelect) modeSelect.value = state.transparencyMode;
-  if (slider) slider.value = String(state.transparencyOpacity);
-  if (label) label.textContent = `${state.transparencyOpacity}%`;
-  for (const entry of state.sessions.values()) entry.term.options.theme = terminalTheme();
-  window.passideckDesktop?.setTransparency?.({ mode: appliedMode, opacity: state.transparencyOpacity });
-}
-
-function setTransparencyMode(mode, opts = {}) {
-  state.transparencyMode = ['off', 'desktop', 'full'].includes(mode) ? mode : 'off';
-  applyTransparency();
-  if (opts.persist !== false) saveUiState();
-}
-
-function setTransparencyOpacity(opacity, opts = {}) {
-  state.transparencyOpacity = Math.max(35, Math.min(95, Math.round(Number(opacity) || 78)));
-  applyTransparency();
-  if (opts.persist !== false) saveUiState();
-}
-
-function configureTransparencyControls() {
-  applyTransparency();
-}
 
 function saveResponseSoundPrefs() {
   try {
@@ -2036,8 +1981,6 @@ function applyAuthoritativeUiState(ui, opts = {}) {
   loadPanePrefs(ui.panePrefs || {});
   setTheme(ui.theme || 'green', { persist: false });
   setSkin(ui.skin || 'neon', { persist: false });
-  setTransparencyMode(ui.transparencyMode || 'off', { persist: false });
-  setTransparencyOpacity(ui.transparencyOpacity || 78, { persist: false });
   setFontSize(ui.fontSize || state.fontSize, { persist: false });
   setNotifyBlinking(ui.notifyBlinking !== false, { persist: false });
   setChromeHidden(Boolean(ui.chromeHidden), { persist: false, resize: false });
@@ -2744,8 +2687,7 @@ function createPanel(session, opts = {}) {
     cursorBlink: true,
     scrollOnUserInput: false,
     scrollback: 20000,
-    allowTransparency: true,
-    theme: terminalTheme()
+    theme: THEMES[state.theme]
   });
   const fit = new FitAddon.FitAddon();
   const serialize = window.SerializeAddon ? new SerializeAddon.SerializeAddon() : null;
@@ -3517,8 +3459,6 @@ async function init() {
   loadPanePrefs(ui?.panePrefs || {});
   setTheme(ui?.theme || 'green', { persist: false });
   setSkin(ui?.skin || 'neon', { persist: false });
-  setTransparencyMode(ui?.transparencyMode || 'off', { persist: false });
-  setTransparencyOpacity(Number(ui?.transparencyOpacity) || 78, { persist: false });
   setFontSize(ui?.fontSize || state.fontSize, { persist: false });
   setNotifyBlinking(ui?.notifyBlinking !== false, { persist: false });
   setChromeHidden(Boolean(ui?.chromeHidden), { persist: false, resize: false });
@@ -3590,8 +3530,6 @@ document.getElementById('chromeToggle').onclick = toggleChrome;
 document.getElementById('chromePeek').onclick = toggleChrome;
 document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
 document.getElementById('skinSelect').onchange = e => setSkin(e.target.value);
-document.getElementById('transparencyModeSelect').onchange = e => setTransparencyMode(e.target.value);
-document.getElementById('transparencyOpacity').oninput = e => setTransparencyOpacity(e.target.value);
 document.getElementById('fontSizeSelect').onchange = e => previewFontSize(Number(e.target.value));
 document.getElementById('notifyBlinkingSelect').onchange = e => setNotifyBlinking(e.target.value === 'on');
 document.getElementById('responseSoundModeSelect').onchange = e => setResponseSoundMode(e.target.value);
@@ -3773,7 +3711,6 @@ async function ensureSerializeAddon() {
   Function(code).call(window);
 }
 
-configureTransparencyControls();
 ensureSerializeAddon().then(init).catch(err => {
   console.error(err);
   document.getElementById('emptyState').innerHTML = '<h2>PassiDeck error.</h2><p>Check console.</p>';

@@ -37,9 +37,16 @@ assert.ok(main.includes('autoHideMenuBar: true'), 'desktop app should not show n
 assert.ok(main.includes("process.platform === 'darwin'") && main.includes("titleBarStyle: 'hiddenInset'") && main.includes('trafficLightPosition: { x: 12, y: 8 }'), 'macOS traffic lights must be vertically centered in the compact 30px titlebar');
 assert.ok(main.includes('const TITLEBAR_HEIGHT = 30;') && shellHtml.includes('#titlebar { position: relative; -webkit-app-region: drag; height: 30px;'), 'desktop titlebar and backend view offset must stay at the compact 30px height');
 assert.ok(main.includes('frame: false'), 'Windows and Linux must keep themed custom window chrome');
-assert.ok(main.includes("transparent: process.platform === 'win32'"), 'native transparent BrowserWindow must be restricted to the verified Windows target');
-assert.ok(main.includes("backgroundColor: process.platform === 'win32' ? '#00000000' : '#020505'"), 'non-Windows desktop shells must retain an opaque fallback');
-assert.ok(!main.includes('setBackgroundMaterial'), 'wallpaper visibility must not rely on Acrylic, which does not expose underlying pixels');
+assert.ok(!main.includes('transparent:') && main.includes("backgroundColor: '#020505'"), 'the desktop BrowserWindow must be opaque on every platform');
+assert.ok(
+  main.includes("ipcMain.on('passideck:window-resize'") &&
+  main.includes('const RESIZE_DIRECTIONS = new Set') &&
+  main.includes('function resizeWindowFromShell') &&
+  shellJs.includes("document.querySelectorAll('.resize-handle')") &&
+  shellHtml.includes('data-resize="bottom-right"') &&
+  shellPreload.includes("ipcRenderer.send('passideck:window-resize'"),
+  'frameless Windows shell must retain sender-validated resize behavior independently of opacity'
+);
 assert.ok(shellPreload.includes('platform: process.platform'), 'local shell must receive the trusted Electron platform');
 assert.ok(shellJs.includes('document.documentElement.dataset.platform = window.passideckShell.platform'), 'local shell must expose platform styling on the root element');
 assert.ok(shellHtml.indexOf('<button id="uiToggle"') < shellHtml.indexOf('<button id="globalSoundToggle"'), 'desktop UI toggle must sit beside and before Notify and Reload');
@@ -56,14 +63,10 @@ assert.ok(preload.includes("notifyResponseComplete: details => ipcRenderer.send(
 assert.ok(preload.includes("hiddenDesktop: details?.hiddenDesktop === true"), 'backend completion bridge must preserve only the trusted hidden-desktop attention bit');
 assert.ok(preload.includes("clearResponseAttention: () => ipcRenderer.send('passideck:clear-response-attention')"), 'clicking the notified pane must clear desktop tab attention through a narrow trusted preload event');
 assert.ok(preload.includes("setNotifyBlinking: enabled => ipcRenderer.send('passideck:set-notify-blinking'"), 'backend settings must synchronize Notify blinking through a narrow trusted preload event');
-assert.ok(preload.includes("setTransparency: value => ipcRenderer.send('passideck:set-transparency'"), 'backend settings must synchronize transparency through a narrow trusted preload event');
-assert.ok(preload.includes("supportsTransparency: process.platform === 'win32'"), 'backend preload must advertise native transparency only where implemented');
-assert.ok(
-  main.includes("ipcMain.on('passideck:set-transparency'") && main.includes('backendIdForSender(event)') &&
-  main.includes("view.setBackgroundColor('#00000000')") && shellPreload.includes('onTransparencyChanged'),
-  'desktop transparency must be sender-validated and propagated to transparent backend and shell surfaces'
-);
-assert.ok(shellHtml.includes('data-transparency="off"') && shellHtml.includes('--surface-opacity'), 'local Electron titlebar must receive the active backend transparency state');
+for (const [name, source] of [['main', main], ['preload', preload], ['shell HTML', shellHtml], ['shell JS', shellJs], ['shell preload', shellPreload]]) {
+  assert.ok(!/transparency/i.test(source), `${name} must not retain transparency support`);
+}
+assert.ok(main.includes("view.setBackgroundColor('#020505')"), 'backend views must be opaque');
 assert.ok(
   main.includes("ipcMain.on('passideck:set-notify-blinking'") &&
   main.includes('config.notifyBlinking = Boolean(enabled)') &&

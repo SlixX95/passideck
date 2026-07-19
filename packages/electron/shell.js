@@ -44,13 +44,6 @@ function applyAccent() {
   document.title = backend ? `${backend.name} · PassiDeck` : 'PassiDeck';
 }
 
-function applyTransparency(value = {}) {
-  const mode = ['off', 'desktop', 'full'].includes(value.mode) ? value.mode : 'off';
-  const opacity = Math.max(35, Math.min(95, Math.round(Number(value.opacity) || 78)));
-  document.documentElement.dataset.transparency = mode;
-  document.documentElement.style.setProperty('--surface-opacity', mode === 'off' ? '100%' : `${opacity}%`);
-}
-
 function renderUiToggle(hidden) {
   uiToggle.textContent = hidden ? 'UI Off' : 'UI On';
   uiToggle.setAttribute('aria-pressed', String(!hidden));
@@ -102,8 +95,6 @@ function render(next) {
     return tab;
   }));
   applyAccent();
-  const activeBackend = state.backends.find(backend => backend.id === state.activeBackendId);
-  applyTransparency({ mode: activeBackend?.transparencyMode, opacity: activeBackend?.transparencyOpacity });
 }
 
 async function openDialog(backend = null) {
@@ -167,5 +158,4 @@ document.querySelectorAll('#windowControls button[data-action]').forEach(button 
 });
 
 window.passideckShell.onBackendsChanged(render);
-window.passideckShell.onTransparencyChanged(applyTransparency);
 window.passideckShell.listBackends().then(render);

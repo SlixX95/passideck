@@ -67,9 +67,7 @@ function shellState() {
         attentionAt: entry?.attentionAt || 0,
         responsePulse: Boolean(entry?.responsePulse),
         hiddenDesktopAttention: Boolean(entry?.hiddenDesktopAttention),
-        notifyBlinking: entry?.notifyBlinking ?? config.notifyBlinking,
-        transparencyMode: entry?.transparencyMode || 'off',
-        transparencyOpacity: entry?.transparencyOpacity || 78
+        notifyBlinking: entry?.notifyBlinking ?? config.notifyBlinking
       };
     })
   };
@@ -159,31 +157,6 @@ function setGlobalSoundEnabled(enabled) {
   return shellState();
 }
 
-function normalizeTransparency(value) {
-  return {
-    mode: ['off', 'desktop', 'full'].includes(value?.mode) ? value.mode : 'off',
-    opacity: Math.max(35, Math.min(95, Math.round(Number(value?.opacity) || 78)))
-  };
-}
-
-function applyActiveTransparency() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  const entry = backendViews.get(config.activeBackendId);
-  const normalized = normalizeTransparency(entry || {});
-  mainWindow.webContents.send('passideck:transparency-changed', normalized);
-}
-
-function setBackendTransparency(event, value) {
-  const id = backendIdForSender(event);
-  const entry = backendViews.get(id);
-  if (!entry) return;
-  const normalized = normalizeTransparency(value);
-  entry.transparencyMode = normalized.mode;
-  entry.transparencyOpacity = normalized.opacity;
-  if (id === config.activeBackendId) applyActiveTransparency();
-  notifyShell();
-}
-
 async function setNotifyBlinking(event, enabled) {
   const entry = backendViews.get(backendIdForSender(event));
   config.notifyBlinking = Boolean(enabled);
@@ -231,9 +204,9 @@ function createBackendView(backend) {
       sandbox: true
     }
   });
-  const entry = { view, status: 'loading', notifyBlinking: config.notifyBlinking, transparencyMode: 'off', transparencyOpacity: 78 };
+  const entry = { view, status: 'loading', notifyBlinking: config.notifyBlinking };
   backendViews.set(backend.id, entry);
-  view.setBackgroundColor('#00000000');
+  view.setBackgroundColor('#020505');
   view.webContents.setAudioMuted(!config.globalSoundEnabled);
   view.webContents.on('dom-ready', () => { void view.webContents.insertCSS('#chromePeek { display: none !important; }'); });
   view.webContents.on('did-start-loading', () => setViewStatus(backend.id, 'loading'));
@@ -274,7 +247,6 @@ function selectBackend(id) {
   }
   writeConfig();
   notifyShell();
-  applyActiveTransparency();
   return shellState();
 }
 
@@ -364,9 +336,7 @@ function createWindow() {
     ...windowChrome,
     autoHideMenuBar: true,
     show: process.env.PASSIDECK_SMOKE_HIDDEN !== '1',
-    // Transparent windows are intentionally Windows-only; the packaged AI-Server smoke verifies alpha and programmatic resize.
-    transparent: process.platform === 'win32',
-    backgroundColor: process.platform === 'win32' ? '#00000000' : '#020505',
+    backgroundColor: '#020505',
     webPreferences: {
       preload: path.join(__dirname, 'shell-preload.js'),
       nodeIntegration: false,
@@ -414,13 +384,6 @@ app.whenReady().then(() => {
       setNotifyBlinking(event, enabled);
     } catch (error) {
       console.error(`[attention] ${error.message}`);
-    }
-  });
-  ipcMain.on('passideck:set-transparency', (event, value) => {
-    try {
-      setBackendTransparency(event, value);
-    } catch (error) {
-      console.error(`[transparency] ${error.message}`);
     }
   });
   ipcMain.handle('passideck:copy-text', (event, text) => {

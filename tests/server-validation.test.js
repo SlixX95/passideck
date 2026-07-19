@@ -214,8 +214,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.strictEqual(saved.status, 200);
     const savedUi = await saved.json();
     assert.strictEqual(savedUi.notifyBlinking, false, 'UI state must persist Notify blinking Off instead of dropping it during validation');
-    assert.strictEqual(savedUi.transparencyMode, 'full', 'UI state must persist the desktop transparency scope');
-    assert.strictEqual(savedUi.transparencyOpacity, 64, 'UI state must persist the desktop surface opacity');
+    assert.ok(!Object.hasOwn(savedUi, 'transparencyMode') && !Object.hasOwn(savedUi, 'transparencyOpacity'), 'retired transparency preferences must be dropped from authoritative UI state');
     assert.deepStrictEqual(savedUi.panePrefs.desktopOrder, ['work', 'monitoring'], 'desktop order must survive server validation');
     assert.deepStrictEqual(
       savedUi.panePrefs.desktopOrder.map(id => savedUi.panePrefs.desktops[id].name),

@@ -17,6 +17,16 @@ const electronShell = read('packages/electron/shell.js');
 const electronShellHtml = read('packages/electron/shell.html');
 const electronShellPreload = read('packages/electron/shell-preload.js');
 
+for (const [name, source] of [
+  ['client', app],
+  ['client HTML', html],
+  ['client CSS', style],
+  ['Electron main', electronMain],
+  ['Electron shell', electronShell],
+  ['Electron shell HTML', electronShellHtml],
+  ['Electron shell preload', electronShellPreload],
+  ['server', server]
+]) assert.ok(!/transparency/i.test(source), `${name} must not retain transparency code or controls`);
 assert.ok(
   electronMain.includes("ipcMain.on('passideck:window-resize'") &&
   electronMain.includes('const RESIZE_DIRECTIONS = new Set') &&
@@ -24,11 +34,7 @@ assert.ok(
   electronShell.includes("document.querySelectorAll('.resize-handle')") &&
   electronShellHtml.includes('data-resize="bottom-right"') &&
   electronShellPreload.includes("ipcRenderer.send('passideck:window-resize'"),
-  'Windows transparent desktop shell must expose a validated custom mouse-resize path'
-);
-assert.ok(
-  electronShellHtml.includes('html[data-transparency="off"], html[data-transparency="off"] body { background: var(--bg); }'),
-  'Transparency Off must keep the reserved shell resize border fully opaque'
+  'frameless Windows shell must retain a sender-validated eight-edge mouse-resize path'
 );
 assert.ok(
   electronShellHtml.includes('.resize-handle { display: none;') &&
@@ -76,27 +82,12 @@ assert.ok(
 );
 assert.ok(!style.includes('.response-pulse { animation: none'), 'response attention must keep pulsing even when the OS requests reduced motion');
 assert.ok(!style.includes('#ff3158') && !style.includes("content: 'NEW'"), 'response attention must stay theme-colored and must not add a NEW badge');
-assert.ok(html.includes('app.js?v=20260719-theme-transparency-release') && html.includes('style.css?v=20260719-theme-transparency-release'), 'client cache keys must activate the expanded surface styles, desktop transparency, terminal contrast floor, and grouped Codex account chips');
-assert.ok(
-  html.includes('id="transparencyModeSelect"') && html.includes('id="transparencyOpacity"') && html.includes('Desktop + windows'),
-  'Appearance settings must expose app-only transparency scope and opacity controls'
-);
-assert.ok(
-  app.includes("transparencyMode: 'off'") && app.includes('transparencyOpacity: 78') &&
-  app.includes('allowTransparency: true') && app.includes('window.passideckDesktop?.setTransparency') && app.includes('supportsTransparency') &&
-  app.includes('Math.max(64, state.transparencyOpacity)') && app.includes("--terminal-opacity"),
-  'client state must persist transparency, keep terminal contrast above 64%, and allow xterm alpha only through the desktop bridge'
-);
-const initSection = app.slice(app.indexOf('async function init()'), app.indexOf('function escapeHtml'));
-assert.ok(initSection.includes("setTransparencyMode(ui?.transparencyMode || 'off', { persist: false });"), 'initial app hydration must restore transparency mode');
-assert.ok(initSection.includes("setTransparencyOpacity(Number(ui?.transparencyOpacity) || 78, { persist: false });"), 'initial app hydration must restore transparency opacity');
-assert.ok(html.includes('<output id="transparencyOpacityLabel"') && html.includes('for="transparencyOpacity"'), 'opacity value must be programmatically associated with its slider');
+assert.ok(html.includes('app.js?v=20260719-opaque-surface') && html.includes('style.css?v=20260719-opaque-surface'), 'client cache keys must activate the transparency removal while retaining expanded surface styles and grouped Codex account chips');
 assert.ok(
   style.includes('body[data-skin="neon"]') && style.includes('--tg-panel-radius: 8px') &&
   style.includes('body[data-skin="stealth"]') && style.includes('--tg-panel-radius: 0px') &&
-  style.includes('body[data-skin="prism"]') && style.includes('--tg-panel-radius: 2px') &&
-  style.includes('body.desktop-app[data-transparency="full"] .term-panel'),
-  'the three surface styles must have distinct geometry and Electron full-transparency treatment'
+  style.includes('body[data-skin="prism"]') && style.includes('--tg-panel-radius: 2px'),
+  'the three opaque surface styles must retain their distinct geometry'
 );
 assert.ok(style.includes('@keyframes desktop-response-pulse') && style.includes('background: color-mix(in srgb, var(--tg-accent) 34%, #030707)') && style.includes('box-shadow: 0 0 16px color-mix(in srgb, var(--tg-accent) 68%, transparent)'), 'desktop attention must pulse its surface and border clearly without alarm colors');
 assert.ok(app.includes('term.onBell?.(() => notifyResponseComplete(id));'), 'native Hermes terminal completion BEL must drive response attention');
