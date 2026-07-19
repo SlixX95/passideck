@@ -1629,7 +1629,10 @@ function installTerminalWheelScroll(termEl, term, session = null) {
     const buffer = term.buffer?.active;
     if (buffer?.type === 'alternate') return true;
     if (!buffer || buffer.baseY <= 0) {
-      if (isHermes) e.preventDefault();
+      if (isHermes) {
+        e.preventDefault();
+        return false;
+      }
       return true;
     }
     const forceScrollback = isHermes;
@@ -1659,6 +1662,7 @@ function installTerminalWheelScroll(termEl, term, session = null) {
     if (buffer?.type === 'alternate') return;
     if (!buffer || buffer.baseY <= 0) {
       e.preventDefault();
+      e.stopImmediatePropagation();
       return;
     }
     const unit = e.deltaMode === 1 ? 1 : e.deltaMode === 2 ? term.rows : 1 / Math.max(8, state.fontSize * 1.2);

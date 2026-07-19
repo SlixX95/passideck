@@ -1985,6 +1985,33 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.deepStrictEqual(switchDescriptions, { ok: true }, 'taskbar active item must follow active session switches');
 
+    const zeroScrollbackWheel = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const oldCommand = entry.session.meta.command;
+      const saved = entry.serialize.serialize({ scrollback: 20000 });
+      entry.session.meta.command = 'hermes';
+      entry.term.reset();
+      await new Promise(resolve => entry.term.write('\\x1b[?1000h\\x1b[?1006h', resolve));
+      const target = entry.el.querySelector('.xterm-viewport') || entry.el.querySelector('.terminal');
+      const rect = target.getBoundingClientRect();
+      const mouseData = [];
+      const listener = entry.term.onData(data => mouseData.push(data));
+      const before = { baseY: entry.term.buffer.active.baseY, viewportY: entry.term.buffer.active.viewportY };
+      const event = new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true, clientX: rect.left + 20, clientY: rect.top + 40 });
+      const dispatched = target.dispatchEvent(event);
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const after = { baseY: entry.term.buffer.active.baseY, viewportY: entry.term.buffer.active.viewportY };
+      listener.dispose();
+      entry.term.reset();
+      await new Promise(resolve => entry.term.write(saved, resolve));
+      entry.session.meta.command = oldCommand;
+      return { before, after, canceled: !dispatched || event.defaultPrevented, mouseData };
+    })()`);
+    assert.strictEqual(zeroScrollbackWheel.before.baseY, 0, `zero-scrollback regression setup must start at baseY 0: ${JSON.stringify(zeroScrollbackWheel)}`);
+    assert.strictEqual(zeroScrollbackWheel.canceled, true, `normal Hermes wheel must be canceled without scrollback: ${JSON.stringify(zeroScrollbackWheel)}`);
+    assert.deepStrictEqual(zeroScrollbackWheel.mouseData, [], `normal Hermes wheel without scrollback must not become PTY mouse/history input: ${JSON.stringify(zeroScrollbackWheel)}`);
+    assert.deepStrictEqual(zeroScrollbackWheel.after, zeroScrollbackWheel.before, `normal Hermes wheel without scrollback must leave the viewport fixed: ${JSON.stringify(zeroScrollbackWheel)}`);
+
     const wheelScroll = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
       const oldCommand = entry.session.meta.command;
