@@ -699,43 +699,29 @@ function activeHermesResumeId(session) {
 function syncHermesTitles(sessions, hermesDb, resolveActiveSessionId = activeHermesResumeId) {
   if (!hermesDb) return 0;
   let findLatest;
-  let findLatestSession;
   let findById;
-  let findCompletion;
-  let findLatestCompletion;
   try {
     findLatest = hermesDb.prepare("SELECT id, title FROM sessions WHERE source = ? AND TRIM(COALESCE(title, '')) <> '' ORDER BY started_at DESC LIMIT 1");
-    findLatestSession = hermesDb.prepare('SELECT id, title FROM sessions WHERE source = ? ORDER BY started_at DESC LIMIT 1');
     findById = hermesDb.prepare('SELECT id, title FROM sessions WHERE id = ? LIMIT 1');
-    try {
-      findCompletion = hermesDb.prepare("SELECT id FROM messages WHERE session_id = ? AND role = 'assistant' AND active = 1 AND TRIM(COALESCE(content, '')) <> '' AND COALESCE(finish_reason, '') <> 'tool_calls' ORDER BY id DESC LIMIT 1");
-      findLatestCompletion = hermesDb.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM messages WHERE role = 'assistant' AND active = 1 AND TRIM(COALESCE(content, '')) <> '' AND COALESCE(finish_reason, '') <> 'tool_calls'");
-    } catch {}
   } catch (err) {
     console.warn('[hermes-title] title query unavailable:', err.message);
     return 0;
   }
   let changed = 0;
-  const previousCompletionId = sessions._hermesCompletionMessageId;
-  const latestCompletionId = Number(findLatestCompletion?.get()?.id) || 0;
   for (const session of sessions.sessions.values()) {
     const activeId = resolveActiveSessionId(session);
     const activeRow = activeId ? findById.get(activeId) : null;
-    const latestSession = activeRow || findLatestSession.get(hermesSource(session.id));
+    if (activeRow && !String(activeRow.title || '').trim()) continue;
     const row = activeRow || findLatest.get(hermesSource(session.id));
-    const title = String(row?.title || '').trim().slice(0, 160);
-    if (row && title && (session.meta.hermesSessionId !== row.id || String(session.meta.title || '') !== title)) {
-      session.meta.hermesSessionId = row.id;
-      session.meta.title = title;
-      session.broadcast({ type: 'meta', session: session.toJSON() });
-      changed += 1;
-    }
-    if (!findCompletion || !latestSession) continue;
-    const completion = findCompletion.get(latestSession.id);
-    const completionId = Number(completion?.id) || 0;
-    if (previousCompletionId !== undefined && completionId > previousCompletionId) session.broadcast({ type: 'response-complete' });
+    if (!row) continue;
+    const title = String(row.title || '').trim().slice(0, 160);
+    if (session.meta.hermesSessionId === row.id && String(session.meta.title || '') === title) continue;
+    session.meta.hermesSessionId = row.id;
+    if (title) session.meta.title = title;
+    else delete session.meta.title;
+    session.broadcast({ type: 'meta', session: session.toJSON() });
+    changed += 1;
   }
-  sessions._hermesCompletionMessageId = Math.max(previousCompletionId || 0, latestCompletionId);
   return changed;
 }
 

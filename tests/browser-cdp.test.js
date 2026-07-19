@@ -1784,9 +1784,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       clearResponseAttention(active.session.id);
       await new Promise(resolve => active.term.write('\\u0007', resolve));
       await new Promise(resolve => setTimeout(resolve, 20));
-      const genericBellIgnored = !active.responseAttention;
-      notifyResponseComplete(active.session.id);
-      const verifiedCompletionMarked = active.responseAttention;
+      const nativeHermesBellMarked = active.responseAttention;
       clearResponseAttention(active.session.id);
       playBell = originalBell;
       const persisted = JSON.parse(localStorage.getItem('passideck:response-sound'));
@@ -1799,8 +1797,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         volume: Number(document.getElementById('responseSoundVolume')?.value),
         volumeLabel: document.getElementById('responseSoundVolumeLabel')?.textContent || '',
         persisted,
-        genericBellIgnored,
-        verifiedCompletionMarked,
+        nativeHermesBellMarked,
         serverPayloadHasSound: Object.keys(uiPayload()).some(key => key.startsWith('responseSound'))
       };
     })()`);
@@ -1813,10 +1810,9 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       volume: 25,
       volumeLabel: '25%',
       persisted: { mode: 'always', tone: 'chime', volume: 25 },
-      genericBellIgnored: true,
-      verifiedCompletionMarked: true,
+      nativeHermesBellMarked: true,
       serverPayloadHasSound: false
-    }, 'response attention must ignore generic terminal BEL and use only verified Hermes completion events');
+    }, 'response attention must use the native Hermes terminal completion BEL');
 
     const generatedTitle = await evalExpr(cdp, sid, `(() => {
       const entry = [...state.sessions.values()][0];
