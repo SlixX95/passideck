@@ -33,7 +33,7 @@ assert.ok(html.includes('vendor/xterm.js') && !html.includes('cdn.jsdelivr.net')
 assert.ok(html.includes("location.port === '8792' ? 'PassiDeck Dev' : 'PassiDeck'"), 'browser tab title must distinguish dev port 8792 from normal/live');
 assert.ok(!style.includes('.response-pulse { animation: none'), 'response attention must keep pulsing even when the OS requests reduced motion');
 assert.ok(!style.includes('#ff3158') && !style.includes("content: 'NEW'"), 'response attention must stay theme-colored and must not add a NEW badge');
-assert.ok(html.includes('app.js?v=20260719-verified-response-complete') && html.includes('style.css?v=20260719-verified-response-complete'), 'client cache keys must activate verified Hermes response completion');
+assert.ok(html.includes('app.js?v=20260719-adaptive-gap-thirds') && html.includes('style.css?v=20260719-adaptive-gap-thirds'), 'client cache keys must activate adaptive one-third gap proposals');
 assert.ok(!app.includes('term.onBell'), 'generic terminal BEL must not be treated as a completed Hermes response');
 assert.ok(app.includes("msg.type === 'response-complete'"), 'verified server completion events must drive response attention');
 assert.ok(app.includes("el.classList.toggle('hermes-tui', isHermesTuiEntry({ session }))"), 'Hermes TUI panes must carry a narrow styling hook');

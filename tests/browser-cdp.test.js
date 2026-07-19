@@ -954,6 +954,40 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       [{ type: 'free', rect: equalGapChoices.rightGap }, { type: 'free', rect: equalGapChoices.rightGap }],
       `the mirrored right free area must offer the same full-gap placement across pointer zones: ${JSON.stringify(equalGapChoices)}`
     );
+    const screenshotThirdChoices = await evalExpr(cdp, sid, `(() => {
+      const source = '${madeSessions[1]}';
+      const blockers = ['${madeSessions[2]}', '${madeSessions[3]}'];
+      const prefs = windowPrefs();
+      const savedPrefs = JSON.parse(JSON.stringify(prefs));
+      const savedMinimized = [...state.minimized];
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      const third = grid.width / 3;
+      const gapX = Math.round(third * 1000) / 1000;
+      const fullGap = { x: gapX, y: 0, w: grid.width - gapX, h: grid.height };
+      const middle = { x: gapX, y: 0, w: fullGap.w / 2, h: grid.height };
+      const right = { x: gapX + fullGap.w / 2, y: 0, w: fullGap.w / 2, h: grid.height };
+      state.sessions.forEach((entry, id) => {
+        if (id === source || blockers.includes(id)) state.minimized.delete(id);
+        else state.minimized.add(id);
+      });
+      Object.assign(prefs[source], { x: third * 1.5, y: grid.height / 4, w: third, h: grid.height / 2, z: 40 });
+      Object.assign(prefs[blockers[0]], { x: 0, y: 0, w: third, h: grid.height / 2, z: 30 });
+      Object.assign(prefs[blockers[1]], { x: 0, y: grid.height / 2, w: third, h: grid.height / 2, z: 29 });
+      [source, ...blockers].forEach(applyFreeWindow);
+      const choose = ratio => {
+        const choice = chooseDesktopSlotAt(grid.left + third + fullGap.w * ratio, grid.top + grid.height / 2, source);
+        return { type: choice.type, rect: choice.rect || null };
+      };
+      const choices = { middle: choose(1 / 6), full: choose(1 / 2), right: choose(5 / 6) };
+      state.panePrefs.windows.desktop = savedPrefs;
+      state.minimized.clear();
+      savedMinimized.forEach(id => state.minimized.add(id));
+      restorePanelOrder();
+      return { middle, fullGap, right, choices };
+    })()`);
+    assert.deepStrictEqual(screenshotThirdChoices.choices.middle, { type: 'free', rect: screenshotThirdChoices.middle }, `a free two-thirds region must expose its middle-screen third near the inner edge: ${JSON.stringify(screenshotThirdChoices)}`);
+    assert.deepStrictEqual(screenshotThirdChoices.choices.full, { type: 'free', rect: screenshotThirdChoices.fullGap }, `a free two-thirds region must retain the full-gap option in its center: ${JSON.stringify(screenshotThirdChoices)}`);
+    assert.deepStrictEqual(screenshotThirdChoices.choices.right, { type: 'free', rect: screenshotThirdChoices.right }, `a free two-thirds region must expose the right-screen third near the outer edge: ${JSON.stringify(screenshotThirdChoices)}`);
     const dynamicFreeGapDock = await evalExpr(cdp, sid, `(() => {
       const source = '${madeSessions[1]}';
       const blockers = ['${madeSessions[2]}', '${madeSessions[3]}', '${madeSessions[4]}', '${madeSessions[5]}', '${madeSessions[6]}', '${madeSessions[7]}'];

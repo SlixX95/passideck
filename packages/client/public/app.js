@@ -713,7 +713,8 @@ function slotRectsForDrag(sourceId, pointerX = null, pointerY = null) {
       pointed.sort((a, b) => distance(a) - distance(b) || (b.w * b.h) - (a.w * a.h));
       const gapTarget = pointerGapSlotRect(pointed[0], pointerX, pointerY);
       const standardTarget = candidates.find(c => pointInRect(pointerX, pointerY, c) && isAvailable(c));
-      candidates = !standardTarget || gapTarget.w * gapTarget.h >= standardTarget.w * standardTarget.h
+      const gapWasSubdivided = !similarRect(gapTarget, pointed[0]);
+      candidates = gapWasSubdivided || !standardTarget || gapTarget.w * gapTarget.h >= standardTarget.w * standardTarget.h
         ? [gapTarget]
         : [standardTarget];
     }
