@@ -7,7 +7,6 @@ const { normalizeBackend, normalizeConfig, normalizeUrl } = require('./backend-p
 const LEGACY_DEV_URL = 'http://42.69.42.44:8792/';
 const DEFAULT_URL = 'http://42.69.42.44:8791/';
 const TITLEBAR_HEIGHT = 30;
-const RESIZE_BORDER = process.platform === 'win32' ? 6 : 0;
 const RESIZE_DIRECTIONS = new Set(['top', 'right', 'bottom', 'left', 'top-left', 'top-right', 'bottom-left', 'bottom-right']);
 const MIN_WINDOW_WIDTH = 800;
 const MIN_WINDOW_HEIGHT = 500;
@@ -98,6 +97,7 @@ function backendIdForSender(event) {
 function markBackendResponseComplete(id, details = {}) {
   const entry = backendViews.get(id);
   if (!entry || !mainWindow) return;
+  if (!mainWindow.isFocused()) mainWindow.flashFrame(true);
   entry.attention = true;
   entry.attentionAt = Date.now();
   entry.responsePulse = true;
@@ -120,10 +120,10 @@ function fitActiveView() {
   if (!view || !mainWindow || dialogOpen) return;
   const [width, height] = mainWindow.getContentSize();
   view.setBounds({
-    x: RESIZE_BORDER,
+    x: 0,
     y: TITLEBAR_HEIGHT,
-    width: Math.max(0, width - (RESIZE_BORDER * 2)),
-    height: Math.max(0, height - TITLEBAR_HEIGHT - RESIZE_BORDER)
+    width: Math.max(0, width),
+    height: Math.max(0, height - TITLEBAR_HEIGHT)
   });
 }
 
@@ -290,8 +290,13 @@ function assertShellSender(event) {
   }
 }
 
-function resizeWindowFromShell(event, phase, value = {}) {
-  assertShellSender(event);
+function assertResizeSender(event) {
+  if (event.sender === mainWindow?.webContents) assertShellSender(event);
+  else backendIdForSender(event);
+}
+
+function resizeWindowFromRenderer(event, phase, value = {}) {
+  assertResizeSender(event);
   if (process.platform !== 'win32' || !mainWindow || mainWindow.isDestroyed()) return;
   if (phase === 'end') {
     resizeDrag = null;
@@ -351,7 +356,10 @@ function createWindow() {
     activeView()?.webContents.reload();
   });
   win.on('resize', fitActiveView);
-  win.on('focus', focusActiveView);
+  win.on('focus', () => {
+    win.flashFrame(false);
+    focusActiveView();
+  });
   win.on('closed', () => {
     for (const { view } of backendViews.values()) {
       if (!view.webContents.isDestroyed()) view.webContents.close();
@@ -377,7 +385,7 @@ app.whenReady().then(() => {
   ipcMain.handle('passideck:ui-hidden', event => { assertShellSender(event); return activeUiHidden(); });
   ipcMain.handle('passideck:toggle-ui', event => { assertShellSender(event); return activeUiHidden(true); });
   ipcMain.handle('passideck:set-global-sound-enabled', (event, enabled) => { assertShellSender(event); return setGlobalSoundEnabled(enabled); });
-  ipcMain.on('passideck:window-resize', resizeWindowFromShell);
+  ipcMain.on('passideck:window-resize', resizeWindowFromRenderer);
   ipcMain.handle('passideck:get-app-version', event => { backendIdForSender(event); return app.getVersion(); });
   ipcMain.on('passideck:set-notify-blinking', (event, enabled) => {
     try {

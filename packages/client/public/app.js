@@ -211,6 +211,38 @@ function requestClosePanel(id) {
   showCloseConfirm(id, panelTitle(entry.session));
 }
 
+function installDesktopWindowResizeHandles() {
+  if (window.passideckDesktop?.platform !== 'win32' || typeof window.passideckDesktop.windowResize !== 'function' || document.getElementById('desktopWindowResizeHandles')) return;
+  const wrap = document.createElement('div');
+  wrap.id = 'desktopWindowResizeHandles';
+  wrap.className = 'desktop-window-resize-handles';
+  for (const direction of ['left', 'right', 'bottom', 'bottom-left', 'bottom-right']) {
+    const handle = document.createElement('span');
+    handle.className = 'desktop-window-resize-handle';
+    handle.dataset.appResize = direction;
+    let resizing = false;
+    handle.addEventListener('pointerdown', event => {
+      if (event.button !== 0) return;
+      resizing = true;
+      trySetPointerCapture(handle, event.pointerId);
+      window.passideckDesktop.windowResize('start', { direction, screenX: event.screenX, screenY: event.screenY });
+      event.preventDefault();
+    });
+    handle.addEventListener('pointermove', event => {
+      if (resizing) window.passideckDesktop.windowResize('move', { screenX: event.screenX, screenY: event.screenY });
+    });
+    const finish = event => {
+      if (!resizing) return;
+      resizing = false;
+      window.passideckDesktop.windowResize('end', { screenX: event.screenX, screenY: event.screenY });
+    };
+    handle.addEventListener('pointerup', finish);
+    handle.addEventListener('pointercancel', finish);
+    wrap.appendChild(handle);
+  }
+  document.body.appendChild(wrap);
+}
+
 function setConnectionStatus(id, status) {
   const entry = state.sessions.get(id);
   const el = entry?.el || document.getElementById(`panel-${id}`);
@@ -488,11 +520,23 @@ function clampWindowPrefs(prefs = windowPrefs()) {
   return prefs;
 }
 
+function renderWindowRect(rect = {}) {
+  const rendered = clampWindowRect(rect);
+  if (window.passideckDesktop?.platform !== 'win32') return rendered;
+  const viewport = activeDesktop()?.viewport;
+  const current = desktopSize();
+  const right = Number(rect.x) + Number(rect.w);
+  const bottom = Number(rect.y) + Number(rect.h);
+  if (viewport?.w && Math.abs(right - viewport.w) < 2) rendered.w = Math.max(1, current.w - rendered.x);
+  if (viewport?.h && Math.abs(bottom - viewport.h) < 2) rendered.h = Math.max(1, current.h - rendered.y);
+  return rendered;
+}
+
 function applyFreeWindow(id) {
   const entry = state.sessions.get(id);
   const p = windowPrefs()[id];
   if (!entry || !p) return;
-  const rect = clampWindowRect(p);
+  const rect = renderWindowRect(p);
   entry.el.classList.add('free-window');
   entry.el.classList.remove('layout-hidden');
   entry.el.style.gridColumn = '';
@@ -3711,6 +3755,7 @@ async function ensureSerializeAddon() {
   Function(code).call(window);
 }
 
+installDesktopWindowResizeHandles();
 ensureSerializeAddon().then(init).catch(err => {
   console.error(err);
   document.getElementById('emptyState').innerHTML = '<h2>PassiDeck error.</h2><p>Check console.</p>';

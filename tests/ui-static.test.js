@@ -30,7 +30,7 @@ for (const [name, source] of [
 assert.ok(
   electronMain.includes("ipcMain.on('passideck:window-resize'") &&
   electronMain.includes('const RESIZE_DIRECTIONS = new Set') &&
-  electronMain.includes('function resizeWindowFromShell') &&
+  electronMain.includes('function resizeWindowFromRenderer') &&
   electronShell.includes("document.querySelectorAll('.resize-handle')") &&
   electronShellHtml.includes('data-resize="bottom-right"') &&
   electronShellPreload.includes("ipcRenderer.send('passideck:window-resize'"),
@@ -82,7 +82,9 @@ assert.ok(
 );
 assert.ok(!style.includes('.response-pulse { animation: none'), 'response attention must keep pulsing even when the OS requests reduced motion');
 assert.ok(!style.includes('#ff3158') && !style.includes("content: 'NEW'"), 'response attention must stay theme-colored and must not add a NEW badge');
-assert.ok(html.includes('app.js?v=20260720-first-window-left') && html.includes('style.css?v=20260720-first-window-left'), 'client cache keys must activate left-first placement on empty desktops');
+assert.ok(html.includes('app.js?v=20260720-edge-to-edge') && html.includes('style.css?v=20260720-edge-to-edge'), 'client cache keys must activate edge-to-edge desktop app geometry');
+assert.ok(style.includes('.grid-container {') && style.includes('padding: 0;'), 'desktop grid must not reserve a visible inset around maximized panes');
+assert.ok(app.includes('function renderWindowRect(') && app.includes('function installDesktopWindowResizeHandles('), 'Windows desktop renderer must fill authoritative edge panes while retaining invisible resize hit areas');
 assert.ok(
   style.includes('body[data-skin="neon"]') && style.includes('--tg-panel-radius: 8px') &&
   style.includes('body[data-skin="stealth"]') && style.includes('--tg-panel-radius: 0px') &&

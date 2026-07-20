@@ -355,13 +355,23 @@ body.notify-blinking .switcher-btn.response-pulse:not(.active) { animation: swit
   box-sizing: border-box;
   display: block;
   gap: 0;
-  padding: 2px;
+  padding: 0;
   overflow: hidden;
   overscroll-behavior: contain;
   min-height: 0;
   position: relative;
 }
 .layout-desktop { display: block; background: radial-gradient(circle at 20% 15%, color-mix(in srgb, var(--tg-accent) 5%, transparent), transparent 28%), var(--tg-bg); }
+
+.desktop-window-resize-handles { position: fixed; inset: 0; z-index: 20000; pointer-events: none; }
+.desktop-window-resize-handle { position: absolute; pointer-events: auto; background: transparent; }
+.desktop-window-resize-handle[data-app-resize="left"], .desktop-window-resize-handle[data-app-resize="right"] { top: 0; bottom: 10px; width: 6px; cursor: ew-resize; }
+.desktop-window-resize-handle[data-app-resize="left"] { left: 0; }
+.desktop-window-resize-handle[data-app-resize="right"] { right: 0; }
+.desktop-window-resize-handle[data-app-resize="bottom"] { left: 10px; right: 10px; bottom: 0; height: 6px; cursor: ns-resize; }
+.desktop-window-resize-handle[data-app-resize="bottom-left"], .desktop-window-resize-handle[data-app-resize="bottom-right"] { bottom: 0; width: 10px; height: 10px; }
+.desktop-window-resize-handle[data-app-resize="bottom-left"] { left: 0; cursor: nesw-resize; }
+.desktop-window-resize-handle[data-app-resize="bottom-right"] { right: 0; cursor: nwse-resize; }
 
 .desktop-slot-suggestions {
   position: absolute;

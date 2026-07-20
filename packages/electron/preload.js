@@ -2,6 +2,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('passideckDesktop', {
   isDesktop: true,
+  platform: process.platform,
+  windowResize: (phase, value) => ipcRenderer.send('passideck:window-resize', phase, value),
   notifyResponseComplete: details => ipcRenderer.send('passideck:response-complete', {
     hiddenDesktop: details?.hiddenDesktop === true
   }),

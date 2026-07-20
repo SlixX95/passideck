@@ -39,13 +39,23 @@ assert.ok(main.includes('const TITLEBAR_HEIGHT = 30;') && shellHtml.includes('#t
 assert.ok(main.includes('frame: false'), 'Windows and Linux must keep themed custom window chrome');
 assert.ok(!main.includes('transparent:') && main.includes("backgroundColor: '#020505'"), 'the desktop BrowserWindow must be opaque on every platform');
 assert.ok(
+  main.includes("x: 0") &&
+  main.includes('width: Math.max(0, width)') &&
+  main.includes('height: Math.max(0, height - TITLEBAR_HEIGHT)') &&
+  !main.includes('RESIZE_BORDER'),
+  'backend view must fill the complete app content area below the titlebar without visible resize gutters'
+);
+assert.ok(
   main.includes("ipcMain.on('passideck:window-resize'") &&
   main.includes('const RESIZE_DIRECTIONS = new Set') &&
-  main.includes('function resizeWindowFromShell') &&
+  main.includes('function assertResizeSender') &&
+  main.includes('function resizeWindowFromRenderer') &&
   shellJs.includes("document.querySelectorAll('.resize-handle')") &&
   shellHtml.includes('data-resize="bottom-right"') &&
-  shellPreload.includes("ipcRenderer.send('passideck:window-resize'"),
-  'frameless Windows shell must retain sender-validated resize behavior independently of opacity'
+  shellPreload.includes("ipcRenderer.send('passideck:window-resize'") &&
+  preload.includes('platform: process.platform') &&
+  preload.includes("windowResize: (phase, value) => ipcRenderer.send('passideck:window-resize'"),
+  'frameless Windows resizing must stay sender-validated from both shell and edge-filling backend view'
 );
 assert.ok(shellPreload.includes('platform: process.platform'), 'local shell must receive the trusted Electron platform');
 assert.ok(shellJs.includes('document.documentElement.dataset.platform = window.passideckShell.platform'), 'local shell must expose platform styling on the root element');
@@ -87,6 +97,12 @@ assert.ok(
   main.includes('hiddenDesktopAttention') &&
   main.includes('event.senderFrame !== event.sender.mainFrame'),
   'main must map response completion from the trusted backend WebContents instead of accepting a renderer-supplied backend id'
+);
+assert.ok(
+  main.includes("if (!mainWindow.isFocused()) mainWindow.flashFrame(true)") &&
+  main.includes("win.flashFrame(false)") &&
+  main.includes("win.on('focus'"),
+  'an unfocused desktop window must request native taskbar attention until Windows focuses it'
 );
 assert.ok(
   shellJs.includes("backend.attention ? ' attention' : ''") &&
@@ -182,7 +198,7 @@ assert.ok(main.includes('WebContentsView'), 'desktop must keep one live WebConte
 assert.ok(
   main.includes('function focusActiveView()') &&
   main.includes('view.webContents.focus()') &&
-  main.includes("win.on('focus', focusActiveView)") &&
+  main.includes("win.on('focus', () => {") &&
   (main.match(/focusActiveView\(\)/g) || []).length >= 3,
   'window activation, backend selection, and dialog close must focus the active backend view'
 );

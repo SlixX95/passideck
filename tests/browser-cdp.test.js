@@ -462,6 +462,64 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       assert.ok(Math.abs(sixSlotAutoPlacement.emptyDesktop[key] - sixSlotAutoPlacement.expectedEmpty[key]) < 2, `first-window placement ${key} must keep existing default: ${JSON.stringify(sixSlotAutoPlacement)}`);
     }
 
+    const desktopEdgeFill = await evalExpr(cdp, sid, `(() => {
+      const id = state.order[0];
+      const prefs = windowPrefs();
+      const beforeRect = structuredClone(prefs[id]);
+      const desktop = activeDesktop();
+      const beforeViewport = structuredClone(desktop.viewport);
+      const beforeBridge = window.passideckDesktop;
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      const stored = { x: 0, y: 0, w: grid.width - 12, h: grid.height - 6, z: 42 };
+      window.passideckDesktop = { isDesktop: true, platform: 'win32' };
+      desktop.viewport = { w: stored.w, h: stored.h };
+      prefs[id] = structuredClone(stored);
+      applyFreeWindow(id);
+      const panel = state.sessions.get(id).el.getBoundingClientRect();
+      const result = {
+        right: panel.right - grid.left,
+        bottom: panel.bottom - grid.top,
+        grid: { w: grid.width, h: grid.height },
+        stored: structuredClone(prefs[id])
+      };
+      prefs[id] = beforeRect;
+      desktop.viewport = beforeViewport;
+      if (beforeBridge === undefined) delete window.passideckDesktop;
+      else window.passideckDesktop = beforeBridge;
+      applyFreeWindow(id);
+      return result;
+    })()`);
+    assert.ok(Math.abs(desktopEdgeFill.right - desktopEdgeFill.grid.w) < 2, `desktop right-edge pane must visually reach the Electron app edge without rewriting shared geometry: ${JSON.stringify(desktopEdgeFill)}`);
+    assert.ok(Math.abs(desktopEdgeFill.bottom - desktopEdgeFill.grid.h) < 2, `desktop bottom-edge pane must visually reach the Electron app edge without rewriting shared geometry: ${JSON.stringify(desktopEdgeFill)}`);
+    assert.deepStrictEqual(desktopEdgeFill.stored, { x: 0, y: 0, w: desktopEdgeFill.grid.w - 12, h: desktopEdgeFill.grid.h - 6, z: 42 }, 'Electron edge fill must remain renderer-local and preserve authoritative stored geometry');
+
+    const desktopResizeEdges = await evalExpr(cdp, sid, `(() => {
+      const beforeBridge = window.passideckDesktop;
+      const calls = [];
+      window.passideckDesktop = {
+        isDesktop: true,
+        platform: 'win32',
+        windowResize: (phase, value) => calls.push({ phase, direction: value?.direction })
+      };
+      installDesktopWindowResizeHandles();
+      const wrap = document.getElementById('desktopWindowResizeHandles');
+      const right = wrap.querySelector('[data-app-resize="right"]');
+      right.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerId: 71, screenX: 100, screenY: 100 }));
+      right.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 71, screenX: 108, screenY: 100 }));
+      right.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 71, screenX: 108, screenY: 100 }));
+      const result = { count: wrap.children.length, calls };
+      wrap.remove();
+      if (beforeBridge === undefined) delete window.passideckDesktop;
+      else window.passideckDesktop = beforeBridge;
+      return result;
+    })()`);
+    assert.strictEqual(desktopResizeEdges.count, 5, 'edge-filling Windows backend view must retain left/right/bottom and bottom-corner resize hit areas');
+    assert.deepStrictEqual(desktopResizeEdges.calls, [
+      { phase: 'start', direction: 'right' },
+      { phase: 'move' },
+      { phase: 'end' }
+    ], 'backend edge drag must keep the existing native window-resize IPC sequence');
+
     const viewportClampPersistence = await evalExpr(cdp, sid, `(async () => {
       const id = '${madeSessions[1]}';
       const prefs = windowPrefs();
