@@ -371,8 +371,8 @@ function desktopCandidates() {
   const r = grid?.getBoundingClientRect?.() || { width: 1280, height: 720 };
   const W = r.width, H = r.height;
   const q = [
-    { x: W / 2, y: 0, w: W / 2, h: H },
     { x: 0, y: 0, w: W / 2, h: H },
+    { x: W / 2, y: 0, w: W / 2, h: H },
     { x: 0, y: H / 2, w: W, h: H / 2 },
     { x: 0, y: 0, w: W, h: H / 2 },
     { x: W / 2, y: 0, w: W / 2, h: H / 2 },

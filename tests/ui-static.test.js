@@ -82,7 +82,7 @@ assert.ok(
 );
 assert.ok(!style.includes('.response-pulse { animation: none'), 'response attention must keep pulsing even when the OS requests reduced motion');
 assert.ok(!style.includes('#ff3158') && !style.includes("content: 'NEW'"), 'response attention must stay theme-colored and must not add a NEW badge');
-assert.ok(html.includes('app.js?v=20260719-opaque-surface') && html.includes('style.css?v=20260719-opaque-surface'), 'client cache keys must activate the transparency removal while retaining expanded surface styles and grouped Codex account chips');
+assert.ok(html.includes('app.js?v=20260720-first-window-left') && html.includes('style.css?v=20260720-first-window-left'), 'client cache keys must activate left-first placement on empty desktops');
 assert.ok(
   style.includes('body[data-skin="neon"]') && style.includes('--tg-panel-radius: 8px') &&
   style.includes('body[data-skin="stealth"]') && style.includes('--tg-panel-radius: 0px') &&

@@ -451,7 +451,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const free = freeSpaceWindowRect(ids[5]);
       state.minimized = new Set(state.order);
       const emptyDesktop = freeSpaceWindowRect();
-      const expectedEmpty = desktopCandidates()[0];
+      const expectedEmpty = { x: 0, y: 0, w: grid.width / 2, h: grid.height };
       state.panePrefs.windows.desktop = before;
       state.minimized = beforeMinimized;
       return { free, expected: { x: cell.w * 2, y: cell.h, w: cell.w, h: cell.h }, emptyDesktop, expectedEmpty };
