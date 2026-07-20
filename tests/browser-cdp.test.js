@@ -210,7 +210,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       };
     })()`);
     assert.deepStrictEqual(migratedDesktop.ids, ['desktop-1'], 'legacy pane layout must migrate into one default desktop');
-    assert.deepStrictEqual(migratedDesktop.names, ['Desktop 1'], 'default desktop label must not duplicate its shortcut number');
+    assert.deepStrictEqual(migratedDesktop.names, ['1'], 'desktop switcher must use compact ordinal-only labels');
     assert.ok(migratedDesktop.addGap !== null && migratedDesktop.addGap <= 7, `add desktop must stay attached to the dynamic desktop tab group, gap=${migratedDesktop.addGap}`);
     assert.ok(migratedDesktop.assignments.every(id => id === 'desktop-1'), 'legacy panes must remain assigned to Desktop 1');
     assert.strictEqual(migratedDesktop.active, 'desktop-1', 'default desktop must become locally active');
@@ -582,6 +582,38 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     }))()`);
     assert.strictEqual(desktopCreation.count, 2, 'Add desktop must create one shared desktop');
     assert.strictEqual(desktopCreation.name, 'Desktop 2', 'new desktops need a predictable default name');
+    const desktopPresentation = await evalExpr(cdp, sid, `(() => {
+      const firstId = state.panePrefs.desktopOrder[0];
+      const waitingPaneId = state.order.find(id => state.panePrefs.paneDesktop[id] === firstId);
+      state.sessions.get(waitingPaneId).responseAttention = true;
+      renderDesktops();
+      const tabs = [...document.querySelectorAll('.desktop-tab')];
+      const active = tabs.find(tab => tab.classList.contains('active'));
+      const waiting = tabs.find(tab => tab.classList.contains('attention'));
+      const activeStyle = getComputedStyle(active);
+      const waitingStyle = getComputedStyle(waiting);
+      const result = {
+        labels: tabs.map(tab => tab.textContent.trim()),
+        maxWidth: Math.max(...tabs.map(tab => Math.round(tab.getBoundingClientRect().width))),
+        activeLabel: active?.textContent.trim(),
+        activeSelected: active?.getAttribute('aria-selected'),
+        activeCurrent: active?.getAttribute('aria-current'),
+        activeWeight: activeStyle.fontWeight,
+        activeAnimation: activeStyle.animationName,
+        waitingLabel: waiting?.textContent.trim(),
+        waitingAnimation: waitingStyle.animationName,
+        distinctBackground: activeStyle.backgroundColor !== waitingStyle.backgroundColor,
+        renameHint: tabs.some(tab => tab.dataset.tooltip?.includes('rename'))
+      };
+      state.sessions.get(waitingPaneId).responseAttention = false;
+      renderDesktops();
+      return result;
+    })()`);
+    assert.deepStrictEqual(desktopPresentation, {
+      labels: ['1', '2'], maxWidth: 29, activeLabel: '2', activeSelected: 'true', activeCurrent: 'page',
+      activeWeight: '900', activeAnimation: 'none', waitingLabel: '1', waitingAnimation: 'desktop-response-pulse',
+      distinctBackground: true, renameHint: false
+    }, 'compact desktop ordinals must keep the current desktop solid and unmistakable while another desktop pulses for attention');
     assert.strictEqual(desktopCreation.active, desktopCreation.local, 'new desktop must become active only in this client');
     assert.strictEqual(desktopCreation.visiblePanels, 0, 'new desktop must start empty without stopping existing panes');
     await waitEval(cdp, peerSid, `state.panePrefs.desktopOrder.length === 2`);
@@ -659,20 +691,14 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       return { direct, previous, next };
     })()`);
     assert.deepStrictEqual(desktopShortcuts, { direct: desktopCreation.active, previous: 'desktop-1', next: desktopCreation.active }, 'Alt/Option+Shift desktop shortcuts must support direct and cyclic switching');
-    const renamePoint = await evalExpr(cdp, sid, `(() => {
+    const renameDisabled = await evalExpr(cdp, sid, `(async () => {
       selectDesktop('desktop-1');
-      const rect = document.querySelector('[data-desktop-id="${desktopCreation.active}"]').getBoundingClientRect();
-      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      const tab = document.querySelector('[data-desktop-id="${desktopCreation.active}"]');
+      tab.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+      await new Promise(resolve => setTimeout(resolve, 220));
+      return { input: Boolean(document.querySelector('.desktop-rename')), name: state.panePrefs.desktops['${desktopCreation.active}']?.name };
     })()`);
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: renamePoint.x, y: renamePoint.y, button: 'left', clickCount: 1 }, sid);
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: renamePoint.x, y: renamePoint.y, button: 'left', clickCount: 1 }, sid);
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: renamePoint.x, y: renamePoint.y, button: 'left', clickCount: 2 }, sid);
-    await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: renamePoint.x, y: renamePoint.y, button: 'left', clickCount: 2 }, sid);
-    await waitEval(cdp, sid, `document.activeElement?.classList.contains('desktop-rename')`);
-    await cdp.send('Input.insertText', { text: 'Ops' }, sid);
-    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, sid);
-    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, sid);
-    await waitEval(cdp, sid, `state.panePrefs.desktops['${desktopCreation.active}']?.name === 'Ops'`);
+    assert.deepStrictEqual(renameDisabled, { input: false, name: 'Desktop 2' }, 'desktop ordinal buttons must not expose rename interaction');
     const attentionStability = await evalExpr(cdp, sid, `(() => {
       const activeId = state.activeId;
       const pingId = desktopPaneIds().find(id => id !== activeId) || activeId;
@@ -732,7 +758,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       };
     })()`);
     assert.deepStrictEqual(desktopLifecycle, {
-      renamed: 'Ops',
+      renamed: 'Desktop 2',
       removed: true,
       paneDesktop: 'desktop-1',
       attention: true,
@@ -747,11 +773,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       document.getElementById('addDesktop').click();
       const target = state.activeDesktopId;
       const defaultName = state.panePrefs.desktops[target].name;
-      startDesktopRename('desktop-1', document.querySelector('[data-desktop-id="desktop-1"]'));
-      const rename = document.querySelector('.desktop-rename');
-      rename.value = defaultName;
-      rename.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
-      const duplicateRejected = state.panePrefs.desktops['desktop-1'].name === 'Work';
+      const renameUnavailable = !document.querySelector('.desktop-rename');
       const before = new Set(state.order);
       await launch('/bin/bash');
       const id = state.order.find(paneId => !before.has(paneId));
@@ -761,14 +783,14 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         assigned: state.panePrefs.paneDesktop[id],
         target,
         defaultName,
-        duplicateRejected,
+        renameUnavailable,
         visible: id ? !state.sessions.get(id).el.classList.contains('layout-hidden') : false
       };
     })()`);
     assert.deepStrictEqual(
-      { assigned: launchDesktop.assigned, target: launchDesktop.target, defaultName: launchDesktop.defaultName, duplicateRejected: launchDesktop.duplicateRejected, visible: launchDesktop.visible },
-      { assigned: launchDesktop.target, target: launchDesktop.target, defaultName: 'Desktop 1', duplicateRejected: true, visible: true },
-      'new desktops must reuse the lowest free default name, reject duplicate names and receive new sessions'
+      { assigned: launchDesktop.assigned, target: launchDesktop.target, defaultName: launchDesktop.defaultName, renameUnavailable: launchDesktop.renameUnavailable, visible: launchDesktop.visible },
+      { assigned: launchDesktop.target, target: launchDesktop.target, defaultName: 'Desktop 1', renameUnavailable: true, visible: true },
+      'new desktops must reuse the lowest free default name, expose no rename control and receive new sessions'
     );
     await waitEval(cdp, peerSid, `state.sessions.has('${launchDesktop.id}') && state.panePrefs.paneDesktop['${launchDesktop.id}'] === '${launchDesktop.target}'`);
     const remoteLaunchIsolation = await evalExpr(cdp, peerSid, `(() => ({

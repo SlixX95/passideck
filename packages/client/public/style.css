@@ -127,10 +127,9 @@ button, select { font: inherit; }
   font: 10px var(--tg-mono);
   cursor: pointer;
 }
-.desktop-tab { flex: 0 1 auto; min-width: 52px; max-width: 128px; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.desktop-rename { height: 21px; min-width: 52px; max-width: 128px; padding: 0 7px; border: 1px solid var(--tg-accent); outline: 0; background: #030707; color: var(--tg-accent); font: 10px var(--tg-mono); }
-.desktop-tab:hover, .desktop-tab.active { color: var(--tg-accent); border-color: var(--tg-accent); background: color-mix(in srgb, var(--tg-accent) 12%, #030707); }
-.desktop-tab.attention {
+.desktop-tab { flex: 0 0 29px; width: 29px; min-width: 29px; max-width: 29px; padding: 0; white-space: nowrap; }
+.desktop-tab:hover { color: var(--tg-accent); border-color: var(--tg-accent); background: color-mix(in srgb, var(--tg-accent) 12%, #030707); }
+.desktop-tab.attention:not(.active) {
   color: var(--tg-accent);
   border-color: var(--tg-accent);
   background: color-mix(in srgb, var(--tg-accent) 18%, #030707);
@@ -152,6 +151,15 @@ button, select { font: inherit; }
   }
 }
 body.notify-blinking .desktop-tab.attention:not(.active) { animation: desktop-response-pulse 1.6s ease-in-out infinite; }
+.desktop-tab.active, .desktop-tab.active.attention {
+  color: var(--tg-bg);
+  border-color: var(--tg-accent);
+  background: var(--tg-accent);
+  font-weight: 900;
+  animation: none;
+  filter: none;
+  box-shadow: inset 0 -3px 0 color-mix(in srgb, var(--tg-bg) 72%, transparent), 0 0 10px color-mix(in srgb, var(--tg-accent) 38%, transparent);
+}
 .desktop-add { flex: 0 0 23px; width: 23px; padding: 0; color: var(--tg-accent); }
 .desktop-add:disabled { cursor: default; opacity: .35; color: var(--tg-text-dim); }
 .desktop-divider { flex: 0 0 1px; height: 17px; margin: 0 3px; background: var(--tg-border); }

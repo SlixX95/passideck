@@ -82,7 +82,9 @@ assert.ok(
 );
 assert.ok(!style.includes('.response-pulse { animation: none'), 'response attention must keep pulsing even when the OS requests reduced motion');
 assert.ok(!style.includes('#ff3158') && !style.includes("content: 'NEW'"), 'response attention must stay theme-colored and must not add a NEW badge');
-assert.ok(html.includes('app.js?v=20260720-edge-to-edge') && html.includes('style.css?v=20260720-edge-to-edge'), 'client cache keys must activate edge-to-edge desktop app geometry');
+assert.ok(html.includes('app.js?v=20260720-desktop-ordinals') && html.includes('style.css?v=20260720-desktop-ordinals'), 'client cache keys must activate compact, unambiguous desktop ordinals');
+assert.ok(!app.includes('function startDesktopRename(') && !style.includes('.desktop-rename'), 'ordinal-only desktop controls must not retain rename UI');
+assert.ok(style.includes('.desktop-tab.active, .desktop-tab.active.attention') && style.includes('font-weight: 900;'), 'active desktop must retain a solid high-contrast state even when attention is present');
 assert.ok(style.includes('.grid-container {') && style.includes('padding: 0;'), 'desktop grid must not reserve a visible inset around maximized panes');
 assert.ok(app.includes('function renderWindowRect(') && app.includes('function installDesktopWindowResizeHandles('), 'Windows desktop renderer must fill authoritative edge panes while retaining invisible resize hit areas');
 assert.ok(

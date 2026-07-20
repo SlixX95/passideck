@@ -3028,41 +3028,6 @@ function createDesktop() {
   savePanePrefs();
 }
 
-function startDesktopRename(id, tab) {
-  const desktop = state.panePrefs.desktops[id];
-  if (!desktop || !tab) return;
-  document.querySelector('.desktop-rename')?.blur();
-  const input = document.createElement('input');
-  input.className = 'desktop-rename';
-  input.value = desktop.name;
-  input.maxLength = 40;
-  input.setAttribute('aria-label', `Rename ${desktop.name}`);
-  input.style.width = `${tab.offsetWidth}px`;
-  let finished = false;
-  const finish = commit => {
-    if (finished) return;
-    finished = true;
-    const name = input.value.trim();
-    const duplicate = Object.entries(state.panePrefs.desktops)
-      .some(([otherId, other]) => otherId !== id && desktopNameKey(other?.name) === desktopNameKey(name));
-    if (commit && name && duplicate) {
-      showToast('Desktop name already exists', 'error');
-    } else if (commit && name && name !== desktop.name) {
-      desktop.name = name;
-      savePanePrefs();
-    }
-    renderDesktops();
-  };
-  input.onkeydown = event => {
-    if (event.key === 'Enter') { event.preventDefault(); finish(true); }
-    else if (event.key === 'Escape') { event.preventDefault(); finish(false); }
-  };
-  input.onblur = () => finish(true);
-  tab.replaceWith(input);
-  input.focus();
-  input.select();
-}
-
 function performDeleteDesktop(id) {
   if (state.panePrefs.desktopOrder.length <= 1 || !state.panePrefs.desktops[id]) return;
   const paneIds = state.order.filter(paneId => state.panePrefs.paneDesktop[paneId] === id);
@@ -3093,26 +3058,22 @@ function renderDesktops() {
     setTooltip(add, add.disabled ? `Maximum ${MAX_DESKTOPS} desktops` : 'Add desktop');
   }
   switcher.replaceChildren(...state.panePrefs.desktopOrder.map((id, index) => {
-    const desktop = state.panePrefs.desktops[id];
     const attention = state.order.some(paneId => state.panePrefs.paneDesktop[paneId] === id && state.sessions.get(paneId)?.responseAttention);
+    const active = id === state.activeDesktopId;
+    const ordinal = index + 1;
     const tab = document.createElement('button');
     tab.type = 'button';
-    tab.className = `desktop-tab${id === state.activeDesktopId ? ' active' : ''}${attention ? ' attention' : ''}`;
+    tab.className = `desktop-tab${active ? ' active' : ''}${attention ? ' attention' : ''}`;
     tab.dataset.desktopId = id;
     tab.setAttribute('role', 'tab');
-    tab.setAttribute('aria-selected', String(id === state.activeDesktopId));
+    tab.setAttribute('aria-selected', String(active));
+    if (active) tab.setAttribute('aria-current', 'page');
     const shortcut = index < 9 ? `, shortcut Alt Shift ${index + 1}` : '';
-    tab.setAttribute('aria-label', `${desktop.name}${shortcut}${attention ? ', new response' : ''}`);
+    tab.setAttribute('aria-label', `Desktop ${ordinal}${active ? ', current desktop' : ''}${shortcut}${attention ? ', new response' : ''}`);
     if (index < 9) tab.setAttribute('aria-keyshortcuts', `Alt+Shift+${index + 1}`);
-    tab.textContent = desktop.name;
-    setTooltip(tab, `${desktop.name}${index < 9 ? ` · Alt+Shift+${index + 1}` : ''} · Double-click to rename · Right-click to delete`);
-    let selectTimer = null;
-    tab.onclick = event => {
-      if (event.detail === 0) return selectDesktop(id);
-      if (event.detail > 1) return clearTimeout(selectTimer);
-      selectTimer = setTimeout(() => selectDesktop(id), 180);
-    };
-    tab.ondblclick = event => { clearTimeout(selectTimer); event.preventDefault(); event.stopPropagation(); startDesktopRename(id, tab); };
+    tab.textContent = String(ordinal);
+    setTooltip(tab, `Desktop ${ordinal}${index < 9 ? ` · Alt+Shift+${index + 1}` : ''} · Right-click to delete`);
+    tab.onclick = () => selectDesktop(id);
     tab.oncontextmenu = event => { event.preventDefault(); deleteDesktop(id); };
     return tab;
   }));
