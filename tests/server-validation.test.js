@@ -157,6 +157,9 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     const persistent = await persistentResponse.json();
     const persistentTmux = `passideck_${persistent.id.replace(/-/g, '')}`;
     tmux('has-session', '-t', persistentTmux);
+    const persistentPanePid = tmux('list-panes', '-t', persistentTmux, '-F', '#{pane_pid}').toString().trim();
+    const persistentPaneEnv = fs.readFileSync(`/proc/${persistentPanePid}/environ`, 'utf8').split('\0');
+    assert.ok(persistentPaneEnv.includes('PROMPT_TOOLKIT_NO_CPR=1'), 'PassiDeck panes must disable prompt_toolkit cursor position reports');
 
     const inputResponse = await fetch(`${base}/api/sessions/validation/input`, {
       method: 'POST',

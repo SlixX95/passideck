@@ -801,7 +801,7 @@ function tmuxSetDefaults(name = '') {
 
 function tmuxNew(name, cwd, launch, sessionId) {
   if (tmuxHas(name)) { tmuxSetDefaults(name); return; }
-  execFileSync(TMUX_CMD, tmuxArgs(['new-session', '-d', '-s', name, '-c', cwd, 'env', `PASSIDECK_SESSION=${sessionId}`, `HERMES_SESSION_SOURCE=${hermesSource(sessionId)}`, launch.file, ...launch.args]), { stdio: 'ignore' });
+  execFileSync(TMUX_CMD, tmuxArgs(['new-session', '-d', '-s', name, '-c', cwd, 'env', `PASSIDECK_SESSION=${sessionId}`, `HERMES_SESSION_SOURCE=${hermesSource(sessionId)}`, 'PROMPT_TOOLKIT_NO_CPR=1', launch.file, ...launch.args]), { stdio: 'ignore' });
   tmuxSetDefaults(name);
 }
 
