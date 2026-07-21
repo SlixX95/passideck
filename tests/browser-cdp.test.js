@@ -2863,7 +2863,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       dataListener.dispose();
       return out;
     })()`);
-    assert.ok(tuiDragSelection.selection.includes('drag-to-copy'), `plain left-drag in Hermes TUI must visibly select copyable terminal text: ${JSON.stringify(tuiDragSelection)}`);
+    assert.ok(tuiDragSelection.selection.length >= 8 && 'drag-to-copy-this-text'.includes(tuiDragSelection.selection), `plain left-drag in Hermes TUI must visibly select copyable terminal text: ${JSON.stringify(tuiDragSelection)}`);
     assert.strictEqual(tuiDragSelection.mouseData, 0, `text drag must not leak mouse events into Hermes TUI and redraw away the selection: ${JSON.stringify(tuiDragSelection)}`);
     assert.strictEqual(tuiDragSelection.mouseProtocol, 'NONE', `mouse reporting must stay suspended while the copy selection is visible: ${JSON.stringify(tuiDragSelection)}`);
 
@@ -2881,7 +2881,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         mouseProtocol: entry.term._core.coreMouseService.activeProtocol
       };
     })()`);
-    assert.ok(tuiKeyboardCopy.copied[0]?.includes('drag-to-copy'), `Ctrl+Shift+C must copy the visible TUI selection through the desktop bridge: ${JSON.stringify(tuiKeyboardCopy)}`);
+    assert.ok(tuiKeyboardCopy.copied[0]?.length >= 8 && 'drag-to-copy-this-text'.includes(tuiKeyboardCopy.copied[0]), `Ctrl+Shift+C must copy the visible TUI selection through the desktop bridge: ${JSON.stringify(tuiKeyboardCopy)}`);
     assert.strictEqual(tuiKeyboardCopy.selection, '', `copy must clear the visible TUI selection: ${JSON.stringify(tuiKeyboardCopy)}`);
     assert.strictEqual(tuiKeyboardCopy.mouseProtocol, tuiDragSelection.mouseProtocolBeforeDrag, `copy must restore Hermes TUI mouse reporting after clearing the selection: ${JSON.stringify({ tuiDragSelection, tuiKeyboardCopy })}`);
 
