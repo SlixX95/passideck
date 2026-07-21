@@ -157,6 +157,33 @@ assert.deepStrictEqual(responseCompleteFocusProbe('none').flashCalls, [true], 'm
 assert.deepStrictEqual(responseCompleteFocusProbe('other', 'darwin').bounceCalls, ['informational', 'informational', 'informational'], 'macOS Dock attention must stop after exactly three bounces');
 assert.deepStrictEqual(responseCompleteFocusProbe('other', 'darwin').flashCalls, [], 'macOS must not start indefinite flashFrame attention');
 assert.strictEqual(responseCompleteFocusProbe('backend').entry.attention, true, 'focused completion must retain in-app attention');
+
+const closedHandler = main.match(/win\.on\('closed', \(\) => \{([\s\S]*?)\n  \}\);/)?.[1];
+assert.ok(closedHandler?.includes('stopNativeAttention();'), 'closing the BrowserWindow must cancel pending native attention');
+
+function nativeAttentionCleanupProbe(platform = 'darwin', destroyed = false) {
+  const clearedTimers = [];
+  const cancelledBounces = [];
+  const flashCalls = [];
+  const context = {
+    process: { platform },
+    app: { dock: { cancelBounce: id => cancelledBounces.push(id) } },
+    mainWindow: { isDestroyed: () => destroyed, flashFrame: enabled => flashCalls.push(enabled) },
+    dockBounceTimers: [11, 12],
+    dockBounceIds: [21, 22],
+    clearTimeout: id => clearedTimers.push(id)
+  };
+  vm.runInNewContext(`${stopAttentionHelper}\nstopNativeAttention();`, context);
+  return { clearedTimers, cancelledBounces, flashCalls, timers: context.dockBounceTimers, bounceIds: context.dockBounceIds };
+}
+
+const macCleanup = nativeAttentionCleanupProbe();
+assert.deepStrictEqual(macCleanup.clearedTimers, [11, 12], 'macOS attention cleanup must clear every pending timer');
+assert.deepStrictEqual(macCleanup.cancelledBounces, [21, 22], 'macOS attention cleanup must cancel every active Dock bounce');
+assert.strictEqual(macCleanup.timers.length, 0, 'macOS attention cleanup must drop stale timer ids');
+assert.strictEqual(macCleanup.bounceIds.length, 0, 'macOS attention cleanup must drop stale bounce ids');
+assert.deepStrictEqual(nativeAttentionCleanupProbe('win32').flashCalls, [false], 'non-macOS attention cleanup must stop taskbar flashing');
+assert.deepStrictEqual(nativeAttentionCleanupProbe('win32', true).flashCalls, [], 'closed Windows cleanup must not call flashFrame on a destroyed BrowserWindow');
 assert.ok(
   shellJs.includes("backend.attention ? ' attention' : ''") &&
   shellJs.includes("badge.className = 'response-badge'") &&

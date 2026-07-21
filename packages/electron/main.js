@@ -403,6 +403,7 @@ function createWindow() {
     focusActiveView();
   });
   win.on('closed', () => {
+    stopNativeAttention();
     for (const { view } of backendViews.values()) {
       if (!view.webContents.isDestroyed()) view.webContents.close();
     }
