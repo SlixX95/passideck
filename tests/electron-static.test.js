@@ -1,6 +1,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const vm = require('vm');
 
 const root = path.resolve(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -99,11 +100,63 @@ assert.ok(
   'main must map response completion from the trusted backend WebContents instead of accepting a renderer-supplied backend id'
 );
 assert.ok(
-  main.includes("if (!mainWindow.isFocused()) mainWindow.flashFrame(true)") &&
-  main.includes("win.flashFrame(false)") &&
+  main.includes('webContents.getFocusedWebContents()') &&
+  main.includes("app.dock?.bounce('informational')") &&
+  main.includes('const MAC_DOCK_BOUNCE_COUNT = 3;') &&
+  main.includes('mainWindow.flashFrame(true)') &&
+  main.includes('stopNativeAttention();') &&
   main.includes("win.on('focus'"),
-  'an unfocused desktop window must request native taskbar attention until Windows focuses it'
+  'native attention must use exactly three informational Dock bounces on macOS, preserve Windows flashing, and stop on focus'
 );
+
+const focusHelper = main.match(/^function passideckWindowIsFocused\(\) \{[\s\S]*?^\}/m)?.[0];
+const stopAttentionHelper = main.match(/^function stopNativeAttention\(\) \{[\s\S]*?^\}/m)?.[0];
+const requestAttentionHelper = main.match(/^function requestNativeAttention\(\) \{[\s\S]*?^\}/m)?.[0];
+const responseHelper = main.match(/^function markBackendResponseComplete\(id, details = \{\}\) \{[\s\S]*?^\}/m)?.[0];
+assert.ok(focusHelper && stopAttentionHelper && requestAttentionHelper && responseHelper, 'Electron attention helpers must remain behavior-testable');
+
+function responseCompleteFocusProbe(focusTarget, platform = 'win32') {
+  const shellContents = {};
+  const backendContents = {};
+  const entry = { view: { webContents: backendContents } };
+  const flashCalls = [];
+  const bounceCalls = [];
+  const timers = [];
+  const context = {
+    process: { platform },
+    app: { dock: { bounce: kind => { bounceCalls.push(kind); return bounceCalls.length; }, cancelBounce: () => {} } },
+    webContents: {
+      getFocusedWebContents: () => ({ shell: shellContents, backend: backendContents, other: {} }[focusTarget] || null)
+    },
+    mainWindow: {
+      webContents: shellContents,
+      isFocused: () => focusTarget === 'window',
+      flashFrame: enabled => flashCalls.push(enabled)
+    },
+    backendViews: new Map([['backend', entry]]),
+    notifyShell: () => {},
+    MAC_DOCK_BOUNCE_COUNT: 3,
+    MAC_DOCK_BOUNCE_INTERVAL_MS: 800,
+    dockBounceTimers: [],
+    dockBounceIds: [],
+    setTimeout: fn => { timers.push(fn); return timers.length; },
+    clearTimeout: () => {}
+  };
+  vm.runInNewContext(`${focusHelper}\n${stopAttentionHelper}\n${requestAttentionHelper}\n${responseHelper}\nmarkBackendResponseComplete('backend');`, context);
+  while (timers.length) timers.shift()();
+  return { flashCalls, bounceCalls, entry };
+}
+
+for (const target of ['window', 'shell', 'backend']) {
+  const focused = responseCompleteFocusProbe(target);
+  assert.deepStrictEqual(focused.flashCalls, [], `${target} focus must not flash the taskbar`);
+  assert.deepStrictEqual(focused.bounceCalls, [], `${target} focus must not bounce the Dock`);
+}
+assert.deepStrictEqual(responseCompleteFocusProbe('other').flashCalls, [true], 'another application must trigger Windows taskbar attention');
+assert.deepStrictEqual(responseCompleteFocusProbe('none').flashCalls, [true], 'missing app focus must trigger Windows taskbar attention');
+assert.deepStrictEqual(responseCompleteFocusProbe('other', 'darwin').bounceCalls, ['informational', 'informational', 'informational'], 'macOS Dock attention must stop after exactly three bounces');
+assert.deepStrictEqual(responseCompleteFocusProbe('other', 'darwin').flashCalls, [], 'macOS must not start indefinite flashFrame attention');
+assert.strictEqual(responseCompleteFocusProbe('backend').entry.attention, true, 'focused completion must retain in-app attention');
 assert.ok(
   shellJs.includes("backend.attention ? ' attention' : ''") &&
   shellJs.includes("badge.className = 'response-badge'") &&

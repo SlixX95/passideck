@@ -17,6 +17,18 @@ const electronShell = read('packages/electron/shell.js');
 const electronShellHtml = read('packages/electron/shell.html');
 const electronShellPreload = read('packages/electron/shell-preload.js');
 
+function cssBlock(source, marker) {
+  const start = source.indexOf(marker);
+  assert.notStrictEqual(start, -1, `missing CSS block: ${marker}`);
+  const open = source.indexOf('{', start);
+  let depth = 0;
+  for (let i = open; i < source.length; i++) {
+    if (source[i] === '{') depth++;
+    else if (source[i] === '}' && --depth === 0) return source.slice(open + 1, i);
+  }
+  throw new Error(`unterminated CSS block: ${marker}`);
+}
+
 for (const [name, source] of [
   ['client', app],
   ['client HTML', html],
@@ -82,7 +94,15 @@ assert.ok(
 );
 assert.ok(!style.includes('.response-pulse { animation: none'), 'response attention must keep pulsing even when the OS requests reduced motion');
 assert.ok(!style.includes('#ff3158') && !style.includes("content: 'NEW'"), 'response attention must stay theme-colored and must not add a NEW badge');
-assert.ok(html.includes('app.js?v=20260720-desktop-ordinals') && html.includes('style.css?v=20260720-desktop-ordinals'), 'client cache keys must activate compact, unambiguous desktop ordinals');
+assert.ok(html.includes('app.js?v=20260721-active-input-bell-window-placement') && html.includes('style.css?v=20260721-slim-scrollbars'), 'client cache keys must activate focused-input suppression, window placement, and slim scrollbars');
+assert.ok(
+  style.includes(':where(.settings-body, .grid-container, .xterm-viewport) {') &&
+  style.includes('scrollbar-width: thin;') &&
+  style.includes('::-webkit-scrollbar-button { display: none; }') &&
+  style.includes('border-radius: 999px;') &&
+  style.includes('background: var(--tg-accent);'),
+  'visible scroll surfaces must use the slim rounded theme scrollbar'
+);
 assert.ok(!app.includes('function startDesktopRename(') && !style.includes('.desktop-rename'), 'ordinal-only desktop controls must not retain rename UI');
 assert.ok(style.includes('.desktop-tab.active, .desktop-tab.active.attention') && style.includes('font-weight: 900;'), 'active desktop must retain a solid high-contrast state even when attention is present');
 assert.ok(style.includes('.grid-container {') && style.includes('padding: 0;'), 'desktop grid must not reserve a visible inset around maximized panes');
@@ -94,6 +114,11 @@ assert.ok(
   'the three opaque surface styles must retain their distinct geometry'
 );
 assert.ok(style.includes('@keyframes desktop-response-pulse') && style.includes('background: color-mix(in srgb, var(--tg-accent) 34%, #030707)') && style.includes('box-shadow: 0 0 16px color-mix(in srgb, var(--tg-accent) 68%, transparent)'), 'desktop attention must pulse its surface and border clearly without alarm colors');
+for (const name of ['desktop-response-pulse', 'switcher-response-pulse', 'pane-response-pulse']) {
+  const block = cssBlock(style, `@keyframes ${name}`);
+  assert.ok(/\bopacity\s*:/.test(block), `${name} must retain a visible compositor-only pulse`);
+  assert.ok(!/\b(?:filter|background|border-color|box-shadow)\s*:/.test(block), `${name} must not animate repaint-heavy paint properties`);
+}
 assert.ok(app.includes('term.onBell?.(() => notifyResponseComplete(id));'), 'native Hermes terminal completion BEL must drive response attention');
 assert.ok(!app.includes("msg.type === 'response-complete'"), 'PassiDeck must not infer Hermes completion through server database events');
 assert.ok(app.includes("el.classList.toggle('hermes-tui', isHermesTuiEntry({ session }))"), 'Hermes TUI panes must carry a narrow styling hook');

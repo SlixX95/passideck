@@ -16,9 +16,17 @@ function initDatabase(Database) {
       created_at TEXT NOT NULL,
       exited_at TEXT,
       exit_code INTEGER,
-      reason TEXT
+      reason TEXT,
+      dynamic_title TEXT,
+      title_source TEXT,
+      hermes_session_id TEXT,
+      title_generation TEXT
     );
   `);
+  const columns = new Set(db.prepare('PRAGMA table_info(sessions)').all().map(column => column.name));
+  for (const [name, type] of [['dynamic_title', 'TEXT'], ['title_source', 'TEXT'], ['hermes_session_id', 'TEXT'], ['title_generation', 'TEXT']]) {
+    if (!columns.has(name)) db.exec(`ALTER TABLE sessions ADD COLUMN ${name} ${type}`);
+  }
   return db;
 }
 
@@ -33,6 +41,11 @@ function upsertSession(db, session) {
 
 function markSessionExited(db, sessionId, exitCode, reason) {
   db.prepare(`UPDATE sessions SET exited_at = ?, exit_code = ?, reason = ? WHERE id = ?`).run(new Date().toISOString(), exitCode || null, reason || '', sessionId);
+}
+
+function saveDynamicTitle(db, sessionId, title, titleSource, hermesSessionId, titleGeneration) {
+  db.prepare(`UPDATE sessions SET dynamic_title = ?, title_source = ?, hermes_session_id = ?, title_generation = ? WHERE id = ?`)
+    .run(title || '', titleSource || '', hermesSessionId || '', titleGeneration || '', sessionId);
 }
 
 function getActiveSessions(db) {
@@ -50,4 +63,4 @@ function cleanupStaleSessions(db, maxAgeHours = 48) {
   return stale.length;
 }
 
-module.exports = { initDatabase, upsertSession, markSessionExited, getActiveSessions, cleanupStaleSessions };
+module.exports = { initDatabase, upsertSession, markSessionExited, saveDynamicTitle, getActiveSessions, cleanupStaleSessions };

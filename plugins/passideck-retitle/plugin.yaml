@@ -1,0 +1,9 @@
+name: passideck-retitle
+version: "1.0.0"
+description: "Immediate and dynamic PassiDeck pane titles using the host Hermes title auxiliary model. Inert outside PassiDeck sessions."
+author: PassiDeck contributors
+platforms:
+  - linux
+hooks:
+  - pre_llm_call
+  - on_session_reset

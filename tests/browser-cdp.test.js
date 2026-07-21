@@ -433,6 +433,54 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     const savedRect = savedUi.panePrefs?.windows?.desktop?.[madeSessions[0]];
     assert.ok(savedRect && savedRect.x > clampedWindow.grid.width && savedRect.y > clampedWindow.grid.height && savedRect.w === 1600 && savedRect.h === 900, `local viewport clamp must not rewrite authoritative server geometry: ${JSON.stringify(savedRect)}`);
 
+    const zRollover = await evalExpr(cdp, sid, `(() => {
+      const ids = ${JSON.stringify(madeSessions.slice(0, 4))};
+      const prefs = windowPrefs();
+      const savedPrefs = structuredClone(prefs);
+      const savedZCounter = state.zCounter;
+      const persistPanePrefs = savePanePrefs;
+      try {
+        savePanePrefs = () => {};
+        Object.values(prefs).forEach((rect, index) => { rect.z = 20 + index; });
+        prefs[ids[0]].z = 9997;
+        prefs[ids[1]].z = 9998;
+        prefs[ids[2]].z = 9999;
+        state.zCounter = 9999;
+        bringWindowToFront(ids[0]);
+        const boundedValues = Object.values(prefs).map(rect => Number(rect.z));
+        const bounded = {
+          focusedIsMax: prefs[ids[0]].z === Math.max(...boundedValues),
+          allValid: boundedValues.every(z => Number.isFinite(z) && z >= 1 && z <= 9999),
+          preservedOrder: prefs[ids[1]].z < prefs[ids[2]].z
+        };
+
+        Object.values(prefs).forEach((rect, index) => { rect.z = 20 + index; });
+        prefs[ids[3]].z = 10000;
+        state.zCounter = 10;
+        bringWindowToFront(ids[0]);
+        const invalidValues = Object.values(prefs).map(rect => Number(rect.z));
+        const invalid = {
+          focusedIsMax: prefs[ids[0]].z === Math.max(...invalidValues),
+          allValid: invalidValues.every(z => Number.isFinite(z) && z >= 1 && z <= 9999),
+          preservedOrder: prefs[ids[1]].z < prefs[ids[2]].z
+        };
+        return { bounded, invalid };
+      } finally {
+        savePanePrefs = persistPanePrefs;
+        state.panePrefs.windows.desktop = savedPrefs;
+        state.zCounter = savedZCounter;
+        restorePanelOrder();
+      }
+    })()`);
+    assert.deepStrictEqual(
+      zRollover,
+      {
+        bounded: { focusedIsMax: true, allValid: true, preservedOrder: true },
+        invalid: { focusedIsMax: true, allValid: true, preservedOrder: true }
+      },
+      `z-order rollover must compact both bounded and legacy out-of-range values while preserving order: ${JSON.stringify(zRollover)}`
+    );
+
     const sixSlotAutoPlacement = await evalExpr(cdp, sid, `(() => {
       const ids = state.order.slice(0, 6);
       const prefs = windowPrefs();
@@ -637,6 +685,62 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       return result;
     })()`);
     assert.deepStrictEqual(desktopLimit, { count: 3, addDisabled: true }, 'desktop creation must stop at the initial maximum of three');
+
+    const firstDesktopDeletion = await evalExpr(cdp, sid, `(() => {
+      const removedId = 'desktop-1';
+      const remainingId = '${desktopCreation.active}';
+      const blocker = '${madeSessions[1]}';
+      const blockerRect = { x: 27, y: 31, w: 530, h: 410, z: 707 };
+      const saved = {
+        panePrefs: structuredClone(state.panePrefs),
+        activeDesktopId: state.activeDesktopId,
+        activeId: state.activeId,
+        minimized: [...state.minimized],
+        responsiveMinimized: [...state.responsiveMinimized],
+        zCounter: state.zCounter,
+        savePanePrefs
+      };
+      let result;
+      try {
+        savePanePrefs = () => {};
+        state.panePrefs.paneDesktop[blocker] = remainingId;
+        delete state.panePrefs.desktops[removedId].windows[blocker];
+        state.panePrefs.desktops[remainingId].windows = { [blocker]: { ...blockerRect } };
+        state.panePrefs.desktops[remainingId].minimized = [];
+        performDeleteDesktop(removedId);
+        const remaining = state.panePrefs.desktops[remainingId];
+        const prefs = windowPrefs();
+        result = {
+          removed: !state.panePrefs.desktops[removedId],
+          first: state.panePrefs.desktopOrder[0],
+          allMoved: state.order.every(id => state.panePrefs.paneDesktop[id] === remainingId),
+          blocker: prefs[blocker] ? { ...prefs[blocker] } : null,
+          blockerExpected: blockerRect,
+          legacyBound: state.panePrefs.windows.desktop === remaining.windows
+        };
+      } finally {
+        state.panePrefs = saved.panePrefs;
+        state.activeDesktopId = saved.activeDesktopId;
+        state.activeId = saved.activeId;
+        state.minimized = new Set(saved.minimized);
+        state.responsiveMinimized = new Set(saved.responsiveMinimized);
+        state.zCounter = saved.zCounter;
+        savePanePrefs = saved.savePanePrefs;
+        for (const [id, entry] of state.sessions) {
+          entry.el.classList.toggle('active', id === state.activeId);
+          entry.el.classList.toggle('minimized', state.minimized.has(id));
+        }
+        applyLayoutVisibility();
+        renderSwitcher();
+      }
+      return result;
+    })()`);
+    assert.deepStrictEqual(
+      { removed: firstDesktopDeletion.removed, first: firstDesktopDeletion.first, allMoved: firstDesktopDeletion.allMoved, legacyBound: firstDesktopDeletion.legacyBound },
+      { removed: true, first: desktopCreation.active, allMoved: true, legacyBound: true },
+      `deleting the first desktop must promote the surviving desktop without stale aliases: ${JSON.stringify(firstDesktopDeletion)}`
+    );
+    assert.deepStrictEqual(firstDesktopDeletion.blocker, firstDesktopDeletion.blockerExpected, `promoting a desktop must preserve its existing window geometry: ${JSON.stringify(firstDesktopDeletion)}`);
     await evalExpr(cdp, sid, `document.querySelector('[data-desktop-id="desktop-1"]').click()`);
     await waitEval(cdp, sid, `state.activeDesktopId === 'desktop-1'`);
     const desktopMoveChoices = await evalExpr(cdp, sid, `(() => {
@@ -648,36 +752,127 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       document.querySelector('#layoutAssist [data-target-desktop-id]').click();
       await new Promise(resolve => setTimeout(resolve, 200));
       const entry = state.sessions.get('${madeSessions[0]}');
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      const target = state.panePrefs.desktops['${desktopCreation.active}'];
+      const rect = target.windows['${madeSessions[0]}'];
       return {
         desktopId: state.panePrefs.paneDesktop['${madeSessions[0]}'],
         sourceVisible: !entry.el.classList.contains('layout-hidden'),
-        socketLive: entry.el.dataset.connectionStatus === 'live'
+        socketLive: entry.el.dataset.connectionStatus === 'live',
+        rect: { ...rect },
+        expected: { x: 0, y: 0, w: grid.width / 2, h: grid.height },
+        frontmost: rect.z === Math.max(...Object.values(target.windows).map(value => Number(value.z) || 0))
       };
     })()`);
     assert.strictEqual(movedPane.desktopId, desktopCreation.active, 'move action must assign the pane to the target desktop');
     assert.strictEqual(movedPane.sourceVisible, false, 'moved pane must disappear from the source desktop');
     assert.strictEqual(movedPane.socketLive, true, 'moving a pane must not reconnect or stop its terminal session');
+    for (const key of ['x', 'y', 'w', 'h']) {
+      assert.ok(Math.abs(movedPane.rect[key] - movedPane.expected[key]) < 2, `moving into an empty desktop must use its first free slot (${key}): ${JSON.stringify(movedPane)}`);
+    }
+    assert.strictEqual(movedPane.frontmost, true, `a moved pane must enter the target desktop in front: ${JSON.stringify(movedPane)}`);
     await waitEval(cdp, sid, `state.saveTimer === null && state.panePrefs.paneDesktop['${madeSessions[0]}'] === '${desktopCreation.active}'`);
     await waitEval(cdp, peerSid, `state.panePrefs.paneDesktop['${madeSessions[0]}'] === '${desktopCreation.active}'`);
+
+    const occupiedDesktopMove = await evalExpr(cdp, sid, `(() => {
+      const mover = '${madeSessions[1]}';
+      const blockers = ['${madeSessions[2]}', '${madeSessions[3]}'];
+      const targetId = '${desktopCreation.active}';
+      const sourceId = 'desktop-1';
+      const saved = {
+        panePrefs: structuredClone(state.panePrefs),
+        activeDesktopId: state.activeDesktopId,
+        activeId: state.activeId,
+        minimized: [...state.minimized],
+        responsiveMinimized: [...state.responsiveMinimized],
+        zCounter: state.zCounter,
+        savePanePrefs
+      };
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      const expectedSize = defaultWindowSize();
+      const blockerZ = [801, 802];
+      let result;
+      try {
+        savePanePrefs = () => {};
+        const source = state.panePrefs.desktops[sourceId];
+        const target = state.panePrefs.desktops[targetId];
+        state.panePrefs.paneDesktop[mover] = sourceId;
+        state.panePrefs.paneDesktop['${madeSessions[0]}'] = sourceId;
+        blockers.forEach(id => { state.panePrefs.paneDesktop[id] = targetId; });
+        source.windows[mover] = { x: grid.width - 360, y: grid.height - 240, w: 360, h: 240, z: 3 };
+        target.windows = {
+          'stale-window': { x: 12, y: 12, w: 40, h: 40, z: 800 },
+          [blockers[0]]: { x: 0, y: 0, w: grid.width / 2, h: grid.height, z: blockerZ[0] },
+          [blockers[1]]: { x: grid.width / 2, y: 0, w: grid.width / 2, h: grid.height, z: blockerZ[1] }
+        };
+        target.minimized = [];
+        movePaneToDesktop(mover, targetId);
+        const rect = { ...target.windows[mover] };
+        selectDesktop(targetId);
+        const offset = blockers.length * 34;
+        result = {
+          rect,
+          expected: {
+            x: Math.max(0, Math.min(grid.width - 120, 24 + offset)),
+            y: Math.max(0, Math.min(grid.height - 80, 24 + offset)),
+            ...expectedSize
+          },
+          frontmost: rect.z > Math.max(...blockerZ),
+          selected: state.activeId === mover
+        };
+      } finally {
+        state.panePrefs = saved.panePrefs;
+        state.activeDesktopId = saved.activeDesktopId;
+        state.activeId = saved.activeId;
+        state.minimized = new Set(saved.minimized);
+        state.responsiveMinimized = new Set(saved.responsiveMinimized);
+        state.zCounter = saved.zCounter;
+        savePanePrefs = saved.savePanePrefs;
+        for (const [id, entry] of state.sessions) {
+          entry.el.classList.toggle('active', id === state.activeId);
+          entry.el.classList.toggle('minimized', state.minimized.has(id));
+        }
+        applyLayoutVisibility();
+        renderSwitcher();
+      }
+      return result;
+    })()`);
+    for (const key of ['x', 'y', 'w', 'h']) {
+      assert.ok(Math.abs(occupiedDesktopMove.rect[key] - occupiedDesktopMove.expected[key]) < 2, `a full target desktop must use new-window fallback geometry (${key}): ${JSON.stringify(occupiedDesktopMove)}`);
+    }
+    assert.deepStrictEqual(
+      { frontmost: occupiedDesktopMove.frontmost, selected: occupiedDesktopMove.selected },
+      { frontmost: true, selected: true },
+      `fallback placement must be frontmost and selected when the target desktop opens: ${JSON.stringify(occupiedDesktopMove)}`
+    );
     const desktopLayoutIsolation = await evalExpr(cdp, sid, `(() => ({
       foreignIncluded: visibleWindowIds().includes('${madeSessions[0]}'),
       allLocal: visibleWindowIds().every(id => state.panePrefs.paneDesktop[id] === state.activeDesktopId)
     }))()`);
     assert.deepStrictEqual(desktopLayoutIsolation, { foreignIncluded: false, allLocal: true }, 'layout and drag helpers must only include panes on the active desktop');
     const crossDesktopActive = await evalExpr(cdp, sid, `(() => {
+      const foreignId = '${madeSessions[0]}';
       const wasHydrating = state.hydrating;
       state.hydrating = true;
-      selectAuthoritativePane('${madeSessions[0]}');
+      selectAuthoritativePane(foreignId);
       state.hydrating = wasHydrating;
       applyLayoutVisibility();
+      const activeBeforeDirectCalls = state.activeId;
+      selectPanel(foreignId);
+      restorePanel(foreignId);
       return {
-        selectedForeignPane: state.activeId === '${madeSessions[0]}',
-        hidden: state.sessions.get('${madeSessions[0]}').el.classList.contains('layout-hidden'),
-        pollutedCurrentGeometry: Boolean(windowPrefs()['${madeSessions[0]}']),
+        selectedForeignPane: state.activeId === foreignId,
+        directCallsIgnored: state.activeId === activeBeforeDirectCalls,
+        hidden: state.sessions.get(foreignId).el.classList.contains('layout-hidden'),
+        pollutedCurrentGeometry: Boolean(windowPrefs()[foreignId]),
         fallbackLocal: state.panePrefs.paneDesktop[nextActivePaneId()] === state.activeDesktopId
       };
     })()`);
-    assert.deepStrictEqual(crossDesktopActive, { selectedForeignPane: false, hidden: true, pollutedCurrentGeometry: false, fallbackLocal: true }, 'shared active-pane state and close fallback must never select or create geometry for a pane on another local desktop');
+    assert.deepStrictEqual(
+      crossDesktopActive,
+      { selectedForeignPane: false, directCallsIgnored: true, hidden: true, pollutedCurrentGeometry: false, fallbackLocal: true },
+      'authoritative, direct-select and restore paths must never select or create geometry for a pane on another local desktop'
+    );
     await evalExpr(cdp, sid, `(() => { movePaneToDesktop('${madeSessions[0]}', 'desktop-1'); selectDesktop('desktop-1'); })()`);
     await waitEval(cdp, sid, `state.panePrefs.paneDesktop['${madeSessions[0]}'] === 'desktop-1' && state.activeDesktopId === 'desktop-1' && state.saveTimer === null`);
     const desktopShortcuts = await evalExpr(cdp, sid, `(() => {
@@ -808,23 +1003,28 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.deepStrictEqual(launchCleanup, { staleAssignment: false }, 'closed sessions must remove their desktop assignment');
     await waitEval(cdp, sid, `state.saveTimer === null && state.panePrefs.desktopOrder.length === 1`);
+    const expectedSharedDesktopRect = await evalExpr(cdp, sid, `(() => {
+      const rect = windowPrefs()['${madeSessions[0]}'];
+      return { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+    })()`);
     const afterDesktopPeerInit = await requestJson(base, 'GET', '/api/ui-state');
     const desktopPeerRect = afterDesktopPeerInit.panePrefs?.windows?.desktop?.[madeSessions[0]];
     assert.deepStrictEqual(
       desktopPeerRect && { x: desktopPeerRect.x, y: desktopPeerRect.y, w: desktopPeerRect.w, h: desktopPeerRect.h },
-      { x: 111, y: 112, w: 777, h: 444 },
-      'opening a differently sized desktop peer must not rescale shared window geometry'
+      expectedSharedDesktopRect,
+      'desktop lifecycle actions and a differently sized peer must agree on authoritative window geometry'
     );
     await waitEval(cdp, peerSid, `(() => {
       const p = windowPrefs()['${madeSessions[0]}'];
-      return p?.x === 111 && p?.y === 112 && p?.w === 777 && p?.h === 444;
+      const expected = ${JSON.stringify(expectedSharedDesktopRect)};
+      return p?.x === expected.x && p?.y === expected.y && p?.w === expected.w && p?.h === expected.h;
     })()`, 4000);
     await waitEval(cdp, peerSid, `(() => [...state.sessions.values()].every(entry => entry.el.dataset.connectionStatus === 'live'))()`, 4000);
     const peerLive = await evalExpr(cdp, peerSid, `(() => ({
       rect: { ...windowPrefs()['${madeSessions[0]}'] },
       live: [...state.sessions.values()].every(entry => entry.el.dataset.connectionStatus === 'live')
     }))()`);
-    assert.deepStrictEqual({ x: peerLive.rect.x, y: peerLive.rect.y, w: peerLive.rect.w, h: peerLive.rect.h }, { x: 111, y: 112, w: 777, h: 444 }, 'second browser must apply live authoritative window geometry');
+    assert.deepStrictEqual({ x: peerLive.rect.x, y: peerLive.rect.y, w: peerLive.rect.w, h: peerLive.rect.h }, expectedSharedDesktopRect, 'second browser must apply live authoritative window geometry');
     assert.strictEqual(peerLive.live, true, 'opening a second browser must not disconnect terminal sessions');
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, peerSid);
     await waitEval(cdp, peerSid, 'innerWidth === 390');
@@ -834,7 +1034,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     const mobileRect = afterMobile.panePrefs?.windows?.desktop?.[madeSessions[0]];
     assert.deepStrictEqual(
       mobileRect && { x: mobileRect.x, y: mobileRect.y, w: mobileRect.w, h: mobileRect.h },
-      { x: 111, y: 112, w: 777, h: 444 },
+      expectedSharedDesktopRect,
       `mobile browser must never overwrite authoritative desktop geometry: ${JSON.stringify(afterMobile.panePrefs)}`
     );
     await evalExpr(cdp, peerSid, `(() => {
@@ -847,11 +1047,11 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     const reloadRect = afterPeerReload.panePrefs?.windows?.desktop?.[madeSessions[0]];
     assert.deepStrictEqual(
       reloadRect && { x: reloadRect.x, y: reloadRect.y, w: reloadRect.w, h: reloadRect.h },
-      { x: 111, y: 112, w: 777, h: 444 },
+      expectedSharedDesktopRect,
       'reloading one client must not publish its unsaved local pane geometry'
     );
     const reloadedPeer = await evalExpr(cdp, peerSid, `(() => ({ ...windowPrefs()['${madeSessions[0]}'] }))()`);
-    assert.deepStrictEqual({ x: reloadedPeer.x, y: reloadedPeer.y, w: reloadedPeer.w, h: reloadedPeer.h }, { x: 111, y: 112, w: 777, h: 444 }, 'reload must reconstruct latest server-confirmed geometry');
+    assert.deepStrictEqual({ x: reloadedPeer.x, y: reloadedPeer.y, w: reloadedPeer.w, h: reloadedPeer.h }, expectedSharedDesktopRect, 'reload must reconstruct latest server-confirmed geometry');
     await cdp.send('Target.closeTarget', { targetId: peerTarget.targetId });
 
     const titleDragProbe = await evalExpr(cdp, sid, `(() => {
@@ -1122,6 +1322,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const prefs = windowPrefs();
       const savedPrefs = JSON.parse(JSON.stringify(prefs));
       const savedMinimized = [...state.minimized];
+      const savedZCounter = state.zCounter;
       const grid = document.getElementById('termGrid').getBoundingClientRect();
       const left = Math.round(grid.width / 3);
       const right = Math.round(grid.width * 2 / 3);
@@ -1155,6 +1356,11 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const persistPanePrefs = savePanePrefs;
       let saveCalls = 0;
       savePanePrefs = () => { saveCalls += 1; };
+      prefs[blockers[0]].z = 9999;
+      state.zCounter = 9999;
+      applyFreeWindow(blockers[0]);
+      const cancelZBefore = windowZSnapshot(prefs);
+      const cancelZCounterBefore = state.zCounter;
       const cancelBefore = { x: prefs[source].x, y: prefs[source].y, w: prefs[source].w, h: prefs[source].h, z: prefs[source].z };
       let titleRect = title.getBoundingClientRect();
       title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: titleRect.left + 20, clientY: titleRect.top + 12, pointerId: 30, pointerType: 'mouse' }));
@@ -1162,6 +1368,8 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const saveCallsBeforeCancel = saveCalls;
       endPointerDrag({ type: 'pointercancel', preventDefault(){} });
       const cancelAfter = { x: prefs[source].x, y: prefs[source].y, w: prefs[source].w, h: prefs[source].h, z: prefs[source].z };
+      const cancelZAfter = windowZSnapshot(prefs);
+      const cancelZCounterAfter = state.zCounter;
       const cancelSaveCalls = saveCalls - saveCallsBeforeCancel;
       titleRect = title.getBoundingClientRect();
       title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: titleRect.left + 20, clientY: titleRect.top + 12, pointerId: 31, pointerType: 'mouse' }));
@@ -1206,8 +1414,9 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       state.panePrefs.windows.desktop = savedPrefs;
       state.minimized.clear();
       savedMinimized.forEach(id => state.minimized.add(id));
+      state.zCounter = savedZCounter;
       restorePanelOrder();
-      return { top, full, bottom, choices, visible, docked, blockersBefore, blockersAfter, horizontal, cancelBefore, cancelAfter, cancelSaveCalls };
+      return { top, full, bottom, choices, visible, docked, blockersBefore, blockersAfter, horizontal, cancelBefore, cancelAfter, cancelZBefore, cancelZAfter, cancelZCounterBefore, cancelZCounterAfter, saveCallsBeforeCancel, cancelSaveCalls };
     })()`);
     assert.deepStrictEqual(splitCenterGapDock.choices.top, { type: 'free', rect: splitCenterGapDock.top }, `upper center gap option must remain selectable: ${JSON.stringify(splitCenterGapDock)}`);
     assert.deepStrictEqual(splitCenterGapDock.choices.full, { type: 'free', rect: splitCenterGapDock.full }, `full-height center gap option must remain selectable: ${JSON.stringify(splitCenterGapDock)}`);
@@ -1220,6 +1429,9 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.deepStrictEqual(splitCenterGapDock.docked, splitCenterGapDock.bottom, `drop must use the selected lower center gap: ${JSON.stringify(splitCenterGapDock)}`);
     assert.deepStrictEqual(splitCenterGapDock.blockersAfter, splitCenterGapDock.blockersBefore, `split-gap docking must not move surrounding windows: ${JSON.stringify(splitCenterGapDock)}`);
     assert.deepStrictEqual(splitCenterGapDock.cancelAfter, splitCenterGapDock.cancelBefore, `pointercancel must restore the exact pre-drag geometry: ${JSON.stringify(splitCenterGapDock)}`);
+    assert.deepStrictEqual(splitCenterGapDock.cancelZAfter, splitCenterGapDock.cancelZBefore, `pointercancel must restore every compacted z-order value: ${JSON.stringify(splitCenterGapDock)}`);
+    assert.strictEqual(splitCenterGapDock.cancelZCounterAfter, splitCenterGapDock.cancelZCounterBefore, `pointercancel must restore the z-order counter: ${JSON.stringify(splitCenterGapDock)}`);
+    assert.strictEqual(splitCenterGapDock.saveCallsBeforeCancel, 0, `drag preview must not persist temporary size, position, or z-order: ${JSON.stringify(splitCenterGapDock)}`);
     assert.strictEqual(splitCenterGapDock.cancelSaveCalls, 0, `pointercancel must not add a preview commit: ${JSON.stringify(splitCenterGapDock)}`);
     assert.deepStrictEqual(splitCenterGapDock.horizontal.choices.left, { type: 'free', rect: splitCenterGapDock.horizontal.left }, `left center gap option must remain selectable: ${JSON.stringify(splitCenterGapDock)}`);
     assert.deepStrictEqual(splitCenterGapDock.horizontal.choices.full, { type: 'free', rect: splitCenterGapDock.horizontal.full }, `full-width center gap option must remain selectable: ${JSON.stringify(splitCenterGapDock)}`);
@@ -1522,6 +1734,367 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.deepStrictEqual(edgeResize, { dx: -60, dw: 60, edges: 8 }, `left edge resize must grow window without bottom-right-only lock: ${JSON.stringify(edgeResize)}`);
 
+    const canceledResizes = await evalExpr(cdp, sid, `(() => {
+      const [source, neighbor] = ${JSON.stringify(madeSessions.slice(0, 2))};
+      const prefs = windowPrefs();
+      const savedPrefs = structuredClone(prefs);
+      const savedMinimized = [...state.minimized];
+      const persistPanePrefs = savePanePrefs;
+      let saveCalls = 0;
+      try {
+        savePanePrefs = () => { saveCalls += 1; };
+        state.minimized = new Set(state.order.filter(id => id !== source && id !== neighbor));
+        const sourceStart = { x: 100, y: 100, w: 500, h: 300, z: 40 };
+        const neighborStart = { x: 600, y: 100, w: 500, h: 300, z: 41 };
+        prefs[source] = { ...sourceStart };
+        prefs[neighbor] = { ...neighborStart };
+        [source, neighbor].forEach(applyFreeWindow);
+
+        state.resizeDrag = {
+          sourceId: source,
+          edge: 'e',
+          startX: 600,
+          startY: 250,
+          startRect: { x: sourceStart.x, y: sourceStart.y, w: sourceStart.w, h: sourceStart.h },
+          z: sourceStart.z
+        };
+        updateWindowResize({ preventDefault(){}, clientX: 680, clientY: 250 });
+        const singleChanged = prefs[source].w !== sourceStart.w;
+        const singleSaveBefore = saveCalls;
+        endWindowResize({ type: 'pointercancel', preventDefault(){} });
+        const single = { x: prefs[source].x, y: prefs[source].y, w: prefs[source].w, h: prefs[source].h };
+        const singleCancelSaves = saveCalls - singleSaveBefore;
+
+        state.sharedResizeDrag = {
+          axis: 'vertical',
+          beforeIds: [source],
+          afterIds: [neighbor],
+          startX: 600,
+          startY: 250,
+          rects: { [source]: { ...sourceStart }, [neighbor]: { ...neighborStart } }
+        };
+        updateSharedResize({ preventDefault(){}, clientX: 660, clientY: 250 });
+        const sharedChanged = prefs[source].w !== sourceStart.w && prefs[neighbor].x !== neighborStart.x;
+        const sharedSaveBefore = saveCalls;
+        endSharedResize({ type: 'pointercancel', preventDefault(){} });
+        const shared = {
+          source: { ...prefs[source] },
+          neighbor: { ...prefs[neighbor] }
+        };
+        return {
+          singleChanged,
+          single,
+          singleExpected: { x: sourceStart.x, y: sourceStart.y, w: sourceStart.w, h: sourceStart.h },
+          singleCancelSaves,
+          sharedChanged,
+          shared,
+          sharedExpected: { source: sourceStart, neighbor: neighborStart },
+          sharedCancelSaves: saveCalls - sharedSaveBefore
+        };
+      } finally {
+        savePanePrefs = persistPanePrefs;
+        state.resizeDrag = null;
+        state.sharedResizeDrag = null;
+        state.panePrefs.windows.desktop = savedPrefs;
+        state.minimized = new Set(savedMinimized);
+        restorePanelOrder();
+      }
+    })()`);
+    assert.strictEqual(canceledResizes.singleChanged, true, `single-window resize fixture must exercise a real geometry change: ${JSON.stringify(canceledResizes)}`);
+    assert.deepStrictEqual(canceledResizes.single, canceledResizes.singleExpected, `pointercancel must restore pre-resize window geometry: ${JSON.stringify(canceledResizes)}`);
+    assert.strictEqual(canceledResizes.singleCancelSaves, 0, `canceled window resize must not persist a partial rectangle: ${JSON.stringify(canceledResizes)}`);
+    assert.strictEqual(canceledResizes.sharedChanged, true, `shared-resize fixture must exercise both adjoining windows: ${JSON.stringify(canceledResizes)}`);
+    assert.deepStrictEqual(canceledResizes.shared, canceledResizes.sharedExpected, `pointercancel must restore every shared-resize participant: ${JSON.stringify(canceledResizes)}`);
+    assert.strictEqual(canceledResizes.sharedCancelSaves, 0, `canceled shared resize must not persist partial rectangles: ${JSON.stringify(canceledResizes)}`);
+
+    const startedResizeCancel = await evalExpr(cdp, sid, `(() => {
+      const source = '${madeSessions[0]}';
+      const zBlocker = '${madeSessions[1]}';
+      const prefs = windowPrefs();
+      const savedPrefs = structuredClone(prefs);
+      const savedMinimized = [...state.minimized];
+      const savedZCounter = state.zCounter;
+      const persistPanePrefs = savePanePrefs;
+      const before = { x: 140, y: 90, w: 520, h: 340, z: 41 };
+      let saveCalls = 0;
+      try {
+        savePanePrefs = () => { saveCalls += 1; };
+        state.minimized.delete(source);
+        state.minimized.delete(zBlocker);
+        prefs[source] = { ...before };
+        prefs[zBlocker].z = 9999;
+        state.zCounter = 9999;
+        [source, zBlocker].forEach(applyFreeWindow);
+        const zBefore = windowZSnapshot(prefs);
+        const zCounterBefore = state.zCounter;
+        const handle = state.sessions.get(source).el.querySelector('.window-resize-handle.edge-se');
+        const rect = handle.getBoundingClientRect();
+        handle.dispatchEvent(new PointerEvent('pointerdown', {
+          bubbles: true,
+          button: 0,
+          clientX: rect.left + Math.max(1, rect.width / 2),
+          clientY: rect.top + Math.max(1, rect.height / 2),
+          pointerId: 45,
+          pointerType: 'mouse'
+        }));
+        const started = Boolean(state.resizeDrag);
+        updateWindowResize({ preventDefault(){}, clientX: rect.left + 70, clientY: rect.top + 55 });
+        const changed = prefs[source].w !== before.w || prefs[source].h !== before.h;
+        const saveCallsBeforeCancel = saveCalls;
+        endWindowResize({ type: 'pointercancel', preventDefault(){} });
+        return { started, changed, before, after: { ...prefs[source] }, zBefore, zAfter: windowZSnapshot(prefs), zCounterBefore, zCounterAfter: state.zCounter, saveCallsBeforeCancel, cancelSaveCalls: saveCalls - saveCallsBeforeCancel };
+      } finally {
+        savePanePrefs = persistPanePrefs;
+        state.resizeDrag = null;
+        state.panePrefs.windows.desktop = savedPrefs;
+        state.minimized = new Set(savedMinimized);
+        state.zCounter = savedZCounter;
+        restorePanelOrder();
+      }
+    })()`);
+    assert.strictEqual(startedResizeCancel.started, true, `resize handle must enter a resize interaction: ${JSON.stringify(startedResizeCancel)}`);
+    assert.strictEqual(startedResizeCancel.changed, true, `resize cancel fixture must preview a real geometry change: ${JSON.stringify(startedResizeCancel)}`);
+    assert.deepStrictEqual(startedResizeCancel.after, startedResizeCancel.before, `pointercancel must restore canonical pre-resize geometry including z-order: ${JSON.stringify(startedResizeCancel)}`);
+    assert.deepStrictEqual(startedResizeCancel.zAfter, startedResizeCancel.zBefore, `resize pointercancel must restore every compacted z-order value: ${JSON.stringify(startedResizeCancel)}`);
+    assert.strictEqual(startedResizeCancel.zCounterAfter, startedResizeCancel.zCounterBefore, `resize pointercancel must restore the z-order counter: ${JSON.stringify(startedResizeCancel)}`);
+    assert.strictEqual(startedResizeCancel.saveCallsBeforeCancel, 0, `resize preview must not persist temporary geometry or z-order: ${JSON.stringify(startedResizeCancel)}`);
+    assert.strictEqual(startedResizeCancel.cancelSaveCalls, 0, `canceled resize must not add a persistence commit: ${JSON.stringify(startedResizeCancel)}`);
+
+    const missingRectInteractions = await evalExpr(cdp, sid, `(() => {
+      const source = '${madeSessions[0]}';
+      const prefs = windowPrefs();
+      const savedPrefs = structuredClone(prefs);
+      const savedPointerDrag = state.pointerDrag;
+      const savedResizeDrag = state.resizeDrag;
+      try {
+        delete prefs[source];
+        state.pointerDrag = null;
+        state.resizeDrag = null;
+        const entry = state.sessions.get(source);
+        const title = entry.el.querySelector('.term-title');
+        const event = { button: 0, clientX: 100, clientY: 100, pointerId: 91, preventDefault(){}, stopPropagation(){} };
+        startPointerDrag(source, title, event);
+        const dragStarted = Boolean(state.pointerDrag);
+        const dragCreatedRect = Boolean(prefs[source]);
+        startWindowResize(source, { ...event, currentTarget: entry.el.querySelector('.window-resize-handle.edge-se') });
+        return { dragStarted, dragCreatedRect, resizeStarted: Boolean(state.resizeDrag), resizeCreatedRect: Boolean(prefs[source]) };
+      } finally {
+        state.pointerDrag = savedPointerDrag;
+        state.resizeDrag = savedResizeDrag;
+        state.panePrefs.windows.desktop = savedPrefs;
+        restorePanelOrder();
+      }
+    })()`);
+    assert.deepStrictEqual(
+      missingRectInteractions,
+      { dragStarted: false, dragCreatedRect: false, resizeStarted: false, resizeCreatedRect: false },
+      'drag and resize must fail closed instead of creating stale geometry when the canonical window rect is missing'
+    );
+
+    await waitEval(cdp, sid, 'state.saveTimer === null && state.saveInFlight === 0');
+    const canceledPreviewSave = await evalExpr(cdp, sid, `(async () => {
+      const source = '${madeSessions[0]}';
+      const prefs = windowPrefs();
+      const savedPrefs = structuredClone(prefs);
+      const savedMinimized = [...state.minimized];
+      const savedResponsive = [...state.responsiveMinimized];
+      const savedActiveId = state.activeId;
+      const savedZCounter = state.zCounter;
+      const savedSaveQueued = state.saveQueued;
+      const savedLastUiState = state.lastUiState ? structuredClone(state.lastUiState) : state.lastUiState;
+      const savedUiRevision = state.uiRevision;
+      const savedDraft = localStorage.getItem(UI_DRAFT_KEY);
+      const persistApi = api;
+      const writes = [];
+      try {
+        api = async (method, path, body) => {
+          if (method !== 'PUT' || path !== '/api/ui-state') return persistApi(method, path, body);
+          writes.push(structuredClone(body));
+          return { ...structuredClone(body), revision: (Number(body.revision) || 0) + 1 };
+        };
+        state.minimized.delete(source);
+        const before = { x: 120, y: 85, w: 610, h: 380, z: 51 };
+        prefs[source] = { ...before };
+        applyFreeWindow(source);
+        const zBefore = windowZSnapshot(prefs);
+        const counterBefore = state.zCounter;
+        saveUiState();
+        const title = state.sessions.get(source).el.querySelector('.term-title');
+        const rect = title.getBoundingClientRect();
+        title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: rect.left + 25, clientY: rect.top + 10, pointerId: 92, pointerType: 'mouse' }));
+        updatePointerDrag({ preventDefault(){}, clientX: rect.left + 145, clientY: rect.top + 95 });
+        const previewChanged = prefs[source].x !== before.x || prefs[source].y !== before.y;
+        await new Promise(resolve => setTimeout(resolve, 220));
+        const duringWrites = writes.length;
+        endPointerDrag({ type: 'pointercancel', preventDefault(){} });
+        await new Promise(resolve => setTimeout(resolve, 220));
+        const payloadPrefs = writes[0]?.panePrefs?.windows?.desktop || {};
+        const payloadZ = Object.fromEntries(Object.entries(payloadPrefs).map(([id, value]) => [id, value?.z]));
+        return {
+          previewChanged,
+          duringWrites,
+          totalWrites: writes.length,
+          savedRectRestored: JSON.stringify(payloadPrefs[source]) === JSON.stringify(before),
+          savedZRestored: JSON.stringify(payloadZ) === JSON.stringify(zBefore),
+          counterRestored: state.zCounter === counterBefore
+        };
+      } finally {
+        if (state.pointerDrag) endPointerDrag({ type: 'pointercancel', preventDefault(){} });
+        clearTimeout(state.saveTimer);
+        state.saveTimer = null;
+        state.saveQueued = savedSaveQueued;
+        state.saveInFlight = 0;
+        state.lastUiState = savedLastUiState;
+        state.uiRevision = savedUiRevision;
+        api = persistApi;
+        Object.keys(prefs).forEach(id => delete prefs[id]);
+        Object.assign(prefs, savedPrefs);
+        state.minimized = new Set(savedMinimized);
+        state.responsiveMinimized = new Set(savedResponsive);
+        state.activeId = savedActiveId;
+        state.zCounter = savedZCounter;
+        if (savedDraft === null) localStorage.removeItem(UI_DRAFT_KEY);
+        else localStorage.setItem(UI_DRAFT_KEY, savedDraft);
+        applyLayoutVisibility();
+        restorePanelOrder();
+      }
+    })()`);
+    assert.deepStrictEqual(
+      canceledPreviewSave,
+      { previewChanged: true, duringWrites: 0, totalWrites: 1, savedRectRestored: true, savedZRestored: true, counterRestored: true },
+      'a pending UI save must defer through drag preview and persist only the fully restored post-cancel state'
+    );
+
+    const dragDesktopSwitchCancel = await evalExpr(cdp, sid, `(() => {
+      const source = '${madeSessions[0]}';
+      const sourceDesktopId = state.activeDesktopId;
+      let targetDesktopId = state.panePrefs.desktopOrder.find(id => id !== sourceDesktopId);
+      const createdTarget = !targetDesktopId;
+      if (createdTarget) {
+        targetDesktopId = crypto.randomUUID();
+        state.panePrefs.desktops[targetDesktopId] = { name: 'Switch Race Target', minimized: [], windows: {}, viewport: null };
+        state.panePrefs.desktopOrder.push(targetDesktopId);
+      }
+      const prefs = windowPrefs(sourceDesktopId);
+      const savedRect = { ...prefs[source] };
+      const savedActiveId = state.activeId;
+      const savedMinimized = [...state.minimized];
+      const savedResponsive = [...state.responsiveMinimized];
+      const savedZCounter = state.zCounter;
+      const sourceDesktop = state.panePrefs.desktops[sourceDesktopId];
+      const targetDesktop = state.panePrefs.desktops[targetDesktopId];
+      const savedSourceMinimized = [...(sourceDesktop.minimized || [])];
+      const savedTargetMinimized = [...(targetDesktop.minimized || [])];
+      const savedSourceViewport = sourceDesktop.viewport ? { ...sourceDesktop.viewport } : sourceDesktop.viewport;
+      const savedTargetViewport = targetDesktop.viewport ? { ...targetDesktop.viewport } : targetDesktop.viewport;
+      try {
+        state.minimized.delete(source);
+        const before = { x: 110, y: 80, w: 620, h: 390, z: 40 };
+        prefs[source] = { ...before };
+        applyFreeWindow(source);
+        const title = state.sessions.get(source).el.querySelector('.term-title');
+        const rect = title.getBoundingClientRect();
+        title.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: rect.left + 30, clientY: rect.top + 12, pointerId: 93, pointerType: 'mouse' }));
+        updatePointerDrag({ preventDefault(){}, clientX: rect.left + 150, clientY: rect.top + 100 });
+        const previewChanged = prefs[source].x !== before.x || prefs[source].y !== before.y || prefs[source].w !== before.w || prefs[source].h !== before.h;
+        selectDesktop(targetDesktopId);
+        return {
+          previewChanged,
+          interactionEnded: state.pointerDrag === null,
+          restored: JSON.stringify(windowPrefs(sourceDesktopId)[source]) === JSON.stringify(before),
+          switched: state.activeDesktopId === targetDesktopId
+        };
+      } finally {
+        state.activeDesktopId = sourceDesktopId;
+        if (state.pointerDrag) endPointerDrag({ type: 'pointercancel', preventDefault(){} });
+        windowPrefs(sourceDesktopId)[source] = savedRect;
+        state.minimized = new Set(savedMinimized);
+        state.responsiveMinimized = new Set(savedResponsive);
+        state.activeId = savedActiveId;
+        state.zCounter = savedZCounter;
+        sourceDesktop.minimized = savedSourceMinimized;
+        targetDesktop.minimized = savedTargetMinimized;
+        sourceDesktop.viewport = savedSourceViewport;
+        targetDesktop.viewport = savedTargetViewport;
+        if (createdTarget) {
+          delete state.panePrefs.desktops[targetDesktopId];
+          state.panePrefs.desktopOrder = state.panePrefs.desktopOrder.filter(id => id !== targetDesktopId);
+        }
+        applyLayoutVisibility();
+        restorePanelOrder();
+      }
+    })()`);
+    assert.deepStrictEqual(
+      dragDesktopSwitchCancel,
+      { previewChanged: true, interactionEnded: true, restored: true, switched: true },
+      'desktop switching must cancel and fully restore an active window drag before changing desktop context'
+    );
+
+    const resizeDesktopSwitchCancel = await evalExpr(cdp, sid, `(() => {
+      const source = '${madeSessions[0]}';
+      const sourceDesktopId = state.activeDesktopId;
+      let targetDesktopId = state.panePrefs.desktopOrder.find(id => id !== sourceDesktopId);
+      const createdTarget = !targetDesktopId;
+      if (createdTarget) {
+        targetDesktopId = crypto.randomUUID();
+        state.panePrefs.desktops[targetDesktopId] = { name: 'Switch Race Target', minimized: [], windows: {}, viewport: null };
+        state.panePrefs.desktopOrder.push(targetDesktopId);
+      }
+      const prefs = windowPrefs(sourceDesktopId);
+      const savedRect = { ...prefs[source] };
+      const savedActiveId = state.activeId;
+      const savedMinimized = [...state.minimized];
+      const savedResponsive = [...state.responsiveMinimized];
+      const savedZCounter = state.zCounter;
+      const sourceDesktop = state.panePrefs.desktops[sourceDesktopId];
+      const targetDesktop = state.panePrefs.desktops[targetDesktopId];
+      const savedSourceMinimized = [...(sourceDesktop.minimized || [])];
+      const savedTargetMinimized = [...(targetDesktop.minimized || [])];
+      const savedSourceViewport = sourceDesktop.viewport ? { ...sourceDesktop.viewport } : sourceDesktop.viewport;
+      const savedTargetViewport = targetDesktop.viewport ? { ...targetDesktop.viewport } : targetDesktop.viewport;
+      try {
+        state.minimized.delete(source);
+        const before = { x: 140, y: 90, w: 520, h: 340, z: 41 };
+        prefs[source] = { ...before };
+        applyFreeWindow(source);
+        const handle = state.sessions.get(source).el.querySelector('.window-resize-handle.edge-se');
+        const rect = handle.getBoundingClientRect();
+        handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, clientX: rect.left + 2, clientY: rect.top + 2, pointerId: 94, pointerType: 'mouse' }));
+        updateWindowResize({ preventDefault(){}, clientX: rect.left + 90, clientY: rect.top + 70 });
+        const previewChanged = prefs[source].w !== before.w || prefs[source].h !== before.h;
+        selectDesktop(targetDesktopId);
+        return {
+          previewChanged,
+          interactionEnded: state.resizeDrag === null,
+          restored: JSON.stringify(windowPrefs(sourceDesktopId)[source]) === JSON.stringify(before),
+          switched: state.activeDesktopId === targetDesktopId
+        };
+      } finally {
+        state.activeDesktopId = sourceDesktopId;
+        if (state.resizeDrag) endWindowResize({ type: 'pointercancel', preventDefault(){} });
+        windowPrefs(sourceDesktopId)[source] = savedRect;
+        state.minimized = new Set(savedMinimized);
+        state.responsiveMinimized = new Set(savedResponsive);
+        state.activeId = savedActiveId;
+        state.zCounter = savedZCounter;
+        sourceDesktop.minimized = savedSourceMinimized;
+        targetDesktop.minimized = savedTargetMinimized;
+        sourceDesktop.viewport = savedSourceViewport;
+        targetDesktop.viewport = savedTargetViewport;
+        if (createdTarget) {
+          delete state.panePrefs.desktops[targetDesktopId];
+          state.panePrefs.desktopOrder = state.panePrefs.desktopOrder.filter(id => id !== targetDesktopId);
+        }
+        applyLayoutVisibility();
+        restorePanelOrder();
+      }
+    })()`);
+    assert.deepStrictEqual(
+      resizeDesktopSwitchCancel,
+      { previewChanged: true, interactionEnded: true, restored: true, switched: true },
+      'desktop switching must cancel and fully restore an active window resize before changing desktop context'
+    );
+
     const resizeSnap = await evalExpr(cdp, sid, `(() => {
       const ids = ${JSON.stringify(madeSessions.slice(0, 3))};
       const [source, verticalTarget, horizontalTarget] = ids;
@@ -1723,6 +2296,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         }
       });
       setResponseSoundMode('off');
+      document.activeElement?.blur?.();
       notifyResponseComplete(entries[0].session.id);
       notifyResponseComplete(entries[1].session.id);
       const header = entries[0].el.querySelector('.term-header');
@@ -1861,7 +2435,8 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       };
       await new Promise(resolve => setTimeout(resolve, 120));
       const beforeDelay = state.fontSize;
-      await new Promise(resolve => setTimeout(resolve, 180));
+      const deadline = Date.now() + 1000;
+      while (state.fontSize !== 18 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
       const afterDelay = state.fontSize;
       const afterTerminalSize = term?.options.fontSize;
       const afterSettingsSize = getComputedStyle(document.getElementById('settingsPanel')).fontSize;
@@ -1904,6 +2479,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       playBell = (tone, volume) => { played.push({ tone, volume }); };
       document.getElementById('responseSoundTest').click();
       clearResponseAttention(active.session.id);
+      document.activeElement?.blur?.();
       await new Promise(resolve => active.term.write('\\u0007', resolve));
       await new Promise(resolve => setTimeout(resolve, 20));
       const nativeHermesBellMarked = active.responseAttention;
@@ -2841,6 +3417,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         const entry = e.params?.entry || {};
         if (entry.url?.endsWith('/favicon.ico') && entry.text?.includes('404')) return false;
         if (entry.url?.endsWith('/api/ui-state') && entry.text?.includes('409 (Conflict)')) return false;
+        if (entry.url?.endsWith('/api/codex-limits') && entry.text?.includes('503 (Service Unavailable)')) return false;
         return ['error', 'violation'].includes(entry.level);
       }
       return e.method === 'Runtime.exceptionThrown' ||

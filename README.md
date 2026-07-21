@@ -30,6 +30,25 @@ cd /home/hermo/projects/passideck-dev
 PASSIDECK_PORT=8792 PASSIDECK_HOME=$PWD/.dev-home PASSIDECK_TMUX_SOCKET=passideck-dev npm run dev
 ```
 
+## Dynamic Hermes session titles
+
+PassiDeck ships an optional Hermes companion plugin. It sets an immediate title
+from the first prompt before the agent answers, then refines the title after
+each later prompt with the user's configured Hermes
+`auxiliary.title_generation` provider and model.
+
+```bash
+hermes plugins install SlixX95/passideck-dev/plugins/passideck-retitle --enable
+```
+
+The plugin is inert outside PassiDeck-launched terminals and does not modify
+Hermes core or Hermes' session database. Configure the route in
+`~/.passideck/config.yaml`:
+
+```yaml
+titleGenLlm: host_aux_title # default; use off to disable
+```
+
 ## Runtime isolation
 
 - Config/data root: `PASSIDECK_HOME` or `~/.passideck`

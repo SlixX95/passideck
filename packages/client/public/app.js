@@ -89,6 +89,18 @@ function desktopPaneIds(id = state.activeDesktopId) {
   return state.order.filter(paneId => state.sessions.has(paneId) && state.panePrefs.paneDesktop[paneId] === id);
 }
 
+function frontmostDesktopPaneId(id = state.activeDesktopId) {
+  const ids = desktopPaneIds(id);
+  const minimized = id === state.activeDesktopId
+    ? state.minimized
+    : new Set(state.panePrefs.desktops[id]?.minimized || []);
+  const prefs = windowPrefs(id);
+  const orderIndex = paneId => state.order.indexOf(paneId);
+  return ids
+    .filter(paneId => !minimized.has(paneId))
+    .sort((a, b) => (Number(prefs[b]?.z) || 0) - (Number(prefs[a]?.z) || 0) || orderIndex(b) - orderIndex(a))[0] || ids[0] || null;
+}
+
 const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v1:';
 const TERM_SNAPSHOT_MAX_LINES = 20000;
 const TERM_SNAPSHOT_MAX_CHARS = 1024 * 1024;
@@ -307,9 +319,10 @@ function slotKey(layout = state.layout) {
   return 'desktop';
 }
 
-function windowPrefs() {
-  const desktop = activeDesktop();
-  if (state.activeDesktopId === state.panePrefs.desktopOrder[0]) {
+function windowPrefs(desktopId = state.activeDesktopId) {
+  const resolvedDesktopId = state.panePrefs.desktops[desktopId] ? desktopId : state.panePrefs.desktopOrder[0];
+  const desktop = state.panePrefs.desktops[resolvedDesktopId];
+  if (resolvedDesktopId === state.panePrefs.desktopOrder[0]) {
     state.panePrefs.windows = state.panePrefs.windows && typeof state.panePrefs.windows === 'object' ? state.panePrefs.windows : {};
     state.panePrefs.windows.desktop = state.panePrefs.windows.desktop || desktop.windows || {};
     desktop.windows = state.panePrefs.windows.desktop;
@@ -391,10 +404,13 @@ function rectCoveredArea(rect, blockers) {
   return area;
 }
 
-function occupiedWindowRects(excludeId = null) {
-  const prefs = windowPrefs();
+function occupiedWindowRects(excludeId = null, desktopId = state.activeDesktopId) {
+  const prefs = windowPrefs(desktopId);
+  const minimized = desktopId === state.activeDesktopId
+    ? state.minimized
+    : new Set(state.panePrefs.desktops[desktopId]?.minimized || []);
   return Object.entries(prefs)
-    .filter(([id]) => id !== excludeId && state.sessions.has(id) && !state.minimized.has(id))
+    .filter(([id]) => id !== excludeId && state.sessions.has(id) && state.panePrefs.paneDesktop[id] === desktopId && !minimized.has(id))
     .map(([, r]) => r);
 }
 
@@ -415,28 +431,61 @@ function desktopCandidates() {
   return q;
 }
 
-function freeSpaceWindowRect(id = null) {
-  const occupied = occupiedWindowRects(id);
+function freeSpaceWindowRect(id = null, desktopId = state.activeDesktopId) {
+  const occupied = occupiedWindowRects(id, desktopId);
   const gaps = occupied.length ? desktopGapSlotRects(occupied.map(rect => ({ rect }))) : [];
   for (const c of [...gaps, ...desktopCandidates()]) {
     const area = c.w * c.h;
     const overlap = rectCoveredArea(c, occupied);
-    if (overlap / Math.max(1, area) < 0.08) return { ...c, z: nextWindowZ() };
+    if (overlap / Math.max(1, area) < 0.08) return { ...c, z: nextWindowZ(desktopId) };
   }
   return null;
 }
 
 
-function nextWindowZ() {
-  const vals = Object.values(windowPrefs()).map(r => Number(r.z) || 0).filter(v => v > 0 && v < 10000);
-  state.zCounter = Math.max(state.zCounter || 10, ...vals, 10) + 1;
+function compactWindowZ(prefs) {
+  const orderIndex = paneId => {
+    const index = state.order.indexOf(paneId);
+    return index < 0 ? Number.MAX_SAFE_INTEGER : index;
+  };
+  const zValue = rect => {
+    const value = Number(rect?.z);
+    return Number.isFinite(value) && value >= 1 && value <= 9999 ? value : 0;
+  };
+  const entries = Object.entries(prefs).sort((a, b) => zValue(a[1]) - zValue(b[1]) || orderIndex(a[0]) - orderIndex(b[0]));
+  entries.forEach(([, rect], index) => { rect.z = Math.min(9998, 10 + index); });
+  return Math.max(10, ...entries.map(([, rect]) => rect.z));
+}
+
+function windowZSnapshot(prefs = windowPrefs()) {
+  return Object.fromEntries(Object.entries(prefs).map(([id, rect]) => [id, rect?.z]));
+}
+
+function restoreWindowZSnapshot(snapshot, prefs = windowPrefs()) {
+  if (!snapshot) return;
+  for (const [id, z] of Object.entries(snapshot)) if (prefs[id]) prefs[id].z = z;
+}
+
+function nextWindowZ(desktopId = state.activeDesktopId) {
+  const prefs = windowPrefs(desktopId);
+  const vals = Object.values(prefs).map(rect => Number(rect?.z));
+  const invalid = vals.some(value => !Number.isFinite(value) || value < 1 || value > 9999);
+  const valid = vals.filter(value => Number.isFinite(value) && value >= 1 && value <= 9999);
+  let maxZ = Math.max(...valid, 10);
+  let counter = Number(state.zCounter);
+  if (!Number.isFinite(counter) || counter < 10) counter = 10;
+  if (invalid || maxZ >= 9999 || counter >= 9999) {
+    maxZ = compactWindowZ(prefs);
+    counter = maxZ;
+  }
+  state.zCounter = Math.max(counter, maxZ) + 1;
   return state.zCounter;
 }
 
-function defaultWindowRect(index = 0) {
+function defaultWindowRect(index = 0, desktopId = state.activeDesktopId) {
   const grid = document.getElementById('termGrid');
   const r = grid?.getBoundingClientRect?.() || { width: 1280, height: 720 };
-  const free = freeSpaceWindowRect();
+  const free = freeSpaceWindowRect(null, desktopId);
   if (free) return free;
   const { w, h } = defaultWindowSize();
   const offset = (index % 8) * 34;
@@ -445,7 +494,7 @@ function defaultWindowRect(index = 0) {
     y: Math.max(0, Math.min(r.height - 80, 24 + offset)),
     w,
     h,
-    z: nextWindowZ()
+    z: nextWindowZ(desktopId)
   };
 }
 
@@ -548,13 +597,13 @@ function applyFreeWindow(id) {
   entry.el.style.zIndex = String(rect.z || 10);
 }
 
-function bringWindowToFront(id) {
+function bringWindowToFront(id, opts = {}) {
   const p = ensureFreeWindow(id);
   if (!p) return;
   p.z = nextWindowZ();
   applyFreeWindow(id);
   renderSharedResizeHandles();
-  savePanePrefs();
+  if (opts.persist !== false) savePanePrefs();
 }
 
 function clearDesktopSlotSuggestions() {
@@ -1112,13 +1161,25 @@ function uiSavePending() {
   return state.saveQueued || state.saveTimer !== null || state.saveInFlight > 0;
 }
 
+function windowInteractionActive() {
+  return Boolean(state.pointerDrag || state.resizeDrag || state.sharedResizeDrag);
+}
+
 function saveUiState() {
   if (state.hydrating) return;
+  if (windowInteractionActive()) {
+    state.saveQueued = true;
+    return;
+  }
   persistUiDraft();
   state.saveQueued = true;
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(async () => {
     state.saveTimer = null;
+    if (windowInteractionActive()) {
+      state.saveQueued = true;
+      return;
+    }
     if (state.saveInFlight > 0) return;
     state.saveQueued = false;
     state.saveInFlight = 1;
@@ -1239,15 +1300,15 @@ function minimizePanel(id) {
 
 function restorePanel(id) {
   const entry = state.sessions.get(id);
-  if (!entry) return;
+  if (!entry || state.panePrefs.paneDesktop[id] !== state.activeDesktopId) return;
   entry.el.classList.remove('minimized');
   state.responsiveMinimized.delete(id);
   state.minimized.delete(id);
   ensureFreeWindow(id);
   updateMinimizedBar();
   applyLayoutVisibility();
-  savePanePrefs();
   selectPanel(id, { persist: false });
+  savePanePrefs();
   responsiveMinimizeForViewport();
   applyLayoutVisibility();
   // Fit after restore — panel was display:none, needs full resize cycle.
@@ -1338,6 +1399,12 @@ function shouldPlayResponseSound(id, hasDocumentFocus = document.hasFocus(), hid
   return hidden || !hasDocumentFocus || state.activeId !== id;
 }
 
+function terminalInputIsFocused(id, hasDocumentFocus = document.hasFocus(), hidden = document.hidden, focused = document.activeElement) {
+  if (!hasDocumentFocus || hidden || state.activeId !== id || state.panePrefs.paneDesktop[id] !== state.activeDesktopId || state.minimized.has(id)) return false;
+  const entry = state.sessions.get(id);
+  return Boolean(entry && !entry.el.classList.contains('layout-hidden') && entry.el.contains(focused) && focused?.closest?.('.xterm'));
+}
+
 function updateResponseAttentionUi(id) {
   const entry = state.sessions.get(id);
   const button = document.querySelector(`[data-switcher-pane-id="${CSS.escape(id)}"]`);
@@ -1379,6 +1446,7 @@ function pulsePaneTitlebar(id) {
 }
 
 function notifyResponseComplete(id) {
+  if (terminalInputIsFocused(id)) return;
   pulsePaneTitlebar(id);
   if (shouldPlayResponseSound(id)) playBell(state.responseSoundTone, state.responseSoundVolume);
   window.passideckDesktop?.notifyResponseComplete?.({
@@ -2011,8 +2079,7 @@ function selectAuthoritativePane(id) {
 function nextActivePaneId() {
   const ids = desktopPaneIds();
   if (ids.includes(state.activeId) && !state.minimized.has(state.activeId)) return state.activeId;
-  return ids.find(id => state.responsiveMinimized.has(id)) ||
-    ids.find(id => !state.minimized.has(id)) || ids[0] || null;
+  return ids.find(id => state.responsiveMinimized.has(id)) || frontmostDesktopPaneId();
 }
 
 function applyAuthoritativeUiState(ui, opts = {}) {
@@ -2270,12 +2337,30 @@ function selectedHermesSessionTitleIsEmpty(rowsOrLines) {
   return false;
 }
 
-function clearGeneratedTitle(id) {
+const TITLE_SOURCE_PRIORITY = {
+  terminal: 0,
+  'hermes-session': 1,
+  server: 1,
+  'passideck-provisional': 2,
+  'hermes-db': 3,
+  'passideck-retitle': 4
+};
+
+function titleSourcePriority(source) {
+  return TITLE_SOURCE_PRIORITY[source] ?? 0;
+}
+
+function clearGeneratedTitle(id, opts = {}) {
   const entry = state.sessions.get(id);
   if (!entry || state.panePrefs.titles?.[id] && !isPlaceholderTitle(state.panePrefs.titles[id])) return false;
+  const source = opts.source;
+  if (source && titleSourcePriority(entry.titleSource) > titleSourcePriority(source)) return false;
   delete entry.autoTitle;
   delete entry.session.title;
-  if (entry.session.meta) delete entry.session.meta.title;
+  if (entry.session.meta) {
+    delete entry.session.meta.title;
+    delete entry.session.meta.titleSource;
+  }
   entry.titleSource = '';
   const titleEl = entry.el.querySelector('.term-title');
   if (titleEl && document.activeElement !== titleEl) titleEl.textContent = panelTitle(entry.session);
@@ -2289,10 +2374,10 @@ function applyGeneratedTitle(id, title, opts = {}) {
   const clean = String(title || '').trim();
   if (!entry || !clean || state.panePrefs.titles?.[id] && !isPlaceholderTitle(state.panePrefs.titles[id])) return false;
   const source = opts.source || 'terminal';
-  if (entry.titleSource === 'hermes-session' && source !== 'hermes-session') return false;
+  if (titleSourcePriority(entry.titleSource) > titleSourcePriority(source)) return false;
   entry.autoTitle = clean;
   entry.titleSource = source;
-  entry.session.meta = { ...(entry.session.meta || {}), title: clean };
+  entry.session.meta = { ...(entry.session.meta || {}), title: clean, titleSource: source };
   const titleEl = entry.el.querySelector('.term-title');
   if (titleEl && document.activeElement !== titleEl) titleEl.textContent = clean;
   renderSwitcher();
@@ -2303,12 +2388,16 @@ function applyGeneratedTitle(id, title, opts = {}) {
 function applySessionMeta(id, session) {
   const entry = state.sessions.get(id);
   if (!entry || !session?.meta) return false;
+  const previousHermesSessionId = entry.session.meta?.hermesSessionId;
+  const nextHermesSessionId = session.meta.hermesSessionId;
+  if (previousHermesSessionId && nextHermesSessionId && previousHermesSessionId !== nextHermesSessionId) entry.titleSource = '';
   const meta = { ...(entry.session.meta || {}), ...session.meta };
   Object.assign(entry.session, session, { meta });
+  const source = String(session.meta.titleSource || 'server');
   const title = String(session.meta.title || '').trim();
-  if (title) return applyGeneratedTitle(id, title, { source: 'server' });
+  if (title) return applyGeneratedTitle(id, title, { source });
   if (!Object.prototype.hasOwnProperty.call(session.meta, 'title')) return false;
-  return clearGeneratedTitle(id);
+  return clearGeneratedTitle(id, { source });
 }
 
 function refreshTitleFromTerminal(id) {
@@ -2317,7 +2406,7 @@ function refreshTitleFromTerminal(id) {
   const rows = terminalViewportRows(entry?.term);
   const inferred = inferHermesVisibleTitle(rows) || inferHermesSessionTitle(rows);
   if (inferred) applyGeneratedTitle(id, inferred, { source: 'hermes-session' });
-  else if (selectedHermesSessionTitleIsEmpty(rows)) clearGeneratedTitle(id);
+  else if (selectedHermesSessionTitleIsEmpty(rows)) clearGeneratedTitle(id, { source: 'hermes-session' });
 }
 
 function trySetPointerCapture(el, pointerId) {
@@ -2332,7 +2421,7 @@ function endPointerDrag(event) {
   const slot = d.activeDesktopSlot;
   const p = windowPrefs()[d.sourceId];
   if (p && d.preDragRect) {
-    if (canceled) Object.assign(p, d.preDragRect);
+    if (canceled) Object.assign(p, d.cancelRect || d.preDragRect);
     else {
       const gridRect = document.getElementById('termGrid').getBoundingClientRect();
       Object.assign(p, {
@@ -2345,7 +2434,13 @@ function endPointerDrag(event) {
     }
     applyFreeWindow(d.sourceId);
   }
+  if (canceled) {
+    restoreWindowZSnapshot(d.cancelZ);
+    if (Object.prototype.hasOwnProperty.call(d, 'cancelZCounter')) state.zCounter = d.cancelZCounter;
+    applyFreeWindow(d.sourceId);
+  }
   state.pointerDrag = null;
+  if (state.draggingId === d.sourceId) state.draggingId = null;
   document.removeEventListener('pointermove', updatePointerDrag, true);
   document.removeEventListener('pointerup', endPointerDrag, true);
   document.removeEventListener('pointercancel', endPointerDrag, true);
@@ -2357,7 +2452,7 @@ function endPointerDrag(event) {
   if (!canceled) {
     if (slot?.type === 'free') applyFreeSlotSnap(d.sourceId, slot.rect);
     savePanePrefs();
-  }
+  } else if (state.saveQueued) saveUiState();
   scheduleTerminalFit();
   renderSharedResizeHandles();
 }
@@ -2391,6 +2486,16 @@ function endWindowResize(event) {
   const d = state.resizeDrag;
   if (!d) return;
   event?.preventDefault?.();
+  const canceled = event?.type === 'pointercancel';
+  if (canceled) {
+    const p = windowPrefs()[d.sourceId];
+    if (p && d.startRect) {
+      Object.assign(p, d.cancelRect || d.startRect);
+    }
+    restoreWindowZSnapshot(d.cancelZ);
+    if (Object.prototype.hasOwnProperty.call(d, 'cancelZCounter')) state.zCounter = d.cancelZCounter;
+    applyFreeWindow(d.sourceId);
+  }
   state.resizeDrag = null;
   document.removeEventListener('pointermove', updateWindowResize, true);
   document.removeEventListener('pointerup', endWindowResize, true);
@@ -2399,7 +2504,8 @@ function endWindowResize(event) {
   document.removeEventListener('mouseup', endWindowResize, true);
   document.body.classList.remove('window-resizing');
   document.getElementById(`panel-${d.sourceId}`)?.classList.remove('resizing');
-  savePanePrefs();
+  if (!canceled) savePanePrefs();
+  else if (state.saveQueued) saveUiState();
   scheduleTerminalFit();
   renderSharedResizeHandles();
 }
@@ -2539,8 +2645,18 @@ function updateSharedResize(event) {
 }
 
 function endSharedResize(event) {
-  if (!state.sharedResizeDrag) return;
+  const d = state.sharedResizeDrag;
+  if (!d) return;
   event?.preventDefault?.();
+  const canceled = event?.type === 'pointercancel';
+  if (canceled) {
+    const prefs = windowPrefs();
+    for (const [id, rect] of Object.entries(d.rects)) {
+      if (!prefs[id]) continue;
+      Object.assign(prefs[id], rect);
+      applyFreeWindow(id);
+    }
+  }
   document.removeEventListener('pointermove', updateSharedResize, true);
   document.removeEventListener('pointerup', endSharedResize, true);
   document.removeEventListener('pointercancel', endSharedResize, true);
@@ -2548,7 +2664,8 @@ function endSharedResize(event) {
   document.removeEventListener('mouseup', endSharedResize, true);
   document.body.classList.remove('shared-resizing-x', 'shared-resizing-y');
   state.sharedResizeDrag = null;
-  savePanePrefs();
+  if (!canceled) savePanePrefs();
+  else if (state.saveQueued) saveUiState();
   scheduleTerminalFit();
   renderSharedResizeHandles();
 }
@@ -2559,8 +2676,13 @@ function startWindowResize(id, event) {
   event.stopPropagation();
   const entry = state.sessions.get(id);
   if (!entry) return;
+  const prefs = windowPrefs();
+  if (!prefs[id]) return;
+  const cancelRect = { ...prefs[id] };
+  const cancelZ = windowZSnapshot(prefs);
+  const cancelZCounter = state.zCounter;
   const p = makeFreeWindow(id, entry.el.getBoundingClientRect());
-  p.z = nextWindowZ();
+  bringWindowToFront(id, { persist: false });
   state.resizeDrag = {
     sourceId: id,
     edge: event.currentTarget?.dataset?.resizeEdge || 'se',
@@ -2569,6 +2691,9 @@ function startWindowResize(id, event) {
     x: event.clientX,
     y: event.clientY,
     startRect: { x: p.x, y: p.y, w: p.w, h: p.h },
+    cancelRect,
+    cancelZ,
+    cancelZCounter,
     z: p.z
   };
   clearSharedResizeHandles();
@@ -2580,7 +2705,6 @@ function startWindowResize(id, event) {
   document.addEventListener('mousemove', updateWindowResize, true);
   document.addEventListener('mouseup', endWindowResize, true);
   trySetPointerCapture(event.currentTarget, event.pointerId);
-  bringWindowToFront(id);
 }
 
 function startPointerDrag(id, handle, event) {
@@ -2589,6 +2713,11 @@ function startPointerDrag(id, handle, event) {
   event.stopPropagation();
   const entry = state.sessions.get(id);
   if (!entry) return;
+  const prefs = windowPrefs();
+  if (!prefs[id]) return;
+  const cancelRect = { ...prefs[id] };
+  const cancelZ = windowZSnapshot(prefs);
+  const cancelZCounter = state.zCounter;
   const r = entry.el.getBoundingClientRect();
   const p = makeFreeWindow(id, r);
   const grid = document.getElementById('termGrid');
@@ -2603,8 +2732,8 @@ function startPointerDrag(id, handle, event) {
   p.y = event.clientY - gr.top - p.h * grabRatioY;
   Object.assign(p, clampWindowRect(p));
   applyFreeWindow(id);
-  p.z = nextWindowZ();
-  state.pointerDrag = { sourceId: id, dx: event.clientX - gr.left - p.x, dy: event.clientY - gr.top - p.y, x: event.clientX, y: event.clientY, z: p.z, activeDesktopSlot: null, preDragRect, grabRatioX, grabRatioY };
+  bringWindowToFront(id, { persist: false });
+  state.pointerDrag = { sourceId: id, dx: event.clientX - gr.left - p.x, dy: event.clientY - gr.top - p.y, x: event.clientX, y: event.clientY, z: p.z, activeDesktopSlot: null, preDragRect, cancelRect, cancelZ, cancelZCounter, grabRatioX, grabRatioY };
   state.draggingId = id;
   clearSharedResizeHandles();
   entry.el.classList.add('dragging');
@@ -2615,7 +2744,6 @@ function startPointerDrag(id, handle, event) {
   document.addEventListener('mousemove', updatePointerDrag, true);
   document.addEventListener('mouseup', endPointerDrag, true);
   trySetPointerCapture(handle, event.pointerId);
-  bringWindowToFront(id);
 }
 
 function createPanel(session, opts = {}) {
@@ -2748,6 +2876,7 @@ function createPanel(session, opts = {}) {
   });
   ro.observe(el.querySelector('.terminal'));
   term.onData(data => {
+    clearResponseAttention(id);
     const entry = state.sessions.get(id);
     const clean = sanitizeTerminalInput(data);
     if (clean && entry?.ws?.readyState === WebSocket.OPEN) entry.ws.send(JSON.stringify({ type: 'input', data: clean }));
@@ -2979,15 +3108,20 @@ function movePaneToDesktop(id, targetDesktopId) {
   const sourceDesktopId = state.panePrefs.paneDesktop[id];
   const source = state.panePrefs.desktops[sourceDesktopId];
   if (!state.sessions.has(id) || !target || !source || sourceDesktopId === targetDesktopId) return;
-  const rect = source.windows?.[id] ? { ...source.windows[id] } : defaultWindowRect();
+  const sourceWindows = windowPrefs(sourceDesktopId);
+  const targetWindows = windowPrefs(targetDesktopId);
+  const rect = defaultWindowRect(desktopPaneIds(targetDesktopId).length, targetDesktopId);
+  const wasActive = state.activeId === id;
   source.minimized = (source.minimized || []).filter(paneId => paneId !== id);
-  if (source.windows) delete source.windows[id];
-  target.windows = target.windows || {};
-  target.windows[id] = rect;
+  delete sourceWindows[id];
+  target.windows = targetWindows;
+  targetWindows[id] = rect;
   target.minimized = (target.minimized || []).filter(paneId => paneId !== id);
   state.panePrefs.paneDesktop[id] = targetDesktopId;
+  state.responsiveMinimized.delete(id);
   state.minimized.delete(id);
-  if (state.activeId === id) state.activeId = desktopPaneIds().find(paneId => !state.minimized.has(paneId)) || null;
+  if (targetDesktopId === state.activeDesktopId) state.activeId = id;
+  else if (wasActive) state.activeId = nextActivePaneId();
   for (const [paneId, entry] of state.sessions) entry.el.classList.toggle('active', paneId === state.activeId);
   applyLayoutVisibility();
   updateEmpty();
@@ -2997,6 +3131,10 @@ function movePaneToDesktop(id, targetDesktopId) {
 
 function selectDesktop(id) {
   if (!state.panePrefs.desktops[id] || id === state.activeDesktopId) return;
+  const cancelEvent = { type: 'pointercancel', preventDefault() {} };
+  if (state.pointerDrag) endPointerDrag(cancelEvent);
+  if (state.resizeDrag) endWindowResize(cancelEvent);
+  if (state.sharedResizeDrag) endSharedResize(cancelEvent);
   const current = activeDesktop();
   current.minimized = persistentMinimizedIds();
   current.windows = windowPrefs();
@@ -3005,8 +3143,7 @@ function selectDesktop(id) {
   const next = activeDesktop();
   state.minimized = new Set((next.minimized || []).filter(paneId => state.sessions.has(paneId)));
   state.responsiveMinimized.clear();
-  const ids = desktopPaneIds();
-  state.activeId = ids.find(paneId => !state.minimized.has(paneId)) || ids[0] || null;
+  state.activeId = frontmostDesktopPaneId(id);
   for (const [paneId, entry] of state.sessions) {
     entry.el.classList.toggle('active', paneId === state.activeId);
     entry.el.classList.toggle('minimized', state.minimized.has(paneId));
@@ -3030,12 +3167,21 @@ function createDesktop() {
 
 function performDeleteDesktop(id) {
   if (state.panePrefs.desktopOrder.length <= 1 || !state.panePrefs.desktops[id]) return;
+  const deletingFirst = state.panePrefs.desktopOrder[0] === id;
   const paneIds = state.order.filter(paneId => state.panePrefs.paneDesktop[paneId] === id);
   const fallback = state.panePrefs.desktopOrder.find(desktopId => desktopId !== id);
   if (state.activeDesktopId === id) selectDesktop(fallback);
   for (const paneId of paneIds) movePaneToDesktop(paneId, fallback);
   delete state.panePrefs.desktops[id];
   state.panePrefs.desktopOrder = state.panePrefs.desktopOrder.filter(desktopId => desktopId !== id);
+  if (deletingFirst) {
+    const first = state.panePrefs.desktops[state.panePrefs.desktopOrder[0]];
+    first.windows = first.windows && typeof first.windows === 'object' ? first.windows : {};
+    state.panePrefs.windows = state.panePrefs.windows && typeof state.panePrefs.windows === 'object' ? state.panePrefs.windows : {};
+    state.panePrefs.windows.desktop = first.windows;
+    state.panePrefs.minimized = Array.isArray(first.minimized) ? first.minimized : [];
+    state.panePrefs.viewport = first.viewport || null;
+  }
   renderSwitcher();
   savePanePrefs();
 }
@@ -3150,12 +3296,12 @@ function focusActiveTerminalOnWindowActivation() {
 
 function selectPanel(id, opts = {}) {
   const entry = state.sessions.get(id);
-  if (!entry) return;
+  if (!entry || state.panePrefs.paneDesktop[id] !== state.activeDesktopId) return;
   state.activeId = id;
   document.querySelectorAll('.term-panel').forEach(p => p.classList.remove('active'));
   entry.el.classList.add('active');
   applyLayoutVisibility();
-  if (!state.minimized.has(id)) bringWindowToFront(id);
+  if (!state.minimized.has(id)) bringWindowToFront(id, { persist: false });
   entry.term.focus();
   syncTerminalInputFocus();
   scheduleTerminalFit();

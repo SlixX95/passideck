@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, WebContentsView, clipboard, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, WebContentsView, clipboard, ipcMain, shell, webContents } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
@@ -7,6 +7,8 @@ const { normalizeBackend, normalizeConfig, normalizeUrl } = require('./backend-p
 const LEGACY_DEV_URL = 'http://42.69.42.44:8792/';
 const DEFAULT_URL = 'http://42.69.42.44:8791/';
 const TITLEBAR_HEIGHT = 30;
+const MAC_DOCK_BOUNCE_COUNT = 3;
+const MAC_DOCK_BOUNCE_INTERVAL_MS = 800;
 const RESIZE_DIRECTIONS = new Set(['top', 'right', 'bottom', 'left', 'top-left', 'top-right', 'bottom-left', 'bottom-right']);
 const MIN_WINDOW_WIDTH = 800;
 const MIN_WINDOW_HEIGHT = 500;
@@ -14,6 +16,8 @@ let mainWindow;
 let config;
 let dialogOpen = false;
 let resizeDrag = null;
+let dockBounceTimers = [];
+let dockBounceIds = [];
 const backendViews = new Map();
 
 function configPath() {
@@ -94,10 +98,48 @@ function backendIdForSender(event) {
   throw new Error('Unknown PassiDeck backend');
 }
 
+function passideckWindowIsFocused() {
+  const focused = webContents.getFocusedWebContents();
+  if (mainWindow?.isFocused() || focused === mainWindow?.webContents) return true;
+  for (const entry of backendViews.values()) {
+    if (focused === entry.view.webContents) return true;
+  }
+  return false;
+}
+
+function stopNativeAttention() {
+  if (process.platform !== 'darwin') {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.flashFrame(false);
+    return;
+  }
+  for (const timer of dockBounceTimers) clearTimeout(timer);
+  for (const id of dockBounceIds) app.dock?.cancelBounce(id);
+  dockBounceTimers = [];
+  dockBounceIds = [];
+}
+
+function requestNativeAttention() {
+  if (passideckWindowIsFocused()) return;
+  if (process.platform !== 'darwin') {
+    mainWindow.flashFrame(true);
+    return;
+  }
+  stopNativeAttention();
+  const bounce = () => {
+    if (passideckWindowIsFocused()) return;
+    const id = app.dock?.bounce('informational');
+    if (id !== undefined) dockBounceIds.push(id);
+  };
+  bounce();
+  for (let i = 1; i < MAC_DOCK_BOUNCE_COUNT; i++) {
+    dockBounceTimers.push(setTimeout(bounce, i * MAC_DOCK_BOUNCE_INTERVAL_MS));
+  }
+}
+
 function markBackendResponseComplete(id, details = {}) {
   const entry = backendViews.get(id);
   if (!entry || !mainWindow) return;
-  if (!mainWindow.isFocused()) mainWindow.flashFrame(true);
+  requestNativeAttention();
   entry.attention = true;
   entry.attentionAt = Date.now();
   entry.responsePulse = true;
@@ -357,7 +399,7 @@ function createWindow() {
   });
   win.on('resize', fitActiveView);
   win.on('focus', () => {
-    win.flashFrame(false);
+    stopNativeAttention();
     focusActiveView();
   });
   win.on('closed', () => {

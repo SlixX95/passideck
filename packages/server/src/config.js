@@ -14,8 +14,16 @@ function defaultConfig() {
   return {
     host: '127.0.0.1',
     port: 8791,
-    shell: '/bin/bash'
+    shell: '/bin/bash',
+    titleGenLlm: 'host_aux_title'
   };
+}
+
+function normalizeTitleGenLlm(value) {
+  const mode = String(value ?? '').trim().toLowerCase();
+  if (!mode) return 'host_aux_title';
+  if (mode === 'host_aux_title' || mode === 'off') return mode;
+  return 'off';
 }
 
 function loadConfig() {
@@ -24,7 +32,7 @@ function loadConfig() {
   fs.mkdirSync(dir, { recursive: true });
 
   if (!fs.existsSync(file)) {
-    fs.writeFileSync(file, `# PassiDeck local config\nhost: 127.0.0.1\nport: 8791\nshell: /bin/bash\n`, 'utf8');
+    fs.writeFileSync(file, `# PassiDeck local config\nhost: 127.0.0.1\nport: 8791\nshell: /bin/bash\ntitleGenLlm: host_aux_title\n`, 'utf8');
   }
 
   let parsed = {};
@@ -35,7 +43,9 @@ function loadConfig() {
     console.warn('[config] using defaults:', err.message);
   }
 
-  return { ...defaultConfig(), ...parsed, configDir: dir, configPath: file };
+  const config = { ...defaultConfig(), ...parsed, configDir: dir, configPath: file };
+  config.titleGenLlm = normalizeTitleGenLlm(process.env.PASSIDECK_TITLE_GEN_LLM ?? config.titleGenLlm);
+  return config;
 }
 
-module.exports = { loadConfig, configDir, configPath };
+module.exports = { loadConfig, configDir, configPath, normalizeTitleGenLlm };

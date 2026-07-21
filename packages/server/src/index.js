@@ -12,7 +12,7 @@ let pty = null;
 try { pty = require('@homebridge/node-pty-prebuilt-multiarch'); } catch {}
 
 const { SessionManager } = require('./session');
-const { loadConfig, configDir } = require('./config');
+const { loadConfig, configDir, normalizeTitleGenLlm } = require('./config');
 const { version: PASSIDECK_VERSION } = require('../../../package.json');
 
 let Database = null;
@@ -692,6 +692,60 @@ function hermesSource(id) {
   return `passideck:${id}`;
 }
 
+function normalizeIpAddress(address) {
+  const value = String(address || '').trim().toLowerCase();
+  const unwrapped = value.startsWith('[') && value.endsWith(']') ? value.slice(1, -1) : value;
+  return unwrapped.startsWith('::ffff:') ? unwrapped.slice(7) : unwrapped;
+}
+
+function isLoopbackAddress(address) {
+  const value = normalizeIpAddress(address);
+  return value === '127.0.0.1' || value === '::1';
+}
+
+function titleBridgeHost(config = {}) {
+  const host = normalizeIpAddress(config.host);
+  return !host || host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
+}
+
+function isTitleBridgeAddress(address, config = {}) {
+  if (isLoopbackAddress(address)) return true;
+  const remote = normalizeIpAddress(address);
+  const host = normalizeIpAddress(config.host);
+  return Boolean(host && host !== '0.0.0.0' && host !== '::' && remote === host);
+}
+
+function passideckTitleEnv(config = {}) {
+  const port = Number(config.port) || Number(process.env.PASSIDECK_PORT) || 8791;
+  const host = titleBridgeHost(config);
+  const urlHost = host.includes(':') ? `[${host}]` : host;
+  return [
+    `PASSIDECK_TITLE_ENDPOINT=http://${urlHost}:${port}/internal/session-title`,
+    `PASSIDECK_TITLE_GEN_LLM=${normalizeTitleGenLlm(config.titleGenLlm)}`
+  ];
+}
+
+function sanitizeDynamicTitle(value) {
+  return String(value || '')
+    .replace(/[\x00-\x1f\x7f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160);
+}
+
+function parseTitleGeneration(value) {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^([1-9]\d{15,21}):(\d{1,12}):([01])$/);
+  if (!match) return null;
+  return { raw, epoch: BigInt(match[1]), revision: BigInt(match[2]), phase: Number(match[3]) };
+}
+
+function compareTitleGenerations(left, right) {
+  if (left.epoch !== right.epoch) return left.epoch > right.epoch ? 1 : -1;
+  if (left.revision !== right.revision) return left.revision > right.revision ? 1 : -1;
+  return left.phase - right.phase;
+}
+
 function openHermesStateDb(dbPath) {
   const file = dbPath || path.join(process.env.HERMES_HOME || path.join(os.homedir(), '.hermes'), 'state.db');
   if (!Database || !fs.existsSync(file)) return null;
@@ -776,9 +830,15 @@ function syncHermesTitles(sessions, hermesDb, resolveActiveSessionId = activeHer
     if (activeRow && !String(activeRow.title || '').trim()) continue;
     const row = activeRow || findLatest.get(hermesSource(session.id));
     if (!row) continue;
+    if (session.meta.titleSource === 'passideck-retitle' && session.meta.hermesSessionId === row.id) continue;
     const title = String(row.title || '').trim().slice(0, 160);
-    if (session.meta.hermesSessionId === row.id && String(session.meta.title || '') === title) continue;
+    if (
+      session.meta.hermesSessionId === row.id &&
+      String(session.meta.title || '') === title &&
+      session.meta.titleSource === 'hermes-db'
+    ) continue;
     session.meta.hermesSessionId = row.id;
+    session.meta.titleSource = 'hermes-db';
     if (title) session.meta.title = title;
     else delete session.meta.title;
     session.broadcast({ type: 'meta', session: session.toJSON() });
@@ -799,9 +859,9 @@ function tmuxSetDefaults(name = '') {
   }
 }
 
-function tmuxNew(name, cwd, launch, sessionId) {
+function tmuxNew(name, cwd, launch, sessionId, config = {}) {
   if (tmuxHas(name)) { tmuxSetDefaults(name); return; }
-  execFileSync(TMUX_CMD, tmuxArgs(['new-session', '-d', '-s', name, '-c', cwd, 'env', `PASSIDECK_SESSION=${sessionId}`, `HERMES_SESSION_SOURCE=${hermesSource(sessionId)}`, 'PROMPT_TOOLKIT_NO_CPR=1', launch.file, ...launch.args]), { stdio: 'ignore' });
+  execFileSync(TMUX_CMD, tmuxArgs(['new-session', '-d', '-s', name, '-c', cwd, 'env', `PASSIDECK_SESSION=${sessionId}`, `HERMES_SESSION_SOURCE=${hermesSource(sessionId)}`, ...passideckTitleEnv(config), 'PROMPT_TOOLKIT_NO_CPR=1', 'PROMPT_TOOLKIT_BELL=false', launch.file, ...launch.args]), { stdio: 'ignore' });
   tmuxSetDefaults(name);
 }
 
@@ -851,6 +911,12 @@ function restoreTmuxSessions(sessions) {
     if (!tmuxHas(name)) { dbModule.markSessionExited(db, row.id, null, 'missing_tmux'); continue; }
     const s = sessions.create({ id: row.id, command: row.command, cwd: row.cwd, label: row.label });
     s.meta.createdAt = row.created_at || s.meta.createdAt;
+    if (row.dynamic_title) {
+      s.meta.title = sanitizeDynamicTitle(row.dynamic_title);
+      s.meta.titleSource = row.title_source || 'passideck-retitle';
+      s.meta.hermesSessionId = row.hermes_session_id || null;
+      s.meta.titleGeneration = row.title_generation || null;
+    }
     attachTmux(s);
     n++;
   }
@@ -876,6 +942,58 @@ function createServer(config = loadConfig()) {
   restoreTmuxSessions(sessions);
 
   app.set('trust proxy', 'loopback');
+  app.post('/internal/session-title', express.json({ limit: '8kb' }), (req, res) => {
+    if (!isTitleBridgeAddress(req.socket?.remoteAddress, config)) return res.status(403).json({ error: 'Local host only' });
+    if (normalizeTitleGenLlm(config.titleGenLlm) === 'off') return res.status(409).json({ error: 'Dynamic titles disabled' });
+
+    const sessionId = String(req.body?.sessionId || '').trim();
+    const hermesSessionId = String(req.body?.hermesSessionId || '').trim();
+    const kind = String(req.body?.kind || 'model').trim();
+    const title = sanitizeDynamicTitle(req.body?.title);
+    const generationRaw = String(req.body?.generation || '').trim();
+    const generation = parseTitleGeneration(generationRaw);
+    if (!/^[A-Za-z0-9_.:-]{1,160}$/.test(sessionId)) return res.status(400).json({ error: 'Invalid session id' });
+    if (hermesSessionId && !/^[A-Za-z0-9_.:-]{1,160}$/.test(hermesSessionId)) return res.status(400).json({ error: 'Invalid Hermes session id' });
+    if (!title && kind !== 'reset') return res.status(400).json({ error: 'Title required' });
+    if (kind !== 'model' && kind !== 'provisional' && kind !== 'reset') return res.status(400).json({ error: 'Invalid title kind' });
+    if (kind === 'reset' && (title || !hermesSessionId)) return res.status(400).json({ error: 'Invalid title reset' });
+    if (generationRaw && !generation) return res.status(400).json({ error: 'Invalid title generation' });
+
+    const session = sessions.get(sessionId);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    const currentGeneration = parseTitleGeneration(session.meta.titleGeneration);
+    const targetsPreviousHermesSession = hermesSessionId &&
+      session.meta.titleSource === 'hermes-db' &&
+      session.meta.hermesSessionId &&
+      session.meta.hermesSessionId !== hermesSessionId;
+    if (targetsPreviousHermesSession || (currentGeneration && (!generation || compareTitleGenerations(generation, currentGeneration) <= 0))) {
+      return res.status(202).json({
+        ok: true,
+        stale: true,
+        title: session.meta.title || '',
+        titleSource: session.meta.titleSource || '',
+        generation: currentGeneration?.raw || null
+      });
+    }
+
+    const titleSource = kind === 'reset' ? 'passideck-reset' : kind === 'provisional' ? 'passideck-provisional' : 'passideck-retitle';
+    const titleGeneration = generation?.raw || null;
+    const changed = session.meta.title !== title ||
+      session.meta.titleSource !== titleSource ||
+      session.meta.hermesSessionId !== (hermesSessionId || null) ||
+      session.meta.titleGeneration !== titleGeneration;
+    session.meta.title = title;
+    session.meta.titleSource = titleSource;
+    session.meta.hermesSessionId = hermesSessionId || null;
+    session.meta.titleGeneration = titleGeneration;
+    if (db && dbModule) dbModule.saveDynamicTitle(db, session.id, title, titleSource, hermesSessionId, titleGeneration);
+    if (changed) session.broadcast({ type: 'meta', session: session.toJSON() });
+    res.json({ ok: true, title, titleSource, generation: titleGeneration });
+  });
+  app.use('/internal/session-title', (err, _req, res, next) => {
+    if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'Request too large' });
+    return next(err);
+  });
   app.use(express.json({ limit: UPLOAD_JSON_LIMIT }));
   app.use('/api', requestGuard);
   app.use('/uploads', express.static(uploadsRoot(), { setHeaders: setUploadHeaders }));
@@ -945,7 +1063,7 @@ function createServer(config = loadConfig()) {
 
     try {
       const name = tmuxName(session.id);
-      tmuxNew(name, resolvedCwd, launch, session.id);
+      tmuxNew(name, resolvedCwd, launch, session.id, config);
       attachTmux(session);
       if (db && dbModule) dbModule.upsertSession(db, session);
       if (launch.initialInput) setTimeout(() => session.pty?.write(launch.initialInput), 250);
@@ -1035,7 +1153,7 @@ function createServer(config = loadConfig()) {
   return { app, server, wss, sessions, close };
 }
 
-module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, UPLOAD_MIME_ALLOWLIST };
+module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, UPLOAD_MIME_ALLOWLIST };
 
 if (require.main === module) {
   const config = loadConfig();

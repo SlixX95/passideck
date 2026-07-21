@@ -1,6 +1,6 @@
 {
   "name": "@passi/passideck",
-  "version": "0.8.58",
+  "version": "0.8.63",
   "description": "Standalone self-hosted browser terminal wall",
   "bin": {
     "passideck": "./packages/cli/src/index.js"
@@ -11,6 +11,9 @@
     "packages/server/src/**",
     "packages/client/public/**",
     "packages/electron/**",
+    "plugins/passideck-retitle/__init__.py",
+    "plugins/passideck-retitle/plugin.yaml",
+    "plugins/passideck-retitle/README.md",
     "scripts/prepare-assets.js",
     "scripts/install.sh",
     "scripts/passideck.service",
@@ -23,7 +26,7 @@
     "server": "node packages/server/src/index.js",
     "start": "node packages/cli/src/index.js",
     "install-local": "bash scripts/install.sh",
-    "test": "node --check packages/server/src/index.js && node --check packages/client/public/app.js && node scripts/prepare-assets.js && node tests/session.test.js && node tests/upload.test.js && node tests/server-validation.test.js && node tests/ui-static.test.js && node tests/electron-backends.test.js && node tests/electron-static.test.js && node tests/browser-cdp.test.js",
+    "test": "node --check packages/server/src/index.js && node --check packages/client/public/app.js && python3 tests/passideck-retitle-plugin.test.py && node tests/title-retitle.test.js && node scripts/prepare-assets.js && node tests/session.test.js && node tests/upload.test.js && node tests/server-validation.test.js && node tests/ui-static.test.js && node tests/electron-backends.test.js && node tests/electron-static.test.js && node tests/browser-cdp.test.js",
     "test:browser": "node tests/browser-cdp.test.js",
     "electron": "electron .",
     "dist:electron": "electron-builder --linux AppImage --win portable",

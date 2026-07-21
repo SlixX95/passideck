@@ -160,6 +160,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     const persistentPanePid = tmux('list-panes', '-t', persistentTmux, '-F', '#{pane_pid}').toString().trim();
     const persistentPaneEnv = fs.readFileSync(`/proc/${persistentPanePid}/environ`, 'utf8').split('\0');
     assert.ok(persistentPaneEnv.includes('PROMPT_TOOLKIT_NO_CPR=1'), 'PassiDeck panes must disable prompt_toolkit cursor position reports');
+    assert.ok(persistentPaneEnv.includes('PROMPT_TOOLKIT_BELL=false'), 'PassiDeck panes must suppress prompt_toolkit feedback BELs without suppressing Hermes completion BELs');
 
     const inputResponse = await fetch(`${base}/api/sessions/validation/input`, {
       method: 'POST',
