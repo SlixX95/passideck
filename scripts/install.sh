@@ -11,6 +11,16 @@ command -v npm >/dev/null
 command -v tmux >/dev/null
 npm install
 npm run prepare-assets
+if command -v hermes >/dev/null; then
+  HERMES_HOME_DIR="$(dirname "$(hermes config path)")"
+  PLUGIN_DIR="$HERMES_HOME_DIR/plugins/passideck-retitle"
+  mkdir -p "$PLUGIN_DIR"
+  for file in __init__.py plugin.yaml README.md; do
+    install -m 0644 "$ROOT/plugins/passideck-retitle/$file" "$PLUGIN_DIR/.$file.tmp"
+    mv -f "$PLUGIN_DIR/.$file.tmp" "$PLUGIN_DIR/$file"
+  done
+  hermes plugins enable passideck-retitle
+fi
 mkdir -p "$HOME_DIR"
 if [ ! -f "$HOME_DIR/config.yaml" ]; then
   cat > "$HOME_DIR/config.yaml" <<YAML

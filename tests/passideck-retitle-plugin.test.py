@@ -58,6 +58,27 @@ class PassiDeckRetitlePluginTests(unittest.TestCase):
             "pane-1", "hermes-1", "Dynamic session retitling", "model", 1
         ))
 
+    def test_title_context_keeps_original_goal_when_recent_requests_move_on(self):
+        plugin = load_plugin()
+        history = [
+            {"role": "user", "content": "Improve PassiDeck session retitling"},
+            *(
+                {"role": "user", "content": f"Implementation detail {number}"}
+                for number in range(1, 8)
+            ),
+        ]
+
+        context = plugin._build_title_context(
+            "Run the final tests",
+            history,
+            "PassiDeck Session Retitling",
+        )
+
+        self.assertIn("Original session goal:\n- Improve PassiDeck session retitling", context)
+        self.assertIn("Current title: PassiDeck Session Retitling", context)
+        self.assertIn("- Run the final tests", context)
+        self.assertNotIn("Implementation detail 1", context)
+
     def test_latest_prompt_wins_without_parallel_model_calls(self):
         plugin = load_plugin()
         first_started = threading.Event()
@@ -214,6 +235,8 @@ class PassiDeckRetitlePluginTests(unittest.TestCase):
         self.assertIsNone(recorded.get("provider"), "the plugin must not bring or select its own provider")
         self.assertIsNone(recorded.get("model"), "Hermes must resolve the user's configured title auxiliary model")
         self.assertIn("Write the title in English", recorded["messages"][0]["content"])
+        self.assertIn("Original session goal", recorded["messages"][0]["content"])
+        self.assertIn("temporary subtask", recorded["messages"][0]["content"])
         self.assertEqual(title, "Portable PassiDeck Titles")
 
     def test_non_passideck_and_off_sessions_are_inert(self):

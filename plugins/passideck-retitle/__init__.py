@@ -70,15 +70,16 @@ def _build_title_context(user_message: str, conversation_history: Any, current_t
     latest = _clean_text(user_message)
     if latest and (not messages or messages[-1] != latest):
         messages.append(latest)
-    messages = messages[-6:]
+    original_goal = messages[0] if messages else latest
+    recent = messages[-4:]
 
-    lines = []
+    lines = ["Original session goal:", f"- {original_goal[:900]}"]
     if current_title:
-        lines.append(f"Current title: {_clean_text(current_title)}")
+        lines.append(f"Current title: {_clean_text(current_title)[:_TITLE_LIMIT]}")
     lines.append("Recent user requests:")
-    lines.extend(f"- {message[:700]}" for message in messages)
+    lines.extend(f"- {message[:450]}" for message in recent)
     context = "\n".join(lines)
-    return context[-_CONTEXT_LIMIT:]
+    return context[:_CONTEXT_LIMIT]
 
 
 def _configured_title_language() -> str:
@@ -124,8 +125,11 @@ def _call_title_model(context: str) -> str:
             {
                 "role": "system",
                 "content": (
-                    "Generate the best current title for this conversation in 3-7 words. "
-                    "Keep the current title when the main topic has not materially changed. "
+                    "Generate a stable title for this conversation's main objective in 3-7 words. "
+                    "Treat the Original session goal and Current title as anchors. "
+                    "Do not replace the main topic with a temporary subtask, implementation detail, "
+                    "status check, or tangent. Keep the current title when the main objective has not "
+                    "materially changed; update it only when the user clearly changes that objective. "
                     f"{language_rule}Return only the title, without quotes, prefix, or trailing punctuation."
                 ),
             },
