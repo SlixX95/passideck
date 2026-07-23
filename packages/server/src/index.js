@@ -201,6 +201,11 @@ function normalizeMime(type) {
   return String(type || 'application/octet-stream').split(';')[0].trim().toLowerCase() || 'application/octet-stream';
 }
 
+function detectedUploadMime(buffer) {
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) return 'image/png';
+  return null;
+}
+
 function requireAllowedUploadMime(mime) {
   if (!UPLOAD_MIME_ALLOWLIST.has(mime)) throw new Error(`Upload type not allowed: ${mime}`);
 }
@@ -250,8 +255,8 @@ function saveUploadedBlob(input) {
   const src = input && typeof input === 'object' ? input : {};
   const raw = String(src.data || src.base64 || '');
   const match = raw.match(/^data:([^;,]+)?;base64,(.*)$/);
-  const mime = normalizeMime(src.type || (match && match[1]) || 'application/octet-stream');
-  requireAllowedUploadMime(mime);
+  let mime = normalizeMime(src.type || (match && match[1]) || 'application/octet-stream');
+  if (mime !== 'application/octet-stream') requireAllowedUploadMime(mime);
   const b64 = match ? match[2] : raw;
   if (b64.length > Math.ceil(UPLOAD_MAX_BYTES / 3) * 4 || !/^(?:[a-zA-Z0-9+/]{4})*(?:[a-zA-Z0-9+/]{2}==|[a-zA-Z0-9+/]{3}=)?$/.test(b64)) {
     throw new Error('Invalid base64 upload');
@@ -259,6 +264,10 @@ function saveUploadedBlob(input) {
   const buffer = Buffer.from(b64, 'base64');
   if (!buffer.length) throw new Error('Empty upload');
   if (buffer.length > UPLOAD_MAX_BYTES) throw new Error('Upload too large');
+  if (mime === 'application/octet-stream') {
+    mime = detectedUploadMime(buffer) || mime;
+    requireAllowedUploadMime(mime);
+  }
 
   const day = new Date().toISOString().slice(0, 10);
   const dir = path.join(uploadsRoot(), day);
