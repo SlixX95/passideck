@@ -94,7 +94,7 @@ assert.ok(
 );
 assert.ok(!style.includes('.response-pulse { animation: none'), 'response attention must keep pulsing even when the OS requests reduced motion');
 assert.ok(!style.includes('#ff3158') && !style.includes("content: 'NEW'"), 'response attention must stay theme-colored and must not add a NEW badge');
-assert.ok(html.includes('app.js?v=20260723-xterm-scrollbars') && html.includes('style.css?v=20260723-xterm-scrollbars'), 'client cache keys must activate the real xterm scrollbar integration');
+assert.ok(html.includes('app.js?v=20260723-terminal-snapshot-idle') && html.includes('style.css?v=20260723-xterm-scrollbars'), 'client cache keys must activate terminal snapshot safety and the real xterm scrollbar integration');
 assert.ok(html.includes('viewport-fit=cover'), 'smartphone viewport must support display cutouts and safe-area insets');
 assert.ok(
   html.includes('id="compactLaunchMenu"') && html.includes('id="compactActionsMenu"') &&

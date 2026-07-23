@@ -2063,12 +2063,15 @@ function saveTerminalSnapshot(id) {
   const entry = state.sessions.get(id);
   if (!entry?.term || entry.outputWriteInFlight) return;
   let text = terminalSnapshot(entry);
-  if (!text) return;
+  const pendingOutput = String(entry.outputBuffer || '');
+  if (!text && !pendingOutput) return;
   // localStorage quotas vary by browser/device. Keep the big snapshot when possible;
   // if quota is full, degrade gracefully instead of losing reload restore entirely.
-  while (text.length > 0) {
+  while (true) {
     try {
-      localStorage.setItem(snapshotKey(id), JSON.stringify({ id, text, savedAt: Date.now() }));
+      const snapshot = { id, text, savedAt: Date.now() };
+      if (pendingOutput) snapshot.pendingOutput = pendingOutput;
+      localStorage.setItem(snapshotKey(id), JSON.stringify(snapshot));
       return;
     } catch {}
     if (text.length <= 65536) return;
@@ -2089,9 +2092,14 @@ function restoreTerminalSnapshot(id, term) {
     if (!raw) return false;
     const snapshot = JSON.parse(raw);
     const text = String(snapshot.text || '');
-    if (!text) return false;
+    const pendingOutput = String(snapshot.pendingOutput || '');
+    if (!text && !pendingOutput) return false;
     try { term.reset(); } catch {}
-    term.write(text);
+    const replayPendingOutput = () => {
+      if (pendingOutput) writeTerminalOutput(term, pendingOutput, null, false);
+    };
+    if (text) term.write(text, replayPendingOutput);
+    else replayPendingOutput();
     return true;
   } catch {
     return false;
