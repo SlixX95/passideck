@@ -2734,6 +2734,42 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.strictEqual(wheelScroll.tinyCanceled, true, `normal Hermes tiny wheel deltas must be canceled while accumulating: ${JSON.stringify(wheelScroll)}`);
     assert.strictEqual(wheelScroll.tinyLeaked, false, `normal Hermes tiny wheel deltas must not reach xterm/Hermes app mouse handling: ${JSON.stringify(wheelScroll)}`);
 
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, configuration: 'mobile' }, sid);
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 3, mobile: true }, sid);
+    await waitEval(cdp, sid, 'innerWidth === 390 && innerHeight === 844');
+    const touchSwipeSetup = await evalExpr(cdp, sid, `(async () => {
+      const entry = state.sessions.get(state.activeId);
+      window.__touchScrollRestore = { entry, command: entry.session.meta.command, snapshot: entry.serialize.serialize({ scrollback: 20000 }) };
+      entry.session.meta.command = 'hermes --tui';
+      entry.term.reset();
+      await new Promise(resolve => entry.term.write(Array.from({ length: 100 }, (_, i) => 'touch-' + i + '\\r\\n').join(''), resolve));
+      entry.term.scrollToBottom();
+      const screen = entry.el.querySelector('.xterm-screen');
+      const rect = screen.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, startY: rect.top + rect.height * .35, endY: rect.top + rect.height * .75, width: rect.width, height: rect.height, before: entry.term.buffer.active.viewportY, baseY: entry.term.buffer.active.baseY };
+    })()`);
+    assert.ok(touchSwipeSetup.width > 0 && touchSwipeSetup.height > 0 && touchSwipeSetup.baseY > 0 && touchSwipeSetup.before === touchSwipeSetup.baseY, `touch swipe regression setup must use the visible active terminal at scrollback bottom: ${JSON.stringify(touchSwipeSetup)}`);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: touchSwipeSetup.x, y: touchSwipeSetup.startY, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
+    for (let step = 1; step <= 6; step++) {
+      const y = touchSwipeSetup.startY + (touchSwipeSetup.endY - touchSwipeSetup.startY) * step / 6;
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: touchSwipeSetup.x, y, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
+    }
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, sid);
+    const touchSwipe = await evalExpr(cdp, sid, `(async () => {
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const { entry, command, snapshot } = window.__touchScrollRestore;
+      const after = entry.term.buffer.active.viewportY;
+      entry.term.reset();
+      await new Promise(resolve => entry.term.write(snapshot, resolve));
+      entry.session.meta.command = command;
+      delete window.__touchScrollRestore;
+      return { before: ${touchSwipeSetup.before}, after };
+    })()`);
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false }, sid);
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false }, sid);
+    await waitEval(cdp, sid, 'innerWidth === 1280 && innerHeight === 720');
+    assert.ok(touchSwipe.after < touchSwipe.before, `a vertical touch swipe must scroll PassiDeck terminal history: ${JSON.stringify(touchSwipe)}`);
+
     const altScreenWheel = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
       const oldCommand = entry.session.meta.command;
@@ -2809,19 +2845,29 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.deepStrictEqual(resizedNormalBufferTuiWheel, { bufferType: 'normal', hadScrollback: true, mouseEvents: 1, scrollCalls: 0, viewportStable: true, canceled: true }, 'resized Hermes TUI in a normal xterm buffer must keep wheel routed to the TUI even when baseY is nonzero');
 
-    const tuiScrollbar = await evalExpr(cdp, sid, `(() => {
+    const xtermScrollbar = await evalExpr(cdp, sid, `(() => {
       const panel = [...state.sessions.values()][0].el;
+      panel.classList.remove('hermes-tui');
+      const scrollbar = panel.querySelector('.xterm-scrollable-element > .scrollbar.vertical');
+      const slider = scrollbar?.querySelector(':scope > .slider');
+      const normal = {
+        width: scrollbar ? getComputedStyle(scrollbar).width : '',
+        sliderRadius: slider ? getComputedStyle(slider).borderRadius : ''
+      };
       panel.classList.add('hermes-tui');
       const viewport = panel.querySelector('.xterm-viewport');
-      const out = {
-        firefox: getComputedStyle(viewport).scrollbarWidth,
-        webkit: getComputedStyle(viewport, '::-webkit-scrollbar').display
+      const tui = {
+        display: scrollbar ? getComputedStyle(scrollbar).display : '',
+        pointerEvents: scrollbar ? getComputedStyle(scrollbar).pointerEvents : '',
+        nativeFirefox: getComputedStyle(viewport).scrollbarWidth,
+        nativeWebkit: getComputedStyle(viewport, '::-webkit-scrollbar').display
       };
       panel.classList.remove('hermes-tui');
-      return out;
+      return { exists: Boolean(scrollbar && slider), normal, tui };
     })()`);
-    assert.strictEqual(tuiScrollbar.firefox, 'none', `Hermes TUI xterm scrollbar must stay hidden after resize: ${JSON.stringify(tuiScrollbar)}`);
-    assert.strictEqual(tuiScrollbar.webkit, 'none', `Hermes TUI WebKit scrollbar must stay hidden after resize: ${JSON.stringify(tuiScrollbar)}`);
+    assert.strictEqual(xtermScrollbar.exists, true, `the regression must inspect xterm 6's real custom scrollbar: ${JSON.stringify(xtermScrollbar)}`);
+    assert.deepStrictEqual(xtermScrollbar.normal, { width: '4px', sliderRadius: '999px' }, `normal terminal panes must use the real narrow rounded xterm scrollbar: ${JSON.stringify(xtermScrollbar)}`);
+    assert.deepStrictEqual(xtermScrollbar.tui, { display: 'none', pointerEvents: 'none', nativeFirefox: 'none', nativeWebkit: 'none' }, `Hermes TUI must hide both xterm 6's custom scrollbar and the native fallback after resize: ${JSON.stringify(xtermScrollbar)}`);
 
     const outerScrollbar = await evalExpr(cdp, sid, `(() => ({
       htmlOverflow: getComputedStyle(document.documentElement).overflow,
@@ -2884,6 +2930,54 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.ok(tuiKeyboardCopy.copied[0]?.length >= 8 && 'drag-to-copy-this-text'.includes(tuiKeyboardCopy.copied[0]), `Ctrl+Shift+C must copy the visible TUI selection through the desktop bridge: ${JSON.stringify(tuiKeyboardCopy)}`);
     assert.strictEqual(tuiKeyboardCopy.selection, '', `copy must clear the visible TUI selection: ${JSON.stringify(tuiKeyboardCopy)}`);
     assert.strictEqual(tuiKeyboardCopy.mouseProtocol, tuiDragSelection.mouseProtocolBeforeDrag, `copy must restore Hermes TUI mouse reporting after clearing the selection: ${JSON.stringify({ tuiDragSelection, tuiKeyboardCopy })}`);
+
+    const terminalLinks = await evalExpr(cdp, sid, `(async () => {
+      const originalDesktop = window.passideckDesktop;
+      const originalOpen = window.open;
+      const originalCopy = copyTextToClipboard;
+      const originalToast = showToast;
+      const calls = [];
+      const copied = [];
+      const toasts = [];
+      try {
+        window.passideckDesktop = {
+          openExternal: async url => { calls.push(['desktop', url]); return true; }
+        };
+        const desktop = await handleTerminalLink(null, 'https://example.com/desktop?q=1');
+
+        delete window.passideckDesktop;
+        const openedWindow = { opener: 'unsafe' };
+        window.open = (url, target) => { calls.push(['browser', url, target]); return openedWindow; };
+        const browser = await handleTerminalLink(null, 'http://example.com/browser');
+
+        window.open = (url, target) => { calls.push(['blocked', url, target]); return null; };
+        copyTextToClipboard = async text => { copied.push(text); return true; };
+        showToast = (text, kind) => { toasts.push([text, kind || '']); };
+        const fallback = await handleTerminalLink(null, 'https://example.com/copy');
+        const unsafe = await handleTerminalLink(null, 'javascript:alert(1)');
+        return { desktop, browser, fallback, unsafe, calls, copied, toasts, opener: openedWindow.opener };
+      } finally {
+        if (originalDesktop === undefined) delete window.passideckDesktop;
+        else window.passideckDesktop = originalDesktop;
+        window.open = originalOpen;
+        copyTextToClipboard = originalCopy;
+        showToast = originalToast;
+      }
+    })()`);
+    assert.deepStrictEqual(terminalLinks, {
+      desktop: true,
+      browser: true,
+      fallback: false,
+      unsafe: false,
+      calls: [
+        ['desktop', 'https://example.com/desktop?q=1'],
+        ['browser', 'http://example.com/browser', '_blank'],
+        ['blocked', 'https://example.com/copy', '_blank']
+      ],
+      copied: ['https://example.com/copy'],
+      toasts: [['Link copied', '']],
+      opener: null
+    }, 'terminal links must open through Electron/browser, copy when blocked, and reject non-HTTP(S) schemes');
 
     const tuiClick = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
@@ -2967,6 +3061,202 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       mouseProtocol: tuiDragSelection.mouseProtocolBeforeDrag
     }, `TUI wheel must clear the copy selection, restore mouse reporting and reach Hermes: ${JSON.stringify(tuiWheelAfterSelection)}`);
 
+    const outputBatching = await evalExpr(cdp, sid, `(async () => {
+      const id = state.activeId || [...state.sessions.keys()][0];
+      const entry = state.sessions.get(id);
+      const original = {
+        activeId: state.activeId,
+        desktop: state.panePrefs.paneDesktop[id],
+        minimized: state.minimized.has(id),
+        writeTerminalOutput,
+        saveTerminalSnapshot,
+        scheduleTerminalSnapshot,
+        refreshTitleFromTerminal,
+        outputBuffer: entry.outputBuffer,
+        outputFlushTimer: entry.outputFlushTimer,
+        outputWriteInFlight: entry.outputWriteInFlight,
+        outputFrameHandle: entry.outputFrameHandle,
+        outputCancelled: entry.outputCancelled,
+        snapshotRaw: localStorage.getItem(snapshotKey(id))
+      };
+      const writes = [];
+      let firstDone = null;
+      let eagerSnapshots = 0;
+      let snapshots = 0;
+      let titles = 0;
+      try {
+        state.panePrefs.paneDesktop[id] = state.activeDesktopId;
+        state.minimized.delete(id);
+        state.activeId = id;
+        const activeDelay = terminalOutputDelay(id);
+        state.activeId = '__other__';
+        const visibleDelay = terminalOutputDelay(id);
+        state.panePrefs.paneDesktop[id] = '__hidden__';
+        const hiddenDelay = terminalOutputDelay(id);
+        state.panePrefs.paneDesktop[id] = state.activeDesktopId;
+        state.activeId = id;
+        clearTimeout(entry.outputFlushTimer);
+        entry.outputBuffer = '';
+        entry.outputFlushTimer = null;
+        entry.outputWriteInFlight = false;
+        entry.outputFrameHandle = null;
+        entry.outputCancelled = false;
+        writeTerminalOutput = (_term, data, done) => {
+          writes.push(data);
+          if (writes.length === 1) firstDone = () => done?.();
+          else done?.();
+        };
+        scheduleTerminalSnapshot = () => { snapshots += 1; };
+        refreshTitleFromTerminal = () => { titles += 1; };
+        saveTerminalSnapshot(id);
+        const stableSnapshotText = JSON.parse(localStorage.getItem(snapshotKey(id)) || '{}').text;
+        saveTerminalSnapshot = () => { eagerSnapshots += 1; };
+        queueTerminalOutput(id, entry.term, 'A');
+        queueTerminalOutput(id, entry.term, 'B');
+        const timerSet = Boolean(entry.outputFlushTimer);
+        await new Promise(resolve => setTimeout(resolve, 40));
+        original.saveTerminalSnapshot(id);
+        const inFlightSnapshot = JSON.parse(localStorage.getItem(snapshotKey(id)) || '{}');
+        const stableSnapshotPreserved = inFlightSnapshot.text === stableSnapshotText;
+        const snapshotBounded = inFlightSnapshot.text?.length <= TERM_SNAPSHOT_MAX_CHARS;
+        queueTerminalOutput(id, entry.term, 'C');
+        queueTerminalOutput(id, entry.term, 'D');
+        await new Promise(resolve => setTimeout(resolve, 40));
+        const serializedBeforeCompletion = writes.join('|') === 'AB';
+        firstDone?.();
+        await new Promise(resolve => setTimeout(resolve, 40));
+        entry.outputWriteInFlight = true;
+        for (let i = 0; i < 5; i += 1) queueTerminalOutput(id, entry.term, 'X'.repeat(OUTPUT_FRAME_LIMIT));
+        const overflowBounded = entry.outputBuffer.length <= TERM_OUTPUT_BUFFER_MAX_CHARS && entry.outputBuffer.startsWith('\x1bc');
+        entry.outputWriteInFlight = false;
+        entry.outputBuffer = '';
+        return {
+          activeDelay,
+          visibleDelay,
+          hiddenDelay,
+          timerSet,
+          stableSnapshotPreserved,
+          snapshotBounded,
+          serializedBeforeCompletion,
+          overflowBounded,
+          writes,
+          eagerSnapshots,
+          snapshots,
+          titles,
+          buffer: entry.outputBuffer,
+          frameHandle: entry.outputFrameHandle,
+          writeInFlight: entry.outputWriteInFlight,
+          timerCleared: entry.outputFlushTimer === null
+        };
+      } finally {
+        clearTimeout(entry.outputFlushTimer);
+        entry.outputBuffer = original.outputBuffer;
+        entry.outputFlushTimer = original.outputFlushTimer;
+        entry.outputWriteInFlight = original.outputWriteInFlight;
+        entry.outputFrameHandle = original.outputFrameHandle;
+        entry.outputCancelled = original.outputCancelled;
+        writeTerminalOutput = original.writeTerminalOutput;
+        saveTerminalSnapshot = original.saveTerminalSnapshot;
+        scheduleTerminalSnapshot = original.scheduleTerminalSnapshot;
+        refreshTitleFromTerminal = original.refreshTitleFromTerminal;
+        if (original.snapshotRaw === null) localStorage.removeItem(snapshotKey(id));
+        else localStorage.setItem(snapshotKey(id), original.snapshotRaw);
+        state.activeId = original.activeId;
+        state.panePrefs.paneDesktop[id] = original.desktop;
+        if (original.minimized) state.minimized.add(id); else state.minimized.delete(id);
+      }
+    })()`);
+    assert.deepStrictEqual(outputBatching, {
+      activeDelay: 16,
+      visibleDelay: 250,
+      hiddenDelay: 1000,
+      timerSet: true,
+      stableSnapshotPreserved: true,
+      snapshotBounded: true,
+      serializedBeforeCompletion: true,
+      overflowBounded: true,
+      writes: ['AB', 'CD'],
+      eagerSnapshots: 0,
+      snapshots: 1,
+      titles: 2,
+      buffer: '',
+      frameHandle: null,
+      writeInFlight: false,
+      timerCleared: true
+    }, 'terminal output bursts must coalesce once per latency class without dropping snapshot/title follow-up');
+
+    const snapshotDebounce = await evalExpr(cdp, sid, `(async () => {
+      const id = '__snapshot-debounce-test__';
+      let staleSnapshots = 0;
+      const entry = {
+        outputBuffer: '',
+        outputFlushTimer: null,
+        outputWriteInFlight: true,
+        outputCancelled: false,
+        snapshotTimer: setTimeout(() => { staleSnapshots += 1; }, 25)
+      };
+      state.sessions.set(id, entry);
+      try {
+        queueTerminalOutput(id, null, 'A');
+        await new Promise(resolve => setTimeout(resolve, 40));
+        return { staleSnapshots, buffer: entry.outputBuffer, snapshotTimer: entry.snapshotTimer };
+      } finally {
+        clearTimeout(entry.snapshotTimer);
+        state.sessions.delete(id);
+      }
+    })()`);
+    assert.deepStrictEqual(snapshotDebounce, { staleSnapshots: 0, buffer: 'A', snapshotTimer: null }, 'new terminal output must cancel a pending stale snapshot before the next flush');
+
+    const lifecycleSnapshot = await evalExpr(cdp, sid, `(() => {
+      const id = '__lifecycle-snapshot-test__';
+      const pendingOutput = '\\x1b[31mqueued\\x1b[0m';
+      const entry = {
+        term: {},
+        serialize: { serialize: () => 'stable' },
+        session: { meta: { command: '/bin/bash' } },
+        outputWriteInFlight: false,
+        outputBuffer: pendingOutput
+      };
+      const writes = [];
+      const restoreTerm = {
+        reset() {},
+        write(data, done) { writes.push(data); done?.(); }
+      };
+      state.sessions.set(id, entry);
+      try {
+        saveTerminalSnapshot(id);
+        const saved = JSON.parse(localStorage.getItem(snapshotKey(id)) || '{}');
+        const restored = restoreTerminalSnapshot(id, restoreTerm);
+        return { pendingOutput: saved.pendingOutput || '', restored, writes };
+      } finally {
+        localStorage.removeItem(snapshotKey(id));
+        state.sessions.delete(id);
+      }
+    })()`);
+    assert.deepStrictEqual(lifecycleSnapshot, {
+      pendingOutput: '\\x1b[31mqueued\\x1b[0m',
+      restored: true,
+      writes: ['stable', '\\x1b[31mqueued\\x1b[0m']
+    }, 'lifecycle snapshots must persist and restore queued output after the last stable terminal state');
+
+    const chunkedWrite = await evalExpr(cdp, sid, `(async () => {
+      const originalRaf = window.requestAnimationFrame;
+      const chunks = [];
+      let rafCount = 0;
+      try {
+        window.requestAnimationFrame = callback => {
+          rafCount += 1;
+          setTimeout(() => callback(performance.now()), 0);
+          return rafCount;
+        };
+        await new Promise(resolve => writeTerminalOutput({ write(chunk, done) { chunks.push(chunk.length); done(); } }, 'X'.repeat(32769), resolve, false));
+        return { chunks, rafCount };
+      } finally {
+        window.requestAnimationFrame = originalRaf;
+      }
+    })()`);
+    assert.deepStrictEqual(chunkedWrite, { chunks: [32768, 1], rafCount: 1 }, 'chunked output must preserve offsets and complete without a final animation-frame delay');
+
     const reloadedTuiMouseMode = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
       const oldCommand = entry.session.meta.command;
@@ -3028,9 +3318,14 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         items: [{ kind: 'file', getAsFile: () => screenshot }]
       }, preventDefault(){}, stopImmediatePropagation(){} });
       while (state.uploadBusy) await new Promise(resolve => setTimeout(resolve, 0));
+      handleTerminalPaste({ clipboardData: {
+        files: [new File(['same'], 'mirrored.png', { type: 'image/png', lastModified: 1 })],
+        items: [{ kind: 'file', getAsFile: () => new File(['same'], 'mirrored.png', { type: 'image/png', lastModified: 1 }) }]
+      }, preventDefault(){}, stopImmediatePropagation(){} });
+      while (state.uploadBusy) await new Promise(resolve => setTimeout(resolve, 0));
       window.passideckDesktop = { readImage: async () => 'data:image/png;base64,cG5n' };
       handleTerminalPaste({ clipboardData: { files: [], items: [], getData: () => '' }, preventDefault(){}, stopImmediatePropagation(){} });
-      for (let i = 0; i < 100 && sent.length < 3; i++) await new Promise(resolve => setTimeout(resolve, 10));
+      for (let i = 0; i < 100 && sent.length < 4; i++) await new Promise(resolve => setTimeout(resolve, 10));
       delete window.passideckDesktop;
       handleTerminalPaste({ clipboardData: { files: [
         new File(['text'], 'pasted.txt', { type: 'text/plain' })
@@ -3046,6 +3341,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       sent: [
         '\u001b[200~normal Hermes paste\u001b[201~',
         '\u0001/image /tmp/screenshot.png\r',
+        '\u0001/image /tmp/mirrored.png\r',
         '\u0001/image /tmp/clipboard.png\r',
         '\u001b[200~/tmp/pasted.txt \u001b[201~',
         '\u001b[200~/tmp/notes.txt \u001b[201~'
@@ -3054,7 +3350,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       textStopped: true,
       keyStopped: true,
       keyPrevented: false
-    }, 'Ctrl+V text, clipboard files, and file drop must reach normal Hermes/TUI through the terminal bridge');
+    }, 'Ctrl+V text, one item-only image, one files/items-mirrored image, clipboard fallback, and file drop must reach normal Hermes/TUI exactly once');
 
     const rightClickCopy = await evalExpr(cdp, sid, `(async () => {
       const entry = activeTerminalEntry();
@@ -3231,6 +3527,218 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }, sid);
     await waitEval(cdp, sid, `document.getElementById('settingsPanel').hidden && document.activeElement?.id === 'settingsToggle'`);
 
+    const touchTap = async selector => {
+      const point = await evalExpr(cdp, sid, `(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ ...point, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, sid);
+    };
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, configuration: 'mobile' }, sid);
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 3, mobile: true }, sid);
+    await waitEval(cdp, sid, 'innerWidth === 390 && innerHeight === 844');
+    await waitEval(cdp, sid, `(() => { const entry = state.sessions.get(state.activeId); const proposed = entry?.fit?.proposeDimensions?.(); return !proposed || (entry.term.cols === proposed.cols && entry.term.rows === proposed.rows); })()`);
+    const smartphonePortrait = await evalExpr(cdp, sid, `(() => {
+      responsiveMinimizeForViewport();
+      applyLayoutVisibility();
+      const rect = el => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
+      const visible = [...document.querySelectorAll('.term-panel')].filter(panel => !panel.classList.contains('layout-hidden'));
+      const panel = visible[0];
+      const grid = document.getElementById('termGrid');
+      const targets = [document.querySelector('#compactLaunchMenu > .compact-menu-toggle'), document.querySelector('#compactActionsMenu > .compact-menu-toggle'), document.getElementById('addDesktop'), document.querySelector('.switcher-btn'), document.querySelector('.switcher-close')]
+        .map(el => ({ id: el?.id || el?.className || '', ...rect(el) }));
+      const before = structuredClone(windowPrefs()[state.activeId]);
+      startPointerDrag(state.activeId, panel.querySelector('.term-header'), { button: 0 });
+      startWindowResize(state.activeId, { button: 0 });
+      startSharedResize({ axis: 'vertical', beforeIds: [state.activeId], afterIds: [] }, { button: 0 });
+      return {
+        compact: isCompactViewport(),
+        overflowFree: document.documentElement.scrollWidth <= innerWidth && document.body.scrollWidth <= innerWidth,
+        topbar: rect(document.querySelector('.topbar')),
+        center: rect(document.querySelector('.command-center')),
+        left: rect(document.querySelector('.command-left')),
+        targets,
+        visible: visible.length,
+        panel: rect(panel),
+        grid: rect(grid),
+        headerHeight: rect(panel.querySelector('.term-header')).height,
+        terminal: rect(panel.querySelector('.terminal')),
+        xterm: (() => { const entry = state.sessions.get(state.activeId); const proposed = entry?.fit?.proposeDimensions?.(); return { cols: entry?.term?.cols, rows: entry?.term?.rows, proposed }; })(),
+        arrangeDisplay: getComputedStyle(panel.querySelector('.arrange')).display,
+        resizeHandlesHidden: [...panel.querySelectorAll('.window-resize-handle')].every(handle => getComputedStyle(handle).display === 'none'),
+        dragState: Boolean(state.pointerDrag || state.resizeDrag || state.sharedResizeDrag),
+        geometryPreserved: JSON.stringify(before) === JSON.stringify(windowPrefs()[state.activeId])
+      };
+    })()`);
+    assert.strictEqual(smartphonePortrait.compact, true, '390px portrait must use compact viewport behavior');
+    assert.strictEqual(smartphonePortrait.overflowFree, true, `smartphone document must not overflow horizontally: ${JSON.stringify(smartphonePortrait)}`);
+    assert.ok(smartphonePortrait.topbar.height >= 84 && smartphonePortrait.center.top < smartphonePortrait.left.top,
+      `smartphone chrome must keep navigation above launch/actions in two touch rows: ${JSON.stringify(smartphonePortrait)}`);
+    assert.ok(smartphonePortrait.targets.every(target => target.width >= 40 && target.height >= 40 && target.left >= 0 && target.right <= 390),
+      `primary smartphone controls must expose in-bounds 40px touch targets: ${JSON.stringify(smartphonePortrait.targets)}`);
+    assert.ok(smartphonePortrait.visible === 1 && smartphonePortrait.panel.left >= smartphonePortrait.grid.left && smartphonePortrait.panel.right <= smartphonePortrait.grid.right && smartphonePortrait.panel.bottom <= smartphonePortrait.grid.bottom,
+      `smartphone portrait must expose exactly one full in-bounds pane: ${JSON.stringify(smartphonePortrait)}`);
+    assert.ok(smartphonePortrait.headerHeight >= 44 && smartphonePortrait.terminal.width > 0 && smartphonePortrait.terminal.height > 0,
+      `smartphone pane chrome and terminal must remain usable: ${JSON.stringify(smartphonePortrait)}`);
+    assert.ok(smartphonePortrait.xterm.cols >= 2 && smartphonePortrait.xterm.rows >= 2 && (!smartphonePortrait.xterm.proposed || (smartphonePortrait.xterm.cols === smartphonePortrait.xterm.proposed.cols && smartphonePortrait.xterm.rows === smartphonePortrait.xterm.proposed.rows)),
+      `smartphone xterm must fit the visible terminal: ${JSON.stringify(smartphonePortrait.xterm)}`);
+    assert.deepStrictEqual(
+      { arrangeDisplay: smartphonePortrait.arrangeDisplay, resizeHandlesHidden: smartphonePortrait.resizeHandlesHidden, dragState: smartphonePortrait.dragState, geometryPreserved: smartphonePortrait.geometryPreserved },
+      { arrangeDisplay: 'none', resizeHandlesHidden: true, dragState: false, geometryPreserved: true },
+      'compact viewport must disable desktop arrange/drag/resize without changing authoritative geometry'
+    );
+
+    await touchTap('#compactActionsMenu > .compact-menu-toggle');
+    await waitEval(cdp, sid, `document.getElementById('compactActionsMenu').classList.contains('open')`);
+    const compactActionDisplays = await evalExpr(cdp, sid, `(() => {
+      const monitor = document.getElementById('systemMonitor');
+      const wasHidden = monitor.hidden;
+      monitor.hidden = false;
+      const displays = {
+        layout: getComputedStyle(document.querySelector('#compactActionsList > .layout-pack')).display,
+        monitor: getComputedStyle(monitor).display,
+        codex: getComputedStyle(document.getElementById('codexLimits')).display
+      };
+      monitor.hidden = wasHidden;
+      return displays;
+    })()`);
+    assert.deepStrictEqual(compactActionDisplays, { layout: 'flex', monitor: 'flex', codex: 'flex' },
+      `compact Actions menu must expose layout, enabled monitor, and Codex controls: ${JSON.stringify(compactActionDisplays)}`);
+    await touchTap('#chromeToggle');
+    await waitEval(cdp, sid, `document.body.classList.contains('chrome-hidden') && !document.getElementById('chromePeek').hidden`);
+    const smartphonePeek = await evalExpr(cdp, sid, `(() => { const r = document.getElementById('chromePeek').getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; })()`);
+    assert.ok(smartphonePeek.left >= 0 && smartphonePeek.top >= 0 && smartphonePeek.right <= 390 && smartphonePeek.bottom <= 844 && smartphonePeek.width >= 44,
+      `smartphone chrome restore control must remain touch-sized and in bounds: ${JSON.stringify(smartphonePeek)}`);
+    await touchTap('#chromePeek');
+    await waitEval(cdp, sid, `!document.body.classList.contains('chrome-hidden')`);
+    await touchTap('#compactActionsMenu > .compact-menu-toggle');
+    await waitEval(cdp, sid, `document.getElementById('compactActionsMenu').classList.contains('open')`);
+    await touchTap('#settingsToggle');
+    await waitEval(cdp, sid, `!document.getElementById('settingsPanel').hidden`);
+    const smartphoneSettings = await evalExpr(cdp, sid, `(() => {
+      const box = el => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
+      const panel = document.getElementById('settingsPanel');
+      return {
+        panel: box(panel),
+        close: box(document.getElementById('settingsClose')),
+        selectHeights: [...panel.querySelectorAll('select')].map(el => box(el).height),
+        bodyOverflow: getComputedStyle(panel.querySelector('.settings-body')).overflowY
+      };
+    })()`);
+    assert.ok(smartphoneSettings.panel.left >= 0 && smartphoneSettings.panel.top >= 0 && smartphoneSettings.panel.right <= 390 && smartphoneSettings.panel.bottom <= 844,
+      `smartphone settings must fill but not escape the viewport: ${JSON.stringify(smartphoneSettings)}`);
+    assert.ok(smartphoneSettings.close.width >= 44 && smartphoneSettings.close.height >= 44 && smartphoneSettings.selectHeights.every(height => height >= 44) && smartphoneSettings.bodyOverflow === 'auto',
+      `smartphone settings controls must be touch-sized and internally scrollable: ${JSON.stringify(smartphoneSettings)}`);
+    await touchTap('#settingsClose');
+    await waitEval(cdp, sid, `document.getElementById('settingsPanel').hidden`);
+
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 360, height: 640, deviceScaleFactor: 3, mobile: true }, sid);
+    await waitEval(cdp, sid, 'innerWidth === 360 && innerHeight === 640');
+    await touchTap('#compactActionsMenu > .compact-menu-toggle');
+    await waitEval(cdp, sid, `document.getElementById('compactActionsMenu').classList.contains('open')`);
+    await touchTap('#settingsToggle');
+    await waitEval(cdp, sid, `!document.getElementById('settingsPanel').hidden`);
+    const shortSettingsScroll = await evalExpr(cdp, sid, `(() => { const body = document.querySelector('.settings-body'); return { scrollHeight: body.scrollHeight, clientHeight: body.clientHeight }; })()`);
+    assert.ok(shortSettingsScroll.scrollHeight > shortSettingsScroll.clientHeight, `short smartphone settings must scroll internally: ${JSON.stringify(shortSettingsScroll)}`);
+    await touchTap('#settingsClose');
+
+    await touchTap('.term-panel:not(.layout-hidden) button.danger');
+    await waitEval(cdp, sid, `document.getElementById('closeModal').classList.contains('open') && !document.getElementById('closeModal').hidden`);
+    const smartphoneModal = await evalExpr(cdp, sid, `(() => {
+      const box = el => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
+      const modal = document.querySelector('.modal-box');
+      return { modal: box(modal), buttons: [...modal.querySelectorAll('button')].map(box) };
+    })()`);
+    assert.ok(smartphoneModal.modal.left >= 0 && smartphoneModal.modal.right <= 360 && smartphoneModal.buttons.every(button => button.height >= 44),
+      `smartphone confirmation must fit with touch-sized actions: ${JSON.stringify(smartphoneModal)}`);
+    await touchTap('#closeModalCancel');
+    await waitEval(cdp, sid, `document.getElementById('closeModal').hidden`);
+
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 844, height: 390, deviceScaleFactor: 3, mobile: true }, sid);
+    await waitEval(cdp, sid, 'innerWidth === 844 && innerHeight === 390');
+    const smartphoneLandscape = await evalExpr(cdp, sid, `(() => {
+      responsiveMinimizeForViewport();
+      applyLayoutVisibility();
+      const visible = [...document.querySelectorAll('.term-panel')].filter(panel => !panel.classList.contains('layout-hidden'));
+      const topbar = document.querySelector('.topbar').getBoundingClientRect();
+      const grid = document.getElementById('termGrid').getBoundingClientRect();
+      const panel = visible[0].getBoundingClientRect();
+      return { compact: isCompactViewport(), visible: visible.length, topbarHeight: topbar.height, inBounds: panel.left >= grid.left && panel.top >= grid.top && panel.right <= grid.right && panel.bottom <= grid.bottom };
+    })()`);
+    assert.deepStrictEqual(smartphoneLandscape, { compact: true, visible: 1, topbarHeight: smartphoneLandscape.topbarHeight, inBounds: true }, `short landscape phone must retain compact one-pane layout: ${JSON.stringify(smartphoneLandscape)}`);
+    assert.ok(smartphoneLandscape.topbarHeight >= 84, `short landscape phone must retain touch chrome: ${JSON.stringify(smartphoneLandscape)}`);
+
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false }, sid);
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 430, deviceScaleFactor: 1, mobile: false }, sid);
+    await waitEval(cdp, sid, 'innerWidth === 1280 && innerHeight === 430');
+    const desktopHeightBoundary = await evalExpr(cdp, sid, `({ jsCompact: isCompactViewport(), cssCompact: matchMedia('(max-height: 419px)').matches })`);
+    assert.deepStrictEqual(desktopHeightBoundary, { jsCompact: false, cssCompact: false },
+      `JS and CSS must leave the 430px desktop viewport outside compact mode: ${JSON.stringify(desktopHeightBoundary)}`);
+
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, configuration: 'mobile' }, sid);
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 884, height: 1104, deviceScaleFactor: 2.5, mobile: true }, sid);
+    await waitEval(cdp, sid, 'innerWidth === 884 && innerHeight === 1104');
+    const foldPortrait = await evalExpr(cdp, sid, `(() => {
+      responsiveMinimizeForViewport();
+      applyLayoutVisibility();
+      const visible = [...document.querySelectorAll('.term-panel')].filter(panel => !panel.classList.contains('layout-hidden'));
+      const launch = document.getElementById('compactLaunchMenu');
+      const actions = document.getElementById('compactActionsMenu');
+      const summaryBox = el => { const r = el?.querySelector('.compact-menu-toggle')?.getBoundingClientRect(); return r ? { left: r.left, right: r.right, width: r.width, height: r.height } : null; };
+      const probe = document.createElement('div');
+      probe.className = 'settings-body';
+      Object.assign(probe.style, { position: 'fixed', left: '-100px', top: '0', width: '40px', height: '40px', overflowY: 'scroll' });
+      probe.innerHTML = '<div style="height:100px"></div>';
+      document.body.append(probe);
+      const scrollbarWidth = probe.offsetWidth - probe.clientWidth;
+      probe.remove();
+      return {
+        compact: isCompactViewport(),
+        coarse: matchMedia('(pointer: coarse)').matches,
+        visible: visible.length,
+        launchDisplay: launch && getComputedStyle(launch).display,
+        actionDisplay: actions && getComputedStyle(actions).display,
+        summaries: [summaryBox(launch), summaryBox(actions)],
+        scrollbarWidth
+      };
+    })()`);
+    assert.ok(foldPortrait.compact && foldPortrait.coarse && foldPortrait.visible === 1,
+      `unfolded Fold portrait must use the compact one-pane layout: ${JSON.stringify(foldPortrait)}`);
+    assert.ok(foldPortrait.launchDisplay !== 'contents' && foldPortrait.actionDisplay !== 'contents' && foldPortrait.summaries.every(box => box && box.width >= 40 && box.height >= 40 && box.left >= 0 && box.right <= 884),
+      `tight Fold chrome must expose in-bounds dropdown triggers: ${JSON.stringify(foldPortrait)}`);
+    assert.strictEqual(foldPortrait.scrollbarWidth, 4, `Chromium PassiDeck scrollbars must render at a visibly slim 4px: ${JSON.stringify(foldPortrait)}`);
+
+    await touchTap('#compactActionsMenu > .compact-menu-toggle');
+    await waitEval(cdp, sid, `document.getElementById('compactActionsMenu').classList.contains('open')`);
+    const foldActionMenu = await evalExpr(cdp, sid, `(() => {
+      const menu = document.querySelector('#compactActionsMenu .compact-menu-list');
+      const box = menu.getBoundingClientRect();
+      const buttons = [...menu.querySelectorAll('button')].filter(button => getComputedStyle(button).display !== 'none').map(button => {
+        const r = button.getBoundingClientRect();
+        return { left: r.left, right: r.right, width: r.width, height: r.height };
+      });
+      return { open: getComputedStyle(menu).display !== 'none', box: { left: box.left, right: box.right, top: box.top, bottom: box.bottom }, buttons };
+    })()`);
+    assert.ok(foldActionMenu.open && foldActionMenu.box.left >= 0 && foldActionMenu.box.right <= 884 && foldActionMenu.buttons.every(button => button.width >= 44 && button.height >= 44),
+      `Fold action dropdown must stay in bounds with touch-sized actions: ${JSON.stringify(foldActionMenu)}`);
+    await touchTap('#settingsToggle');
+    await waitEval(cdp, sid, `!document.getElementById('settingsPanel').hidden && !document.getElementById('compactActionsMenu').classList.contains('open')`);
+    await touchTap('#settingsClose');
+
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1104, height: 884, deviceScaleFactor: 2.5, mobile: true }, sid);
+    await waitEval(cdp, sid, 'innerWidth === 1104 && innerHeight === 884');
+    const foldLandscape = await evalExpr(cdp, sid, `(() => {
+      responsiveMinimizeForViewport();
+      applyLayoutVisibility();
+      return {
+        compact: isCompactViewport(),
+        coarse: matchMedia('(pointer: coarse)').matches,
+        visible: [...document.querySelectorAll('.term-panel')].filter(panel => !panel.classList.contains('layout-hidden')).length,
+        menuTrigger: getComputedStyle(document.querySelector('#compactActionsMenu > .compact-menu-toggle')).display
+      };
+    })()`);
+    assert.ok(foldLandscape.compact && foldLandscape.coarse && foldLandscape.visible === 1 && foldLandscape.menuTrigger !== 'none',
+      `unfolded Fold landscape must remain compact on a coarse pointer display: ${JSON.stringify(foldLandscape)}`);
+
+    await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false }, sid);
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 760, height: 700, deviceScaleFactor: 1, mobile: false }, sid);
     await waitEval(cdp, sid, 'innerWidth === 760');
     const mobileLayout = await evalExpr(cdp, sid, `(() => {

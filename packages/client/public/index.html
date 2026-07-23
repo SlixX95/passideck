@@ -2,23 +2,26 @@
 <html lang="en" style="color-scheme: dark;">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#020505">
   <title>PassiDeck</title>
   <script>document.title = location.port === '8792' ? 'PassiDeck Dev' : 'PassiDeck';</script>
   <link rel="stylesheet" href="vendor/xterm.css">
-  <link rel="stylesheet" href="style.css?v=20260721-slim-scrollbars">
+  <link rel="stylesheet" href="style.css?v=20260723-xterm-scrollbars">
 </head>
 <body data-theme="green">
   <header class="topbar">
     <div class="command-strip">
       <div class="command-zone command-left">
-        <nav class="launch-strip" aria-label="Quick launch">
-          <button class="topbar-ql-btn" data-command="/bin/bash" data-tooltip="Open shell" aria-label="Open shell">+ shell</button>
-          <button class="topbar-ql-btn" data-command="hermes" data-tooltip="Open Hermes CLI" aria-label="Open Hermes CLI">+ hermes</button>
-          <button class="topbar-ql-btn" data-command="hermes --tui" data-tooltip="Open Hermes TUI" aria-label="Open Hermes TUI">+ tui</button>
-          <button class="topbar-ql-btn" data-command="codex" data-tooltip="Open Codex CLI" aria-label="Open Codex CLI">+ codex</button>
-        </nav>
+        <div id="compactLaunchMenu" class="compact-menu">
+          <button class="compact-menu-toggle" type="button" aria-label="New terminal" aria-expanded="false" aria-controls="compactLaunchList">+ new</button>
+          <nav id="compactLaunchList" class="launch-strip" aria-label="Quick launch">
+            <button class="topbar-ql-btn" data-command="/bin/bash" data-tooltip="Open shell" aria-label="Open shell">+ shell</button>
+            <button class="topbar-ql-btn" data-command="hermes" data-tooltip="Open Hermes CLI" aria-label="Open Hermes CLI">+ hermes</button>
+            <button class="topbar-ql-btn" data-command="hermes --tui" data-tooltip="Open Hermes TUI" aria-label="Open Hermes TUI">+ tui</button>
+            <button class="topbar-ql-btn" data-command="codex" data-tooltip="Open Codex CLI" aria-label="Open Codex CLI">+ codex</button>
+          </nav>
+        </div>
       </div>
 
       <div class="command-zone command-center" aria-label="Desktop and window switcher">
@@ -29,23 +32,28 @@
       </div>
 
       <div class="command-zone command-right">
-        <nav class="layout-pack" aria-label="Layout">
-          <div id="gridPickerInline" class="grid-picker-inline"></div>
-        </nav>
-        <section id="systemMonitor" class="system-monitor" hidden aria-label="System monitor">
-          <span class="monitor-cell" data-metric="cpu"><span>CPU</span><b>0%</b></span>
-          <span class="monitor-cell" data-metric="ram"><span>RAM</span><b>0%</b></span>
-          <span class="monitor-cell" data-metric="disk" aria-label="Disk"><span>DSK</span><b>--%</b></span>
-        </section>
-        <section id="codexLimits" class="codex-limits" aria-label="Codex limits">
-          <span class="codex-limit" data-account-index="1" data-limit="primary" data-tooltip="Codex 5h" aria-label="Codex 5h"><span>5h</span><b>--%</b></span>
-          <span class="codex-limit" data-account-index="1" data-limit="secondary" data-tooltip="Codex 7d" aria-label="Codex 7d"><span>7d</span><b>--%</b></span>
-        </section>
-        <span class="command-divider"></span>
-        <button id="settingsToggle" class="chrome-btn" data-tooltip="Settings" aria-label="Settings" aria-expanded="false" aria-controls="settingsPanel">⚙ settings</button>
-        <button id="uploadFileBtn" class="chrome-btn" data-tooltip="Upload file into active terminal" aria-label="Upload file">⇧ upload</button>
-        <button id="clipboardImageBtn" class="chrome-btn" data-tooltip="Paste a clipboard image into active terminal" aria-label="Paste clipboard image">▧ image</button>
-        <button id="chromeToggle" class="chrome-btn" data-tooltip="Hide UI · Alt+0" aria-label="Hide UI">hide</button>
+        <div id="compactActionsMenu" class="compact-menu">
+          <button class="compact-menu-toggle" type="button" aria-label="Actions" aria-expanded="false" aria-controls="compactActionsList">menu</button>
+          <div id="compactActionsList" class="compact-menu-list">
+            <nav class="layout-pack" aria-label="Layout">
+              <div id="gridPickerInline" class="grid-picker-inline"></div>
+            </nav>
+            <section id="systemMonitor" class="system-monitor" hidden aria-label="System monitor">
+              <span class="monitor-cell" data-metric="cpu"><span>CPU</span><b>0%</b></span>
+              <span class="monitor-cell" data-metric="ram"><span>RAM</span><b>0%</b></span>
+              <span class="monitor-cell" data-metric="disk" aria-label="Disk"><span>DSK</span><b>--%</b></span>
+            </section>
+            <section id="codexLimits" class="codex-limits" aria-label="Codex limits">
+              <span class="codex-limit" data-account-index="1" data-limit="primary" data-tooltip="Codex 5h" aria-label="Codex 5h"><span>5h</span><b>--%</b></span>
+              <span class="codex-limit" data-account-index="1" data-limit="secondary" data-tooltip="Codex 7d" aria-label="Codex 7d"><span>7d</span><b>--%</b></span>
+            </section>
+            <span class="command-divider"></span>
+            <button id="settingsToggle" class="chrome-btn" data-tooltip="Settings" aria-label="Settings" aria-expanded="false" aria-controls="settingsPanel">⚙ settings</button>
+            <button id="uploadFileBtn" class="chrome-btn" data-tooltip="Upload file into active terminal" aria-label="Upload file">⇧ upload</button>
+            <button id="clipboardImageBtn" class="chrome-btn" data-tooltip="Paste a clipboard image into active terminal" aria-label="Paste clipboard image">▧ image</button>
+            <button id="chromeToggle" class="chrome-btn" data-tooltip="Hide UI · Alt+0" aria-label="Hide UI">hide</button>
+          </div>
+        </div>
         <input id="fileInput" type="file" hidden multiple>
       </div>
     </div>
@@ -196,6 +204,6 @@
   <script src="vendor/addon-web-links.js"></script>
   <script src="vendor/addon-serialize.js"></script>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="app.js?v=20260721-active-input-bell-window-placement" defer></script>
+  <script src="app.js?v=20260723-xterm-scrollbars" defer></script>
 </body>
 </html>

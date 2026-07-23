@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('passideckDesktop', {
   clearResponseAttention: () => ipcRenderer.send('passideck:clear-response-attention'),
   setNotifyBlinking: enabled => ipcRenderer.send('passideck:set-notify-blinking', Boolean(enabled)),
   getAppVersion: () => ipcRenderer.invoke('passideck:get-app-version'),
+  openExternal: url => ipcRenderer.invoke('passideck:open-external', url),
   copyText: text => ipcRenderer.invoke('passideck:copy-text', text),
   readText: () => ipcRenderer.invoke('passideck:read-clipboard-text'),
   readImage: () => ipcRenderer.invoke('passideck:read-clipboard-image')

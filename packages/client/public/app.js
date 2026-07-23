@@ -28,6 +28,16 @@ const THEMES = {
   mono:   { background: '#0f1117', foreground: '#c8ccd8', cursor: '#c8ccd8', selectionBackground: '#555b6f' }
 };
 
+function terminalTheme(name) {
+  const theme = THEMES[name] || THEMES.blue;
+  return {
+    ...theme,
+    scrollbarSliderBackground: `${theme.cursor}85`,
+    scrollbarSliderHoverBackground: theme.cursor,
+    scrollbarSliderActiveBackground: theme.cursor
+  };
+}
+
 const state = {
   sessions: new Map(),
   order: [],
@@ -104,6 +114,11 @@ function frontmostDesktopPaneId(id = state.activeDesktopId) {
 const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v1:';
 const TERM_SNAPSHOT_MAX_LINES = 20000;
 const TERM_SNAPSHOT_MAX_CHARS = 1024 * 1024;
+const TERM_SNAPSHOT_DEBOUNCE_MS = 1000;
+const TERM_OUTPUT_ACTIVE_FLUSH_MS = 16;
+const TERM_OUTPUT_VISIBLE_FLUSH_MS = 250;
+const TERM_OUTPUT_HIDDEN_FLUSH_MS = 1000;
+const TERM_OUTPUT_BUFFER_MAX_CHARS = 1024 * 1024;
 
 const TOOLTIP_MARGIN = 8;
 const TOOLTIP_DELAY_MS = 300;
@@ -352,9 +367,15 @@ function resizeWindowsForDesktop(from, to) {
   renderSharedResizeHandles();
 }
 
-function responsiveMinimizeForViewport() {
+function isCompactViewport() {
   const { w, h } = desktopSize();
-  if (Math.min(w, window.innerWidth || w) > 760 && h >= 420) {
+  const width = Math.min(w, window.innerWidth || w);
+  const height = window.innerHeight || h;
+  return width <= 1024 || height <= 419 || (width <= 1200 && window.matchMedia?.('(pointer: coarse)').matches);
+}
+
+function responsiveMinimizeForViewport() {
+  if (!isCompactViewport()) {
     for (const id of state.responsiveMinimized) {
       state.minimized.delete(id);
       state.sessions.get(id)?.el.classList.remove('minimized');
@@ -701,7 +722,7 @@ function visibleSharedResizeSegments(group, rects = visibleWindowRects()) {
 
 function renderSharedResizeHandles() {
   const grid = document.getElementById('termGrid');
-  if (!grid || state.pointerDrag || state.resizeDrag || state.sharedResizeDrag) return;
+  if (!grid || isCompactViewport() || state.pointerDrag || state.resizeDrag || state.sharedResizeDrag) return;
   clearSharedResizeHandles();
   const groups = sharedResizeGroups();
   if (!groups.length) return;
@@ -1328,7 +1349,7 @@ function setTheme(theme, opts = {}) {
   const select = document.getElementById('themeSelect');
   if (select) select.value = theme;
   for (const entry of state.sessions.values()) {
-    entry.term.options.theme = THEMES[theme];
+    entry.term.options.theme = terminalTheme(theme);
   }
   if (opts.persist !== false) saveUiState();
 }
@@ -1791,6 +1812,8 @@ function installTerminalDragSelection(termEl, term, session) {
 
 function installTerminalWheelScroll(termEl, term, session = null) {
   let wheelRemainder = 0;
+  let touchY = null;
+  let touchRemainder = 0;
   term.attachCustomWheelEventHandler?.(e => {
     const command = String(session?.meta?.command || session?.meta?.label || '').toLowerCase();
     const isHermes = /\bhermes\b/.test(command);
@@ -1853,6 +1876,31 @@ function installTerminalWheelScroll(termEl, term, session = null) {
     e.preventDefault();
     e.stopImmediatePropagation();
   }, { capture: true, passive: false });
+  termEl.addEventListener('touchstart', e => {
+    const buffer = term.buffer?.active;
+    if (e.touches.length !== 1 || buffer?.type === 'alternate' || !buffer || buffer.baseY <= 0) {
+      touchY = null;
+      return;
+    }
+    touchY = e.touches[0].clientY;
+    touchRemainder = 0;
+  }, { capture: true, passive: true });
+  termEl.addEventListener('touchmove', e => {
+    if (touchY === null || e.touches.length !== 1) return;
+    const y = e.touches[0].clientY;
+    touchRemainder += (touchY - y) / Math.max(8, state.fontSize * 1.2);
+    touchY = y;
+    const lines = Math.trunc(touchRemainder);
+    if (lines) {
+      touchRemainder -= lines;
+      term.scrollLines(lines);
+    }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }, { capture: true, passive: false });
+  const endTouchScroll = () => { touchY = null; touchRemainder = 0; };
+  termEl.addEventListener('touchend', endTouchScroll, true);
+  termEl.addEventListener('touchcancel', endTouchScroll, true);
 }
 
 function updateEmpty() {
@@ -1899,20 +1947,77 @@ function sanitizeTerminalOutput(data) {
   return text;
 }
 
-function writeTerminalOutput(term, data, done) {
-  const text = sanitizeTerminalOutput(data);
+function writeTerminalOutput(term, data, done, sanitize = true, onFrame = null, shouldContinue = null) {
+  const text = sanitize ? sanitizeTerminalOutput(data) : String(data);
   const chunkSize = 32768;
   let offset = 0;
   function writeChunk() {
-    const chunk = text.slice(offset, offset + chunkSize);
-    if (!chunk) { if (done) done(); return; }
-    offset += chunkSize;
+    if (shouldContinue && !shouldContinue()) return;
+    if (offset >= text.length) { onFrame?.(null); done?.(); return; }
+    const end = Math.min(text.length, offset + chunkSize);
+    const chunk = text.slice(offset, end);
     term.write(chunk, () => {
-      if (offset < text.length) requestAnimationFrame(writeChunk);
-      else if (done) done();
+      if (shouldContinue && !shouldContinue()) return;
+      offset = end;
+      if (offset < text.length) {
+        const handle = requestAnimationFrame(writeChunk);
+        onFrame?.(handle);
+      } else { onFrame?.(null); done?.(); }
     });
   }
   writeChunk();
+}
+
+function terminalOutputDelay(id) {
+  const visible = state.panePrefs.paneDesktop[id] === state.activeDesktopId && !state.minimized.has(id);
+  if (!visible) return TERM_OUTPUT_HIDDEN_FLUSH_MS;
+  return state.activeId === id ? TERM_OUTPUT_ACTIVE_FLUSH_MS : TERM_OUTPUT_VISIBLE_FLUSH_MS;
+}
+
+function scheduleTerminalOutputFlush(id, term) {
+  const entry = state.sessions.get(id);
+  if (!entry || entry.outputWriteInFlight || entry.outputFlushTimer || !entry.outputBuffer) return;
+  entry.outputFlushTimer = setTimeout(() => flushTerminalOutput(id, term), terminalOutputDelay(id));
+}
+
+function flushTerminalOutput(id, term) {
+  const entry = state.sessions.get(id);
+  if (!entry || entry.outputCancelled) return;
+  clearTimeout(entry.outputFlushTimer);
+  entry.outputFlushTimer = null;
+  if (entry.outputWriteInFlight) return;
+  const buffered = entry.outputBuffer;
+  entry.outputBuffer = '';
+  if (!buffered) return;
+  entry.outputWriteInFlight = true;
+  const live = () => !entry.outputCancelled && state.sessions.get(id) === entry;
+  writeTerminalOutput(term, buffered, () => {
+    if (!live()) return;
+    entry.outputFrameHandle = null;
+    entry.outputWriteInFlight = false;
+    refreshTitleFromTerminal(id);
+    if (entry.outputBuffer) {
+      scheduleTerminalOutputFlush(id, term);
+      return;
+    }
+    scheduleTerminalSnapshot(id);
+  }, false, handle => {
+    if (live()) entry.outputFrameHandle = handle;
+  }, live);
+}
+
+function queueTerminalOutput(id, term, data) {
+  const entry = state.sessions.get(id);
+  const text = sanitizeTerminalOutput(data);
+  if (!entry || !text) return;
+  clearTimeout(entry.snapshotTimer);
+  entry.snapshotTimer = null;
+  entry.outputBuffer = (entry.outputBuffer || '') + text;
+  if (entry.outputBuffer.length > TERM_OUTPUT_BUFFER_MAX_CHARS) {
+    // passitail: bound client backpressure by resetting parser state; a durable replay protocol is the upgrade path.
+    entry.outputBuffer = '\x1bc\r\n[PassiDeck: output backlog reset]\r\n';
+  }
+  scheduleTerminalOutputFlush(id, term);
 }
 
 function writeTerminalReplay(term, data) {
@@ -1956,7 +2061,7 @@ function hasTerminalSnapshot(id) {
 
 function saveTerminalSnapshot(id) {
   const entry = state.sessions.get(id);
-  if (!entry?.term) return;
+  if (!entry?.term || entry.outputWriteInFlight) return;
   let text = terminalSnapshot(entry);
   if (!text) return;
   // localStorage quotas vary by browser/device. Keep the big snapshot when possible;
@@ -1975,7 +2080,7 @@ function scheduleTerminalSnapshot(id) {
   const entry = state.sessions.get(id);
   if (!entry) return;
   clearTimeout(entry.snapshotTimer);
-  entry.snapshotTimer = setTimeout(() => saveTerminalSnapshot(id), 120);
+  entry.snapshotTimer = setTimeout(() => saveTerminalSnapshot(id), TERM_SNAPSHOT_DEBOUNCE_MS);
 }
 
 function restoreTerminalSnapshot(id, term) {
@@ -2588,7 +2693,7 @@ function updateWindowResize(event) {
 }
 
 function startSharedResize(group, event) {
-  if (event.button !== 0) return;
+  if (event.button !== 0 || isCompactViewport()) return;
   event.preventDefault();
   event.stopPropagation();
   const ids = [...group.beforeIds, ...group.afterIds];
@@ -2671,7 +2776,7 @@ function endSharedResize(event) {
 }
 
 function startWindowResize(id, event) {
-  if (event.button !== 0) return;
+  if (event.button !== 0 || isCompactViewport()) return;
   event.preventDefault();
   event.stopPropagation();
   const entry = state.sessions.get(id);
@@ -2708,7 +2813,7 @@ function startWindowResize(id, event) {
 }
 
 function startPointerDrag(id, handle, event) {
-  if (event.button !== 0) return;
+  if (event.button !== 0 || isCompactViewport()) return;
   event.preventDefault();
   event.stopPropagation();
   const entry = state.sessions.get(id);
@@ -2859,13 +2964,14 @@ function createPanel(session, opts = {}) {
     cursorBlink: true,
     scrollOnUserInput: false,
     scrollback: 20000,
-    theme: THEMES[state.theme]
+    overviewRuler: { width: 4 },
+    theme: terminalTheme(state.theme)
   });
   const fit = new FitAddon.FitAddon();
   const serialize = window.SerializeAddon ? new SerializeAddon.SerializeAddon() : null;
   term.loadAddon(fit);
   if (serialize) term.loadAddon(serialize);
-  term.loadAddon(new WebLinksAddon.WebLinksAddon());
+  term.loadAddon(new WebLinksAddon.WebLinksAddon(handleTerminalLink));
   const termEl = el.querySelector('.terminal');
   term.open(termEl);
   installTerminalWheelScroll(termEl, term, session);
@@ -2883,7 +2989,7 @@ function createPanel(session, opts = {}) {
   });
 
   const hasSnapshot = hasTerminalSnapshot(id);
-  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, arrangeCleanup: dismissArrange, restored: hasSnapshot, snapshotTimer: null, titleSource: '', lastSentCols: 0, lastSentRows: 0 });
+  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, arrangeCleanup: dismissArrange, restored: hasSnapshot, snapshotTimer: null, outputBuffer: '', outputFlushTimer: null, outputWriteInFlight: false, outputFrameHandle: null, outputCancelled: false, titleSource: '', lastSentCols: 0, lastSentRows: 0 });
   term.onWriteParsed?.(() => refreshTitleFromTerminal(id));
   term.onBell?.(() => notifyResponseComplete(id));
 
@@ -3022,7 +3128,7 @@ function attachSocket(id, term, el) {
       if (String(msg.data || '').includes('output replay disabled')) return;
       if (!entry?.restored) writeTerminalReplay(term, msg.data);
     }
-    if (msg.type === 'output') writeTerminalOutput(term, msg.data, () => { scheduleTerminalSnapshot(id); refreshTitleFromTerminal(id); });
+    if (msg.type === 'output') queueTerminalOutput(id, term, msg.data);
     if (msg.type === 'exit') {
       el.classList.add('exited');
       setConnectionStatus(id, 'offline');
@@ -3312,6 +3418,11 @@ function selectPanel(id, opts = {}) {
 function discardPanel(id, opts = {}) {
   const entry = state.sessions.get(id);
   if (entry) {
+    entry.outputCancelled = true;
+    clearTimeout(entry.outputFlushTimer);
+    if (entry.outputFrameHandle !== null) cancelAnimationFrame(entry.outputFrameHandle);
+    entry.outputFrameHandle = null;
+    entry.outputBuffer = '';
     try { entry.ro.disconnect(); } catch {}
     try { entry.ws.close(); } catch {}
     try { entry.term.dispose(); } catch {}
@@ -3401,6 +3512,37 @@ async function copyTextToClipboard(text) {
   return copied;
 }
 
+function terminalLinkUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
+async function handleTerminalLink(_event, value) {
+  const url = terminalLinkUrl(value);
+  if (!url) return false;
+  let opened = false;
+  try {
+    if (window.passideckDesktop?.openExternal) {
+      opened = Boolean(await window.passideckDesktop.openExternal(url));
+    } else {
+      const openedWindow = window.open(url, '_blank');
+      if (openedWindow) {
+        try { openedWindow.opener = null; } catch {}
+        opened = true;
+      }
+    }
+  } catch {}
+  if (opened) return true;
+  const copied = await copyTextToClipboard(url);
+  if (copied) showToast('Link copied');
+  else showToast('Could not open or copy link', 'error');
+  return false;
+}
+
 function clearCopiedSelection(entry) {
   if (entry?.term) {
     entry.term.clearSelection();
@@ -3488,9 +3630,10 @@ async function uploadFiles(files, targetId = state.activeId) {
 
 function clipboardFiles(data) {
   const files = [...(data?.files || [])];
+  if (files.length) return files;
   for (const item of data?.items || []) {
     const file = item.kind === 'file' ? item.getAsFile() : null;
-    if (file && !files.includes(file)) files.push(file);
+    if (file) files.push(file);
   }
   return files;
 }
@@ -3663,11 +3806,25 @@ function setSettingsOpen(open, restoreFocus = false) {
 }
 document.getElementById('settingsToggle').onclick = () => setSettingsOpen(document.getElementById('settingsPanel').hidden);
 document.getElementById('settingsClose').onclick = () => setSettingsOpen(false, true);
+function setCompactMenuOpen(menu, open) {
+  menu.classList.toggle('open', open);
+  menu.querySelector(':scope > .compact-menu-toggle')?.setAttribute('aria-expanded', String(open));
+}
 document.addEventListener('pointerdown', event => {
   const panel = document.getElementById('settingsPanel');
   const toggle = document.getElementById('settingsToggle');
   if (!panel.hidden && !panel.contains(event.target) && !toggle.contains(event.target)) setSettingsOpen(false);
+  document.querySelectorAll('.compact-menu.open').forEach(menu => { if (!menu.contains(event.target)) setCompactMenuOpen(menu, false); });
 }, true);
+document.querySelectorAll('.compact-menu-toggle').forEach(toggle => toggle.onclick = () => {
+  const menu = toggle.closest('.compact-menu');
+  const open = !menu.classList.contains('open');
+  document.querySelectorAll('.compact-menu.open').forEach(other => setCompactMenuOpen(other, false));
+  setCompactMenuOpen(menu, open);
+});
+document.querySelectorAll('.compact-menu').forEach(menu => menu.addEventListener('click', event => {
+  if (event.target.closest('button:not(.compact-menu-toggle)')) setCompactMenuOpen(menu, false);
+}));
 document.getElementById('uploadFileBtn').onclick = () => document.getElementById('fileInput').click();
 document.getElementById('fileInput').onchange = event => {
   void uploadFiles([...event.target.files]);

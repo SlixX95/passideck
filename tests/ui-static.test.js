@@ -94,14 +94,33 @@ assert.ok(
 );
 assert.ok(!style.includes('.response-pulse { animation: none'), 'response attention must keep pulsing even when the OS requests reduced motion');
 assert.ok(!style.includes('#ff3158') && !style.includes("content: 'NEW'"), 'response attention must stay theme-colored and must not add a NEW badge');
-assert.ok(html.includes('app.js?v=20260721-active-input-bell-window-placement') && html.includes('style.css?v=20260721-slim-scrollbars'), 'client cache keys must activate focused-input suppression, window placement, and slim scrollbars');
+assert.ok(html.includes('app.js?v=20260723-xterm-scrollbars') && html.includes('style.css?v=20260723-xterm-scrollbars'), 'client cache keys must activate the real xterm scrollbar integration');
+assert.ok(html.includes('viewport-fit=cover'), 'smartphone viewport must support display cutouts and safe-area insets');
 assert.ok(
-  style.includes(':where(.settings-body, .grid-container, .xterm-viewport) {') &&
-  style.includes('scrollbar-width: thin;') &&
+  html.includes('id="compactLaunchMenu"') && html.includes('id="compactActionsMenu"') &&
+  html.includes('class="compact-menu-toggle"') && html.includes('aria-controls="compactActionsList"') &&
+  app.includes('width <= 1024') && app.includes('window.innerHeight') && app.includes('height <= 419') &&
+  app.includes("width <= 1200 && window.matchMedia?.('(pointer: coarse)').matches") &&
+  style.includes('@media (max-width: 1024px), (max-height: 419px), (pointer: coarse) and (max-width: 1200px)'),
+  'Fold-class touch displays must use the compact one-pane chrome with dropdown menus'
+);
+const firefoxScrollbarBlock = cssBlock(style, '@supports not selector(::-webkit-scrollbar)');
+assert.ok(
+  (style.match(/scrollbar-width: thin;/g) || []).length === 1 &&
+  firefoxScrollbarBlock.includes('scrollbar-width: thin;') &&
+  firefoxScrollbarBlock.includes('scrollbar-color:') &&
+  !firefoxScrollbarBlock.includes('.xterm-viewport') &&
+  style.includes('::-webkit-scrollbar { width: 4px; height: 4px; }') &&
   style.includes('::-webkit-scrollbar-button { display: none; }') &&
+  style.includes('.xterm .xterm-scrollable-element > .scrollbar.vertical > .slider') &&
+  style.includes('.term-panel.hermes-tui .xterm .xterm-scrollable-element > .scrollbar.vertical') &&
   style.includes('border-radius: 999px;') &&
-  style.includes('background: var(--tg-accent);'),
-  'visible scroll surfaces must use the slim rounded theme scrollbar'
+  app.includes('function terminalTheme(name)') &&
+  app.includes('scrollbarSliderBackground:') &&
+  app.includes('scrollbarSliderHoverBackground:') &&
+  app.includes('scrollbarSliderActiveBackground:') &&
+  app.includes('overviewRuler: { width: 4 }'),
+  'native surfaces and xterm 6 must use their own real scrollbar contracts'
 );
 assert.ok(!app.includes('function startDesktopRename(') && !style.includes('.desktop-rename'), 'ordinal-only desktop controls must not retain rename UI');
 assert.ok(style.includes('.desktop-tab.active, .desktop-tab.active.attention') && style.includes('font-weight: 900;'), 'active desktop must retain a solid high-contrast state even when attention is present');
@@ -120,6 +139,14 @@ for (const name of ['desktop-response-pulse', 'switcher-response-pulse', 'pane-r
   assert.ok(!/\b(?:filter|background|border-color|box-shadow)\s*:/.test(block), `${name} must not animate repaint-heavy paint properties`);
 }
 assert.ok(app.includes('term.onBell?.(() => notifyResponseComplete(id));'), 'native Hermes terminal completion BEL must drive response attention');
+assert.ok(app.includes("entry.outputBuffer = '\\x1bc\\r\\n[PassiDeck: output backlog reset]\\r\\n';"), 'terminal output backpressure must bound overload with a parser-safe reset marker');
+const outputFlushBlock = app.slice(app.indexOf('function flushTerminalOutput'), app.indexOf('function queueTerminalOutput'));
+assert.ok(!outputFlushBlock.includes('saveTerminalSnapshot('), 'terminal output flushes must not synchronously serialize snapshots on the hot path');
+assert.ok(app.includes('if (entry.outputWriteInFlight) return;'), 'mid-write terminal snapshots must keep the last fully parsed state');
+assert.ok(app.includes('const handle = requestAnimationFrame(writeChunk);') && app.includes('cancelAnimationFrame(entry.outputFrameHandle);'), 'chunk scheduling must be unconditional and cancellable when a pane is discarded');
+assert.ok(app.includes('const text = sanitizeTerminalOutput(data);') && app.includes('}, false,'), 'batched terminal output must sanitize each source frame without truncating the combined flush');
+assert.ok(app.includes('clearTimeout(entry.outputFlushTimer);'), 'discarding a pane must cancel pending terminal output flushes');
+assert.ok(app.includes('const TERM_SNAPSHOT_DEBOUNCE_MS = 1000;') && app.includes('setTimeout(() => saveTerminalSnapshot(id), TERM_SNAPSHOT_DEBOUNCE_MS)'), 'terminal snapshots must wait for a full second of idle output');
 assert.ok(!app.includes("msg.type === 'response-complete'"), 'PassiDeck must not infer Hermes completion through server database events');
 assert.ok(app.includes("el.classList.toggle('hermes-tui', isHermesTuiEntry({ session }))"), 'Hermes TUI panes must carry a narrow styling hook');
 assert.ok(style.includes('.term-panel.hermes-tui .xterm-viewport') && style.includes('scrollbar-width: none'), 'Hermes TUI panes must hide xterm scrollbars without disabling TUI scrolling');
@@ -192,6 +219,13 @@ assert.ok(app.includes("'X-PassiDeck-Token': token") && app.includes('keepalive:
 
 assert.ok(app.includes("state.minimized.has(id) ? restorePanel(id) : selectPanel(id)"), 'Alt+number must restore minimized panes');
 assert.ok(app.includes("document.addEventListener('paste', handleTerminalPaste, true)") && app.includes("document.addEventListener('keydown', letBrowserOwnTerminalPasteShortcut, true)") && app.includes("document.addEventListener('drop', handleUploadDrop, true)"), 'text/file paste and file drop terminal bridges must stay enabled');
+assert.ok(
+  app.includes('new WebLinksAddon.WebLinksAddon(handleTerminalLink)') &&
+  app.includes('window.passideckDesktop?.openExternal') &&
+  app.includes("window.open(url, '_blank')") &&
+  app.includes("showToast('Link copied')"),
+  'terminal links must open through the desktop/browser path and copy with visible feedback when opening fails'
+);
 
 assert.ok(html.includes('id="uploadFileBtn"') && html.includes('id="clipboardImageBtn"') && html.includes('id="fileInput"'), 'upload, clipboard image, and file picker controls must stay available');
 assert.ok(app.includes("document.addEventListener('contextmenu', handleTerminalContextMenu, true)") && app.includes('term.clearSelection()'), 'right-click copy must clear terminal selection in browser and desktop renderers');

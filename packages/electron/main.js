@@ -138,7 +138,7 @@ function requestNativeAttention() {
 
 function markBackendResponseComplete(id, details = {}) {
   const entry = backendViews.get(id);
-  if (!entry || !mainWindow) return;
+  if (!entry || !mainWindow || mainWindow.isDestroyed()) return;
   requestNativeAttention();
   entry.attention = true;
   entry.attentionAt = Date.now();
@@ -430,6 +430,14 @@ app.whenReady().then(() => {
   ipcMain.handle('passideck:set-global-sound-enabled', (event, enabled) => { assertShellSender(event); return setGlobalSoundEnabled(enabled); });
   ipcMain.on('passideck:window-resize', resizeWindowFromRenderer);
   ipcMain.handle('passideck:get-app-version', event => { backendIdForSender(event); return app.getVersion(); });
+  ipcMain.handle('passideck:open-external', async (event, value) => {
+    backendIdForSender(event);
+    if (typeof value !== 'string' || value.length > 8192) throw new Error('Invalid external URL');
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Unsupported external URL');
+    await shell.openExternal(url.href);
+    return true;
+  });
   ipcMain.on('passideck:set-notify-blinking', (event, enabled) => {
     try {
       setNotifyBlinking(event, enabled);

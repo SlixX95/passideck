@@ -115,7 +115,7 @@ const requestAttentionHelper = main.match(/^function requestNativeAttention\(\) 
 const responseHelper = main.match(/^function markBackendResponseComplete\(id, details = \{\}\) \{[\s\S]*?^\}/m)?.[0];
 assert.ok(focusHelper && stopAttentionHelper && requestAttentionHelper && responseHelper, 'Electron attention helpers must remain behavior-testable');
 
-function responseCompleteFocusProbe(focusTarget, platform = 'win32') {
+function responseCompleteFocusProbe(focusTarget, platform = 'win32', destroyed = false) {
   const shellContents = {};
   const backendContents = {};
   const entry = { view: { webContents: backendContents } };
@@ -131,6 +131,7 @@ function responseCompleteFocusProbe(focusTarget, platform = 'win32') {
     mainWindow: {
       webContents: shellContents,
       isFocused: () => focusTarget === 'window',
+      isDestroyed: () => destroyed,
       flashFrame: enabled => flashCalls.push(enabled)
     },
     backendViews: new Map([['backend', entry]]),
@@ -157,6 +158,9 @@ assert.deepStrictEqual(responseCompleteFocusProbe('none').flashCalls, [true], 'm
 assert.deepStrictEqual(responseCompleteFocusProbe('other', 'darwin').bounceCalls, ['informational', 'informational', 'informational'], 'macOS Dock attention must stop after exactly three bounces');
 assert.deepStrictEqual(responseCompleteFocusProbe('other', 'darwin').flashCalls, [], 'macOS must not start indefinite flashFrame attention');
 assert.strictEqual(responseCompleteFocusProbe('backend').entry.attention, true, 'focused completion must retain in-app attention');
+const destroyedCompletion = responseCompleteFocusProbe('none', 'win32', true);
+assert.deepStrictEqual(destroyedCompletion.flashCalls, [], 'late completion after close must not flash a destroyed BrowserWindow');
+assert.strictEqual(destroyedCompletion.entry.attention, undefined, 'late completion after close must abort the response-attention path');
 
 const closedHandler = main.match(/win\.on\('closed', \(\) => \{([\s\S]*?)\n  \}\);/)?.[1];
 assert.ok(closedHandler?.includes('stopNativeAttention();'), 'closing the BrowserWindow must cancel pending native attention');
@@ -229,6 +233,13 @@ assert.ok(!main.includes('backend.url = releaseBackendUrl(backend.url)'), 'savin
 assert.ok(main.includes('[backend] invalid URL override'), 'invalid CLI/env backend URLs must not leave a blank window');
 assert.strictEqual((main.match(/before-input-event/g) || []).length, 1, 'desktop may intercept only the dedicated reload shortcut handler');
 assert.ok(main.includes("ipcMain.handle('passideck:copy-text'") && main.includes("ipcMain.handle('passideck:read-clipboard-text'"), 'desktop text copy/paste must use sender-validated native clipboard IPC');
+assert.ok(
+  preload.includes("openExternal: url => ipcRenderer.invoke('passideck:open-external'") &&
+  main.includes("ipcMain.handle('passideck:open-external'") &&
+  main.includes("['http:', 'https:'].includes(url.protocol)") &&
+  main.includes('await shell.openExternal(url.href)'),
+  'terminal links must use a sender-validated HTTP(S)-only native browser bridge'
+);
 assert.ok(main.includes("ipcMain.handle('passideck:read-clipboard-image'") && main.includes('clipboard.readImage()') && main.includes('backendIdForSender(event)'), 'desktop image paste must use a sender-validated native clipboard fallback');
 assert.ok(main.includes("webContents.on('context-menu'") && main.includes('term.getSelection()'), 'backend views must copy DOM and xterm selections on right click');
 assert.ok(main.includes('term.clearSelection()') && main.includes('removeAllRanges()'), 'desktop right-click copy must clear the copied terminal/DOM selection');
