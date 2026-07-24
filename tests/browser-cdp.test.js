@@ -3874,6 +3874,25 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.strictEqual(heartbeatRoundTrip, true, 'server must answer application heartbeat pings');
 
+    const backendLatency = await evalExpr(cdp, sid, `(async () => {
+      const entry = state.sessions.get(state.activeId);
+      entry.ws.latencyMs = Number.NaN;
+      entry.ws.pingStartedAt = 0;
+      probeActiveBackend();
+      for (let i = 0; i < 30 && !Number.isFinite(entry.ws.latencyMs); i += 1) await new Promise(resolve => setTimeout(resolve, 20));
+      const chip = document.getElementById('backendLatency');
+      return {
+        latency: entry.ws.latencyMs,
+        text: chip.textContent.replace(/\\s+/g, ' ').trim(),
+        level: chip.dataset.level,
+        label: chip.getAttribute('aria-label')
+      };
+    })()`);
+    assert.ok(Number.isFinite(backendLatency.latency) && backendLatency.latency >= 0, `backend latency must use a real WebSocket ping/pong round trip: ${JSON.stringify(backendLatency)}`);
+    assert.strictEqual(backendLatency.text, `NET ${backendLatency.latency} ms`, `latency chip must show the active terminal round trip: ${JSON.stringify(backendLatency)}`);
+    assert.ok(['good', 'warn', 'bad'].includes(backendLatency.level) && backendLatency.label === `Backend round trip: ${backendLatency.latency} ms`,
+      `latency chip must expose threshold color and accessible context: ${JSON.stringify(backendLatency)}`);
+
     const socketCloseLifecycle = await evalExpr(cdp, sid, `(async () => {
       const entry = state.sessions.get(state.activeId);
       const currentSocket = entry.ws;

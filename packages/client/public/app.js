@@ -4,6 +4,7 @@ const WS_BASE = `${WS_PROTOCOL}//${window.location.host}/ws`;
 const AUTH_TOKEN_KEY = 'passideck:auth-token';
 const SOCKET_HEARTBEAT_MS = 15000;
 const SOCKET_STALE_MS = SOCKET_HEARTBEAT_MS * 3;
+const LATENCY_PROBE_MS = 3000;
 
 function authToken() {
   const urlToken = new URLSearchParams(window.location.search).get('token') || '';
@@ -61,6 +62,7 @@ const state = {
   systemMonitorTimer: null,
   codexLimitsTimer: null,
   socketHeartbeatTimer: null,
+  latencyProbeTimer: null,
   resumeTimer: null,
   resumeForceReconnect: false,
   fitFrame: null,
@@ -282,6 +284,22 @@ function setConnectionStatus(id, status) {
     setTooltip(dot, label);
     dot.setAttribute('aria-label', label);
   }
+  if (state.activeId === id) renderBackendLatency();
+}
+
+function renderBackendLatency() {
+  const el = document.getElementById('backendLatency');
+  if (!el) return;
+  const socket = state.sessions.get(state.activeId)?.ws;
+  const latency = socket?.readyState === WebSocket.OPEN && Number.isFinite(socket.latencyMs) ? socket.latencyMs : null;
+  const label = !state.activeId ? 'No active terminal'
+    : socket?.readyState !== WebSocket.OPEN ? 'Backend disconnected'
+    : latency === null ? 'Measuring backend round trip'
+    : `Backend round trip: ${latency} ms`;
+  el.dataset.level = latency === null ? 'offline' : latency >= 250 ? 'bad' : latency >= 100 ? 'warn' : 'good';
+  el.querySelector('b').textContent = latency === null ? '-- ms' : `${latency} ms`;
+  setTooltip(el, label);
+  el.setAttribute('aria-label', label);
 }
 
 let closeHitLayerInstalled = false;
@@ -1905,6 +1923,7 @@ function installTerminalWheelScroll(termEl, term, session = null) {
 
 function updateEmpty() {
   document.getElementById('emptyState').style.display = desktopPaneIds().length ? 'none' : 'grid';
+  renderBackendLatency();
 }
 
 function stripTerminalReplyJunk(data) {
@@ -3125,6 +3144,11 @@ function attachSocket(id, term, el) {
     ws.lastMessageAt = Date.now();
     if (msg.type === 'pong') {
       ws.lastPongAt = ws.lastMessageAt;
+      if (ws.pingStartedAt) {
+        ws.latencyMs = Math.round(ws.lastPongAt - ws.pingStartedAt);
+        ws.pingStartedAt = 0;
+        if (state.activeId === id) renderBackendLatency();
+      }
       return;
     }
     const entry = state.sessions.get(id);
@@ -3150,6 +3174,7 @@ function attachSocket(id, term, el) {
     if (state.sessions.get(id)?.ws !== ws) return;
     ws.lastMessageAt = ws.lastPongAt = Date.now();
     setConnectionStatus(id, 'live');
+    try { sendSocketPing(state.sessions.get(id)); } catch {}
     scheduleTerminalFit({ force: true });
   };
   ws.onerror = () => {
@@ -3178,8 +3203,30 @@ function ensureSocketLive(id, entry, now = Date.now()) {
     reconnect(id, true);
     return false;
   }
-  try { socket.send(JSON.stringify({ type: 'ping' })); } catch { reconnect(id, true); return false; }
+  try { sendSocketPing(entry, now); } catch { reconnect(id, true); return false; }
   return true;
+}
+
+function sendSocketPing(entry, now = Date.now()) {
+  const socket = entry?.ws;
+  if (socket?.readyState !== WebSocket.OPEN || socket.pingStartedAt) return false;
+  socket.pingStartedAt = now;
+  try { socket.send(JSON.stringify({ type: 'ping' })); }
+  catch (error) { socket.pingStartedAt = 0; throw error; }
+  return true;
+}
+
+function probeActiveBackend() {
+  if (document.hidden) return;
+  const entry = state.sessions.get(state.activeId);
+  renderBackendLatency();
+  try { sendSocketPing(entry); } catch { if (state.activeId) reconnect(state.activeId, true); }
+}
+
+function startLatencyProbes() {
+  if (state.latencyProbeTimer) return;
+  probeActiveBackend();
+  state.latencyProbeTimer = setInterval(probeActiveBackend, LATENCY_PROBE_MS);
 }
 
 function checkSocketHealth() {
@@ -3412,6 +3459,7 @@ function selectPanel(id, opts = {}) {
   const entry = state.sessions.get(id);
   if (!entry || state.panePrefs.paneDesktop[id] !== state.activeDesktopId) return;
   state.activeId = id;
+  renderBackendLatency();
   document.querySelectorAll('.term-panel').forEach(p => p.classList.remove('active'));
   entry.el.classList.add('active');
   applyLayoutVisibility();
@@ -3795,6 +3843,7 @@ async function init() {
   }
   connectUiEvents();
   startSocketHeartbeat();
+  startLatencyProbes();
 }
 
 function escapeHtml(str) {

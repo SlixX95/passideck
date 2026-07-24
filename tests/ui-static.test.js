@@ -94,7 +94,16 @@ assert.ok(
 );
 assert.ok(!style.includes('.response-pulse { animation: none'), 'response attention must keep pulsing even when the OS requests reduced motion');
 assert.ok(!style.includes('#ff3158') && !style.includes("content: 'NEW'"), 'response attention must stay theme-colored and must not add a NEW badge');
-assert.ok(html.includes('app.js?v=20260723-terminal-snapshot-idle') && html.includes('style.css?v=20260723-xterm-scrollbars'), 'client cache keys must activate terminal snapshot safety and the real xterm scrollbar integration');
+assert.ok(html.includes('app.js?v=20260724-backend-latency') && html.includes('style.css?v=20260724-backend-latency'), 'client cache keys must activate the backend latency display');
+assert.ok(
+  html.includes('id="backendLatency"') && html.includes('<span>NET</span><b>-- ms</b>') &&
+  app.includes('const LATENCY_PROBE_MS = 3000;') &&
+  app.includes('function sendSocketPing(') && app.includes('function renderBackendLatency(') &&
+  app.includes('ws.latencyMs = Math.round(ws.lastPongAt - ws.pingStartedAt)') &&
+  app.includes('state.latencyProbeTimer = setInterval(probeActiveBackend, LATENCY_PROBE_MS)') &&
+  style.includes('.backend-latency {') && style.includes('.backend-latency[data-level="bad"] b'),
+  'the active terminal must expose a visible, continuously measured backend WebSocket round-trip'
+);
 assert.ok(html.includes('viewport-fit=cover'), 'smartphone viewport must support display cutouts and safe-area insets');
 assert.ok(
   html.includes('id="compactLaunchMenu"') && html.includes('id="compactActionsMenu"') &&
