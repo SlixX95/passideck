@@ -105,7 +105,7 @@ assert.ok(
   app.includes('RAM: ${formatBytes(info.used)} used of ${formatBytes(info.total)} · ${formatBytes(info.free)} free'),
   'CPU and RAM monitor cells must expose informative usage tooltips'
 );
-assert.ok(html.includes('app.js?v=20260725-performance-mode-system-monitor-tooltips') && html.includes('style.css?v=20260725-performance-mode-system-monitor-tooltips'), 'client cache keys must activate the rendering mode setting and CPU/RAM tooltips');
+assert.ok(html.includes('app.js?v=20260725-terminal-http-links') && html.includes('style.css?v=20260725-terminal-http-links'), 'client cache keys must activate the terminal HTTP link fix');
 assert.ok(
   html.includes('id="backendLatency"') && html.includes('<span>NET</span><b>-- ms</b>') &&
   app.includes('const LATENCY_PROBE_MS = 3000;') &&
@@ -251,10 +251,11 @@ assert.ok(app.includes("state.minimized.has(id) ? restorePanel(id) : selectPanel
 assert.ok(app.includes("document.addEventListener('paste', handleTerminalPaste, true)") && app.includes("document.addEventListener('keydown', letBrowserOwnTerminalPasteShortcut, true)") && app.includes("document.addEventListener('drop', handleUploadDrop, true)"), 'text/file paste and file drop terminal bridges must stay enabled');
 assert.ok(
   app.includes('new WebLinksAddon.WebLinksAddon(handleTerminalLink)') &&
+  app.includes('linkHandler: { activate: handleTerminalLink }') &&
   app.includes('window.passideckDesktop?.openExternal') &&
   app.includes("window.open(url, '_blank')") &&
   app.includes("showToast('Link copied')"),
-  'terminal links must open through the desktop/browser path and copy with visible feedback when opening fails'
+  'raw and OSC 8 terminal links must share the desktop/browser opener and copy with visible feedback when opening fails'
 );
 
 assert.ok(html.includes('id="uploadFileBtn"') && html.includes('id="clipboardImageBtn"') && html.includes('id="fileInput"'), 'upload, clipboard image, and file picker controls must stay available');

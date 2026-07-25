@@ -2979,6 +2979,46 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       opener: null
     }, 'terminal links must open through Electron/browser, copy when blocked, and reject non-HTTP(S) schemes');
 
+    const terminalLinkProviders = await evalExpr(cdp, sid, `(async () => {
+      const host = document.createElement('div');
+      host.style.cssText = 'position:fixed;left:0;top:0;width:900px;height:120px;z-index:-1';
+      document.body.appendChild(host);
+      const originalDesktop = window.passideckDesktop;
+      const originalConfirm = window.confirm;
+      const calls = [];
+      const term = new Terminal({
+        cols: 100,
+        rows: 4,
+        linkHandler: [...state.sessions.values()][0].term.options.linkHandler
+      });
+      term.loadAddon(new WebLinksAddon.WebLinksAddon(handleTerminalLink));
+      term.open(host);
+      try {
+        window.passideckDesktop = { openExternal: async url => { calls.push(url); return true; } };
+        window.confirm = () => false;
+        await new Promise(resolve => term.write('https://example.com/raw\\r\\n\\x1b]8;;https://example.com/osc8?q=1\\x07Samsung Link\\x1b]8;;\\x07\\r\\n', resolve));
+        const linksForLine = line => Promise.all(term._core._linkProviderService.linkProviders.map(provider =>
+          new Promise(resolve => provider.provideLinks(line, links => resolve(links || [])))
+        )).then(groups => groups.flat());
+        const raw = (await linksForLine(1)).find(link => link.text === 'https://example.com/raw');
+        const osc8 = (await linksForLine(2)).find(link => link.text === 'https://example.com/osc8?q=1');
+        await raw?.activate(new MouseEvent('click'), raw.text);
+        await osc8?.activate(new MouseEvent('click'), osc8.text);
+        return { raw: Boolean(raw), osc8: Boolean(osc8), calls };
+      } finally {
+        term.dispose();
+        host.remove();
+        if (originalDesktop === undefined) delete window.passideckDesktop;
+        else window.passideckDesktop = originalDesktop;
+        window.confirm = originalConfirm;
+      }
+    })()`);
+    assert.deepStrictEqual(terminalLinkProviders, {
+      raw: true,
+      osc8: true,
+      calls: ['https://example.com/raw', 'https://example.com/osc8?q=1']
+    }, 'raw URL and OSC 8 HTTP(S) link providers must both use the shared PassiDeck opener without a modifier key');
+
     const tuiClick = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
       const screen = entry.el.querySelector('.xterm-screen');

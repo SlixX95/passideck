@@ -3007,6 +3007,7 @@ function createPanel(session, opts = {}) {
     cursorBlink: true,
     scrollOnUserInput: false,
     scrollback: 20000,
+    linkHandler: { activate: handleTerminalLink },
     overviewRuler: { width: 4 },
     theme: terminalTheme(state.theme)
   });
