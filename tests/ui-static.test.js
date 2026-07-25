@@ -94,7 +94,13 @@ assert.ok(
 );
 assert.ok(!style.includes('.response-pulse { animation: none'), 'response attention must keep pulsing even when the OS requests reduced motion');
 assert.ok(!style.includes('#ff3158') && !style.includes("content: 'NEW'"), 'response attention must stay theme-colored and must not add a NEW badge');
-assert.ok(html.includes('app.js?v=20260724-backend-latency') && html.includes('style.css?v=20260724-backend-latency'), 'client cache keys must activate the backend latency display');
+assert.ok(
+  !html.includes('gridPickerInline') && !html.includes('class="layout-pack"') &&
+  !app.includes('function buildGridPicker') && !app.includes('function updateGridPickerActive') && !app.includes('function setLayout(') &&
+  !style.includes('.grid-picker-inline') && !style.includes('.layout-select'),
+  'retired Desktop layout chip must not leave markup, JavaScript, or CSS behind'
+);
+assert.ok(html.includes('app.js?v=20260725-remove-layout-chip') && html.includes('style.css?v=20260725-remove-layout-chip'), 'client cache keys must activate removal of the retired Desktop layout chip');
 assert.ok(
   html.includes('id="backendLatency"') && html.includes('<span>NET</span><b>-- ms</b>') &&
   app.includes('const LATENCY_PROBE_MS = 3000;') &&

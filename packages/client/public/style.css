@@ -201,11 +201,6 @@ body.notify-blinking .desktop-tab.attention:not(.active) { animation: desktop-re
 }
 .switcher-btn.response-pulse { border-color: var(--tg-accent); filter: brightness(1.3); box-shadow: 0 0 22px color-mix(in srgb, var(--tg-accent) 72%, transparent); }
 body.notify-blinking .switcher-btn.response-pulse:not(.active) { animation: switcher-response-pulse 1.6s ease-in-out infinite; }
-.layout-pack { display: flex; align-items: center; }
-.grid-picker-inline { display: flex; gap: 4px; align-items: center; border: 1px solid color-mix(in srgb, var(--tg-border) 80%, black 20%); background: #030707; padding: 1px 4px; height: 23px; }
-.layout-select-label { color: var(--tg-text-dim); font: 10px var(--tg-mono); text-transform: lowercase; }
-.layout-select { height: 19px; min-width: 88px; border: 0; background: #030707; color: var(--tg-accent); font: 10px var(--tg-mono); }
-.layout-select:focus-visible { outline: 1px solid var(--tg-accent); outline-offset: 1px; }
 .command-divider { width: 1px; height: 18px; background: var(--tg-border); margin: 0 2px; }
 .chrome-btn { padding: 0 7px; cursor: pointer; }
 .chrome-btn:hover, .chrome-btn.armed { color: var(--tg-accent); border-color: var(--tg-accent); background: color-mix(in srgb, var(--tg-accent-dim) 40%, transparent); }
@@ -858,7 +853,7 @@ body.chrome-hidden .settings-panel { display: none !important; }
 .toast[data-type="error"] { border-color: var(--tg-red); color: var(--tg-red); }
 .toast[hidden] { display: none !important; }
 button:focus-visible, select:focus-visible, input:focus-visible { outline: 1px solid var(--tg-accent); outline-offset: 1px; }
-@media (max-width: 1180px) { .chrome-btn { padding: 0 4px; max-width: 68px; overflow: hidden; text-overflow: ellipsis; } .layout-select { min-width: 74px; } }
+@media (max-width: 1180px) { .chrome-btn { padding: 0 4px; max-width: 68px; overflow: hidden; text-overflow: ellipsis; } }
 
 /* Compact touch chrome: phones, Fold-class displays, and short landscape viewports. */
 @media (max-width: 1024px), (max-height: 419px), (pointer: coarse) and (max-width: 1200px) {
@@ -1029,7 +1024,7 @@ body {
 }
 .topbar { backdrop-filter: blur(16px) saturate(1.18); background: linear-gradient(180deg, color-mix(in srgb, var(--tg-panel-top) 90%, #fff 4%), color-mix(in srgb, var(--tg-bg) 94%, #000 6%)); }
 .command-strip { background: linear-gradient(90deg, color-mix(in srgb, var(--tg-accent) 5%, transparent), transparent 23%, transparent 77%, color-mix(in srgb, var(--tg-accent) 4%, transparent)); }
-.topbar-ql-btn, .chrome-btn, .switcher-btn, .grid-picker-inline, .monitor-cell, .codex-limit, .backend-latency {
+.topbar-ql-btn, .chrome-btn, .switcher-btn, .monitor-cell, .codex-limit, .backend-latency {
   background: linear-gradient(180deg, color-mix(in srgb, var(--tg-panel-top) 74%, #fff 4%), color-mix(in srgb, var(--tg-bg) 92%, #000 8%));
   border-color: var(--tg-hairline);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.045), 0 1px 0 rgba(0,0,0,.7);

@@ -1284,22 +1284,6 @@ function flushUiState() {
     }
   } catch {}
 }
-function setLayout(layout, opts = {}) {
-  state.layout = 'auto';
-  applyLayoutVisibility();
-  updateGridPickerActive();
-  scheduleTerminalFit();
-  if (opts.persist !== false) saveUiState();
-}
-
-function buildGridPicker() {
-  const container = document.getElementById('gridPickerInline');
-  if (!container) return;
-  container.innerHTML = '<span class="layout-select-label">Desktop</span>';
-}
-
-function updateGridPickerActive() {}
-
 /* ── Font Size ── */
 let fontSizePreviewTimer = null;
 function setFontSize(size, opts = {}) {
@@ -3815,12 +3799,11 @@ async function init() {
   setSystemMonitorVisible(Boolean(ui?.systemMonitor), { persist: false });
   startCodexLimitsPolling();
   installCloseHitLayer();
-  buildGridPicker();
   sessions.forEach(createPanel);
   restorePanelOrder();
 
   state.layout = 'auto';
-  setLayout('auto', { persist: false });
+  scheduleTerminalFit();
 
   state.minimized = new Set((activeDesktop().minimized || []).filter(id => state.sessions.has(id)));
   state.minimized.forEach(id => state.sessions.get(id)?.el.classList.add('minimized'));
