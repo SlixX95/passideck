@@ -115,8 +115,8 @@ Audit and simplify PassiDeck, then roll it out to the MiniPC and all backends.
         self.assertNotIn("Historical Task Snapshot", context)
         self.assertNotIn("Completed staged review", context)
         self.assertNotIn("staged review completed", context)
-        self.assertIn("Recent user request (current phase unless clearly unrelated):", context)
-        self.assertEqual(context.count("Okay, now deploy the app and update all backends."), 1)
+        self.assertNotIn("Recent user request", context)
+        self.assertNotIn("Okay, now deploy the app and update all backends.", context)
 
     def test_title_context_recovers_goal_from_assistant_compaction(self):
         plugin = load_plugin()
@@ -319,6 +319,64 @@ Keep the complete PassiDeck audit and rollout objective.
         self.assertEqual(posts, ["reset", "model"])
         self.assertNotIn("pane-1", plugin._current_titles)
         self.assertNotIn("pane-1", plugin._running)
+
+    def test_image_prompt_uses_pixels_for_content_aware_title(self):
+        plugin = load_plugin()
+        recorded = {}
+        posted = threading.Event()
+        image_url = "data:image/png;base64,cGl4ZWxz"
+
+        class Message:
+            content = "PassiDeck Retitle Image Context"
+
+        class Response:
+            choices = [types.SimpleNamespace(message=Message())]
+
+        def call_llm(**kwargs):
+            recorded.update(kwargs)
+            return Response()
+
+        def post(_pane_id, _session_id, _title, kind, _revision):
+            if kind == "model":
+                posted.set()
+            return True
+
+        agent = types.ModuleType("agent")
+        agent.__path__ = []
+        auxiliary = types.ModuleType("agent.auxiliary_client")
+        setattr(auxiliary, "call_llm", call_llm)
+        config = types.ModuleType("hermes_cli.config")
+        setattr(config, "load_config_readonly", lambda: {"auxiliary": {"title_generation": {"language": "English"}}})
+        hermes_cli = types.ModuleType("hermes_cli")
+        hermes_cli.__path__ = []
+        runtime_helpers = types.ModuleType("agent.agent_runtime_helpers")
+        setattr(runtime_helpers, "strip_think_blocks", lambda _agent, text: text)
+        setattr(plugin, "_post_title", post)
+
+        with patch.dict(sys.modules, {
+            "agent": agent,
+            "agent.auxiliary_client": auxiliary,
+            "agent.agent_runtime_helpers": runtime_helpers,
+            "hermes_cli": hermes_cli,
+            "hermes_cli.config": config,
+        }):
+            plugin.on_pre_llm_call(
+                session_id="hermes-image",
+                user_message=[
+                    {"type": "text", "text": "Please fix the failing media-path assertion"},
+                    {"type": "image_url", "image_url": {"url": image_url}},
+                ],
+                conversation_history=[],
+                is_first_turn=True,
+            )
+            self.assertTrue(posted.wait(2), "the content-aware image title must complete")
+
+        self.assertEqual(recorded["task"], "vision")
+        self.assertIn("Never title the upload", recorded["messages"][0]["content"])
+        title_request = recorded["messages"][1]["content"]
+        self.assertIsInstance(title_request, list)
+        self.assertIn("Please fix the failing media-path assertion", title_request[0]["text"])
+        self.assertEqual(title_request[1], {"type": "image_url", "image_url": {"url": image_url}})
 
     def test_model_call_uses_hermes_title_generation_aux_task(self):
         plugin = load_plugin()

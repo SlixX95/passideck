@@ -39,7 +39,7 @@ _SYNTHETIC_USER_PREFIXES = (
 
 _lock = threading.Lock()
 _versions: dict[str, int] = {}
-_pending: dict[str, tuple[int, str, str]] = {}
+_pending: dict[str, tuple[int, str, str, tuple[dict[str, Any], ...]]] = {}
 _running: set[str] = set()
 _current_titles: dict[str, str] = {}
 
@@ -70,6 +70,16 @@ def _message_text(message: Any) -> str:
             if isinstance(part, dict) and part.get("type") in {"text", "input_text"}
         ))
     return ""
+
+
+def _image_parts(content: Any) -> tuple[dict[str, Any], ...]:
+    if not isinstance(content, list):
+        return ()
+    return tuple(
+        dict(part)
+        for part in content
+        if isinstance(part, dict) and part.get("type") == "image_url"
+    )
 
 
 def _is_synthetic_user_message(text: str) -> bool:
@@ -119,21 +129,14 @@ def _build_title_context(user_message: str, conversation_history: Any, current_t
         messages.append(("user", latest))
     if not session_objective:
         session_objective = next((text for role, text in messages if role == "user"), latest)
-    recent = (
-        [message for message in messages if message[0] == "user"][-2:]
-        if objective_from_compaction
-        else messages[-8:]
-    )
+    recent = [] if objective_from_compaction else messages[-8:]
 
     lines = ["Session objective (authoritative overall scope):", f"- {session_objective[:900]}"]
     if current_title and not objective_from_compaction:
         lines.append(f"Current title (continuity clue only): {_clean_text(current_title)[:_TITLE_LIMIT]}")
-    lines.append(
-        "Recent user request (current phase unless clearly unrelated):"
-        if objective_from_compaction
-        else "Recent conversation (supporting context):"
-    )
-    lines.extend(f"{role.title()}: {text[:240]}" for role, text in recent)
+    if recent:
+        lines.append("Recent conversation (supporting context):")
+        lines.extend(f"{role.title()}: {text[:240]}" for role, text in recent)
     context = "\n".join(lines)
     return context[:_CONTEXT_LIMIT]
 
@@ -166,15 +169,21 @@ def _sanitize_model_title(content: str) -> str:
     return title
 
 
-def _call_title_model(context: str) -> str:
-    # The task name is the contract: Hermes resolves the user's existing
-    # auxiliary.title_generation provider/model/auth/fallback configuration.
+def _call_title_model(context: str, images: tuple[dict[str, Any], ...] = ()) -> str:
+    # Hermes resolves the user's existing title route for text and the
+    # vision-capable auxiliary route when the title needs image pixels.
     from agent.auxiliary_client import call_llm  # type: ignore[import-not-found]
 
     language = _configured_title_language()
     language_rule = f"Write the title in {language}. " if language else "Use the language of the latest user request. "
+    image_rule = (
+        "Use the supplied image pixels to identify the actual subject, problem, or requested work. "
+        "Never title the upload, attachment, screenshot, or image-analysis action itself. "
+        if images else ""
+    )
+    user_content: Any = [{"type": "text", "text": context}, *images] if images else context
     response = call_llm(
-        task="title_generation",
+        task="vision" if images else "title_generation",
         provider=None,
         model=None,
         messages=[
@@ -187,10 +196,11 @@ def _call_title_model(context: str) -> str:
                     "of dropping them. Use recent conversation only to interpret a brief follow-up or an explicit replacement "
                     "objective. Describe the work itself, never merely a status or result. "
                     "Prefer '<actual project name>: scopes' when a project is identifiable; never use a generic label. "
+                    f"{image_rule}"
                     f"{language_rule}Return only the title, without quotes, prefix, or trailing punctuation."
                 ),
             },
-            {"role": "user", "content": context},
+            {"role": "user", "content": user_content},
         ],
         temperature=0.2,
         max_tokens=80,
@@ -231,9 +241,9 @@ def _worker(pane_id: str) -> None:
             if job is None:
                 _running.discard(pane_id)
                 return
-        version, hermes_session_id, context = job
+        version, hermes_session_id, context, images = job
         try:
-            title = _call_title_model(context)
+            title = _call_title_model(context, images) if images else _call_title_model(context)
         except Exception as exc:
             logger.warning("PassiDeck title generation failed: %s", exc)
             title = ""
@@ -256,12 +266,16 @@ def on_pre_llm_call(**kwargs: Any) -> None:
 
     pane_id = os.environ.get("PASSIDECK_SESSION", "").strip()
     mode = os.environ.get("PASSIDECK_TITLE_GEN_LLM", _MODE).strip().lower()
-    user_message = _clean_text(kwargs.get("user_message", ""))
+    raw_user_message = kwargs.get("user_message", "")
+    images = _image_parts(raw_user_message)
+    user_message = _message_text({"content": raw_user_message})
+    if not user_message and images:
+        user_message = "Identify the work shown in the attached image."
     if not pane_id or mode != _MODE or not user_message or _is_synthetic_user_message(user_message):
         return None
 
     hermes_session_id = _clean_text(kwargs.get("session_id", ""))[:160]
-    provisional = _provisional_title(user_message) if kwargs.get("is_first_turn") else ""
+    provisional = _provisional_title(user_message) if kwargs.get("is_first_turn") and not images else ""
 
     with _lock:
         version = _versions.get(pane_id, 0) + 1
@@ -274,7 +288,7 @@ def on_pre_llm_call(**kwargs: Any) -> None:
         )
         if provisional:
             _current_titles[pane_id] = provisional
-        _pending[pane_id] = (version, hermes_session_id, context)
+        _pending[pane_id] = (version, hermes_session_id, context, images)
         start_worker = pane_id not in _running
         if start_worker:
             _running.add(pane_id)
