@@ -45,7 +45,6 @@ function normalizeConfig(value = {}) {
     const mathilda = backends.find(backend => backend.id === 'mathilda');
     if (mathilda?.url === LEGACY_MATHILDA_URL) mathilda.url = DEFAULT_BACKENDS[2].url;
   }
-  if (!backends.length) backends = DEFAULT_BACKENDS.map(backend => ({ ...backend }));
   const activeBackendId = backends.some(backend => backend.id === value.activeBackendId)
     ? value.activeBackendId
     : backends[0].id;

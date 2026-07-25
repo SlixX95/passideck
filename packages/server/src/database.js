@@ -52,15 +52,4 @@ function getActiveSessions(db) {
   return db.prepare(`SELECT * FROM sessions WHERE exited_at IS NULL ORDER BY created_at DESC`).all();
 }
 
-function cleanupStaleSessions(db, maxAgeHours = 48) {
-  const cutoff = new Date(Date.now() - maxAgeHours * 3600000).toISOString();
-  const stale = db.prepare(`SELECT id FROM sessions WHERE exited_at IS NULL AND created_at < ?`).all(cutoff);
-  if (stale.length) {
-    const placeholders = stale.map(() => '?').join(',');
-    db.prepare(`UPDATE sessions SET exited_at = ?, reason = 'stale' WHERE id IN (${placeholders})`).run(new Date().toISOString(), ...stale.map(s => s.id));
-    console.log(`[db] Marked ${stale.length} stale sessions as exited`);
-  }
-  return stale.length;
-}
-
-module.exports = { initDatabase, upsertSession, markSessionExited, saveDynamicTitle, getActiveSessions, cleanupStaleSessions };
+module.exports = { initDatabase, upsertSession, markSessionExited, saveDynamicTitle, getActiveSessions };

@@ -13,6 +13,7 @@ try {
   assert.ok(!fs.existsSync(path.join(home, 'passideck.db')), 'importing an upload helper must not open the server database');
   const saved = saveUploadedBlob({ name: 'ok.txt', type: 'text/plain', data: 'Zm9v' });
   assert.strictEqual(fs.readFileSync(saved.path, 'utf8'), 'foo');
+  assert.strictEqual(Object.hasOwn(saved, 'insert'), false, 'uploads must expose only the canonical path field');
   assert.throws(
     () => saveUploadedBlob({ name: 'bad.txt', type: 'text/plain', data: 'Zm9v$' }),
     /Invalid base64 upload/,

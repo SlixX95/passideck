@@ -67,9 +67,8 @@ function render(next) {
   tabs.replaceChildren(...state.backends.map(backend => {
     const tab = document.createElement('button');
     const active = backend.id === state.activeBackendId;
-    tab.className = `backend-tab${active ? ' active' : ''}${backend.attention ? ' attention' : ''}${backend.responsePulse ? ' response-pulse' : ''}${backend.notifyBlinking ? ' response-blinking' : ''}${backend.hiddenDesktopAttention ? ' hidden-desktop-attention' : ''}`;
+    tab.className = `backend-tab${active ? ' active' : ''}${backend.attention ? ' attention response-pulse' : ''}${backend.notifyBlinking ? ' response-blinking' : ''}${backend.hiddenDesktopAttention ? ' hidden-desktop-attention' : ''}`;
     tab.style.setProperty('--tab-color', backend.color);
-    tab.dataset.backendId = backend.id;
     tab.setAttribute('aria-current', active ? 'page' : 'false');
     tab.setAttribute('aria-label', `${backend.name}${backend.attention ? ', new response' : ''}`);
     const connectionStatus = document.createElement('span');
@@ -117,10 +116,9 @@ async function closeDialog() {
   await window.passideckShell.setDialogOpen(false);
 }
 
-
 document.getElementById('addBackend').onclick = () => { void openDialog(); };
 uiToggle.onclick = async () => renderUiToggle(await window.passideckShell.toggleUi());
-globalSoundToggle.onclick = async () => render(await window.passideckShell.setGlobalSoundEnabled(!state.globalSoundEnabled));
+globalSoundToggle.onclick = async () => { await window.passideckShell.setGlobalSoundEnabled(!state.globalSoundEnabled); };
 document.getElementById('cancelBackend').onclick = () => { void closeDialog(); };
 document.getElementById('removeBackend').onclick = async () => {
   const id = document.getElementById('backendId').value;

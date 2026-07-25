@@ -397,7 +397,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     const stableGridOrder = await evalExpr(cdp, sid, `(() => {
       const ids = state.order.slice(0, 4);
       const previousMinimized = state.minimized;
-      const previousWindows = structuredClone(state.panePrefs.windows);
+      const previousWindows = structuredClone(activeDesktop().windows);
       state.minimized = new Set(state.order.slice(4));
       const prefs = windowPrefs();
       const grid = document.getElementById('termGrid').getBoundingClientRect();
@@ -410,7 +410,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const proposal = layoutProposals(ids[0]).find(item => item.key === 'grid');
       const focused = layoutProposals(ids[0]).find(item => item.key === 'focus-left');
       state.minimized = previousMinimized;
-      state.panePrefs.windows = previousWindows;
+      activeDesktop().windows = previousWindows;
       return { actual: proposal.ids, expected: [ids[3], ids[1], ids[0], ids[2]], focused: focused.ids[0], clicked: ids[0] };
     })()`);
     assert.deepStrictEqual(stableGridOrder.actual, stableGridOrder.expected, 'grid layout must preserve visual window positions instead of promoting the clicked window');
@@ -430,7 +430,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.strictEqual(clampedWindow.inside, true, `persisted offscreen window must clamp inside termGrid: ${JSON.stringify(clampedWindow)}`);
     await sleep(250);
     const savedUi = await requestJson(base, 'GET', '/api/ui-state');
-    const savedRect = savedUi.panePrefs?.windows?.desktop?.[madeSessions[0]];
+    const savedRect = savedUi.panePrefs?.desktops?.['desktop-1']?.windows?.[madeSessions[0]];
     assert.ok(savedRect && savedRect.x > clampedWindow.grid.width && savedRect.y > clampedWindow.grid.height && savedRect.w === 1600 && savedRect.h === 900, `local viewport clamp must not rewrite authoritative server geometry: ${JSON.stringify(savedRect)}`);
 
     const zRollover = await evalExpr(cdp, sid, `(() => {
@@ -467,7 +467,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         return { bounded, invalid };
       } finally {
         savePanePrefs = persistPanePrefs;
-        state.panePrefs.windows.desktop = savedPrefs;
+        state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
         state.zCounter = savedZCounter;
         restorePanelOrder();
       }
@@ -500,7 +500,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       state.minimized = new Set(state.order);
       const emptyDesktop = freeSpaceWindowRect();
       const expectedEmpty = { x: 0, y: 0, w: grid.width / 2, h: grid.height };
-      state.panePrefs.windows.desktop = before;
+      state.panePrefs.desktops[state.activeDesktopId].windows = before;
       state.minimized = beforeMinimized;
       return { free, expected: { x: cell.w * 2, y: cell.h, w: cell.w, h: cell.h }, emptyDesktop, expectedEmpty };
     })()`);
@@ -715,8 +715,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
           first: state.panePrefs.desktopOrder[0],
           allMoved: state.order.every(id => state.panePrefs.paneDesktop[id] === remainingId),
           blocker: prefs[blocker] ? { ...prefs[blocker] } : null,
-          blockerExpected: blockerRect,
-          legacyBound: state.panePrefs.windows.desktop === remaining.windows
+          blockerExpected: blockerRect
         };
       } finally {
         state.panePrefs = saved.panePrefs;
@@ -736,9 +735,9 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       return result;
     })()`);
     assert.deepStrictEqual(
-      { removed: firstDesktopDeletion.removed, first: firstDesktopDeletion.first, allMoved: firstDesktopDeletion.allMoved, legacyBound: firstDesktopDeletion.legacyBound },
-      { removed: true, first: desktopCreation.active, allMoved: true, legacyBound: true },
-      `deleting the first desktop must promote the surviving desktop without stale aliases: ${JSON.stringify(firstDesktopDeletion)}`
+      { removed: firstDesktopDeletion.removed, first: firstDesktopDeletion.first, allMoved: firstDesktopDeletion.allMoved },
+      { removed: true, first: desktopCreation.active, allMoved: true },
+      `deleting the first desktop must promote the surviving desktop: ${JSON.stringify(firstDesktopDeletion)}`
     );
     assert.deepStrictEqual(firstDesktopDeletion.blocker, firstDesktopDeletion.blockerExpected, `promoting a desktop must preserve its existing window geometry: ${JSON.stringify(firstDesktopDeletion)}`);
     await evalExpr(cdp, sid, `document.querySelector('[data-desktop-id="desktop-1"]').click()`);
@@ -1120,9 +1119,11 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       endPointerDrag({ preventDefault(){} });
       const docked = { ...prefs[source] };
       const free = slotRectsForDrag(source).free.map(slot => slot.rect);
-      const freeOverlap = free.length === 2 ? rectOverlap(free[0], free[1]) : null;
+      const freeOverlap = free.length === 2
+        ? Math.max(0, Math.min(free[0].x + free[0].w, free[1].x + free[1].w) - Math.max(free[0].x, free[1].x)) * Math.max(0, Math.min(free[0].y + free[0].h, free[1].y + free[1].h) - Math.max(free[0].y, free[1].y))
+        : null;
       savePanePrefs = persistPanePrefs;
-      state.panePrefs.windows.desktop = savedPrefs;
+      state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
       state.minimized.clear();
       savedMinimized.forEach(id => state.minimized.add(id));
       restorePanelOrder();
@@ -1176,7 +1177,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       endPointerDrag({ preventDefault(){} });
       const docked = { ...prefs[source] };
       savePanePrefs = persistPanePrefs;
-      state.panePrefs.windows.desktop = savedPrefs;
+      state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
       state.minimized.clear();
       savedMinimized.forEach(id => state.minimized.add(id));
       restorePanelOrder();
@@ -1218,7 +1219,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const rightX = rounded(third);
       const rightGap = { x: rightX, y: 0, w: grid.width - rightX, h: grid.height };
       const right = [choiceAt(grid.width * 0.63), choiceAt(grid.width * 0.70)];
-      state.panePrefs.windows.desktop = savedPrefs;
+      state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
       state.minimized.clear();
       savedMinimized.forEach(id => state.minimized.add(id));
       restorePanelOrder();
@@ -1259,7 +1260,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         return { type: choice.type, rect: choice.rect || null };
       };
       const choices = { middle: choose(1 / 6), full: choose(1 / 2), right: choose(5 / 6) };
-      state.panePrefs.windows.desktop = savedPrefs;
+      state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
       state.minimized.clear();
       savedMinimized.forEach(id => state.minimized.add(id));
       restorePanelOrder();
@@ -1303,7 +1304,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       endPointerDrag({ preventDefault(){} });
       const docked = { ...prefs[source] };
       savePanePrefs = persistPanePrefs;
-      state.panePrefs.windows.desktop = savedPrefs;
+      state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
       state.minimized.clear();
       savedMinimized.forEach(id => state.minimized.add(id));
       restorePanelOrder();
@@ -1411,7 +1412,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         }
       };
       savePanePrefs = persistPanePrefs;
-      state.panePrefs.windows.desktop = savedPrefs;
+      state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
       state.minimized.clear();
       savedMinimized.forEach(id => state.minimized.add(id));
       state.zCounter = savedZCounter;
@@ -1483,7 +1484,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       endPointerDrag({ preventDefault(){} });
       const docked = { x: prefs[source].x, y: prefs[source].y, w: prefs[source].w, h: prefs[source].h };
       savePanePrefs = persistPanePrefs;
-      state.panePrefs.windows.desktop = savedPrefs;
+      state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
       state.minimized.clear();
       savedMinimized.forEach(id => state.minimized.add(id));
       restorePanelOrder();
@@ -1545,7 +1546,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       endPointerDrag({ preventDefault(){} });
       const docked = { x: prefs[source].x, y: prefs[source].y, w: prefs[source].w, h: prefs[source].h };
       savePanePrefs = persistPanePrefs;
-      state.panePrefs.windows.desktop = savedPrefs;
+      state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
       state.minimized.clear();
       savedMinimized.forEach(id => state.minimized.add(id));
       restorePanelOrder();
@@ -1588,7 +1589,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         full: choiceAt(1 / 2, 1 / 2),
         bottomRight: choiceAt(5 / 6, 5 / 6)
       };
-      state.panePrefs.windows.desktop = savedPrefs;
+      state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
       state.minimized.clear();
       savedMinimized.forEach(id => state.minimized.add(id));
       restorePanelOrder();
@@ -1617,7 +1618,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       blockers.forEach((id, i) => Object.assign(prefs[id], { ...blocker, z: 30 - i }));
       [source, ...blockers].forEach(applyFreeWindow);
       const choice = chooseDesktopSlotAt(grid.left + left.w / 2, grid.top + left.h / 2, source);
-      state.panePrefs.windows.desktop = savedPrefs;
+      state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
       state.minimized.clear();
       savedMinimized.forEach(id => state.minimized.add(id));
       restorePanelOrder();
@@ -1650,7 +1651,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       endPointerDrag({ preventDefault(){} });
       const after = { ...prefs[small] };
       savePanePrefs = persistPanePrefs;
-      state.panePrefs.windows.desktop = savedPrefs;
+      state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
       state.minimized.clear();
       savedMinimized.forEach(id => state.minimized.add(id));
       restorePanelOrder();
@@ -1688,7 +1689,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       endPointerDrag({ preventDefault(){} });
       const after = { ...prefs[target] };
       savePanePrefs = persistPanePrefs;
-      state.panePrefs.windows.desktop = savedPrefs;
+      state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
       state.minimized.clear();
       savedMinimized.forEach(id => state.minimized.add(id));
       restorePanelOrder();
@@ -1725,7 +1726,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const start = { ...state.resizeDrag.startRect };
       updateWindowResize({ preventDefault(){}, clientX: state.resizeDrag.startX - 60, clientY: state.resizeDrag.startY });
       const result = { dx: Math.round(prefs[id].x - start.x), dw: Math.round(prefs[id].w - start.w), edges: entry.el.querySelectorAll('.window-resize-handle').length };
-      state.panePrefs.windows.desktop = savedPrefs;
+      state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
       state.minimized.clear();
       savedMinimized.forEach(savedId => state.minimized.add(savedId));
       restorePanelOrder();
@@ -1795,7 +1796,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         savePanePrefs = persistPanePrefs;
         state.resizeDrag = null;
         state.sharedResizeDrag = null;
-        state.panePrefs.windows.desktop = savedPrefs;
+        state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
         state.minimized = new Set(savedMinimized);
         restorePanelOrder();
       }
@@ -1846,7 +1847,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       } finally {
         savePanePrefs = persistPanePrefs;
         state.resizeDrag = null;
-        state.panePrefs.windows.desktop = savedPrefs;
+        state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
         state.minimized = new Set(savedMinimized);
         state.zCounter = savedZCounter;
         restorePanelOrder();
@@ -1881,7 +1882,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       } finally {
         state.pointerDrag = savedPointerDrag;
         state.resizeDrag = savedResizeDrag;
-        state.panePrefs.windows.desktop = savedPrefs;
+        state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
         restorePanelOrder();
       }
     })()`);
@@ -2122,7 +2123,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         vertical: { ...prefs[verticalTarget] },
         horizontal: { ...prefs[horizontalTarget] }
       };
-      state.panePrefs.windows.desktop = savedPrefs;
+      state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
       state.minimized.clear();
       savedMinimized.forEach(id => state.minimized.add(id));
       restorePanelOrder();
@@ -2173,7 +2174,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       bringWindowToFront(ids[2]);
       savePanePrefs = persistPanePrefs;
       result.afterBringPane = document.elementFromPoint(grid.left + 400, grid.top + 150)?.closest('.term-panel')?.dataset?.paneId || '';
-      state.panePrefs.windows.desktop = savedPrefs;
+      state.panePrefs.desktops[state.activeDesktopId].windows = savedPrefs;
       state.minimized.clear();
       savedMinimized.forEach(id => state.minimized.add(id));
       restorePanelOrder();
@@ -2184,12 +2185,8 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.strictEqual(sharedResizeOcclusion.beforeBringShared, true, `shared edge should be interactive while the crossing pane is behind it: ${JSON.stringify(sharedResizeOcclusion)}`);
     assert.strictEqual(sharedResizeOcclusion.afterBringPane, madeSessions[2], `bringing a crossing pane forward must immediately refresh shared resize hit-testing: ${JSON.stringify(sharedResizeOcclusion)}`);
 
-    const counts = await evalExpr(cdp, sid, `(() => ({
-      panels: document.querySelectorAll('.term-panel').length,
-      activeTitle: document.getElementById('activeSessionDescription')?.textContent || ''
-    }))()`);
+    const counts = await evalExpr(cdp, sid, `(() => ({ panels: document.querySelectorAll('.term-panel').length }))()`);
     assert.strictEqual(counts.panels, 11, 'all panels should render');
-    assert.notStrictEqual(counts.activeTitle, 'No title', `topbar should show session info, not the generated-title fallback: ${JSON.stringify(counts)}`);
 
     const terminalFocusVisual = await evalExpr(cdp, sid, `(async () => {
       const entry = state.sessions.get('${madeSessions[0]}');
@@ -2520,13 +2517,11 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       entry.el.querySelector('.term-title').textContent = panelTitle(entry.session);
       return {
         pane: entry.el.querySelector('.term-title')?.textContent || '',
-        switcher: document.querySelector('#sessionSwitcher .switcher-btn.active .switcher-title')?.textContent || '',
-        topbarPresent: Boolean(document.getElementById('activeSessionDescription'))
+        switcher: document.querySelector('#sessionSwitcher .switcher-btn.active .switcher-title')?.textContent || ''
       };
     })()`);
     assert.strictEqual(generatedTitle.pane, 'Model Session Title', 'generated terminal/model title must appear in pane header');
     assert.strictEqual(generatedTitle.switcher, 'Model Session Title', 'taskbar/switcher item should use the pane title');
-    assert.strictEqual(generatedTitle.topbarPresent, false, 'old command/cwd topbar description should be removed');
 
     const placeholderCustomDoesNotBlock = await evalExpr(cdp, sid, `(() => {
       const entry = [...state.sessions.values()][0];
@@ -2594,11 +2589,10 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       renderSwitcher();
       const lines = ['║ Sessions ║', '║ ▸  1.  current    ✓ idle     gpt-5.5           (untitled)                                                 ║', '║    2.  20260623_today      12 msgs            Should Not Become Title                                   ║'];
       if (selectedHermesSessionTitleIsEmpty(lines)) clearGeneratedTitle(entry.session.id);
-      return { inferred: inferHermesSessionTitle(lines), pane: entry.el.querySelector('.term-title')?.textContent || '', topbarPresent: Boolean(document.getElementById('activeSessionDescription')) };
+      return { inferred: inferHermesSessionTitle(lines), pane: entry.el.querySelector('.term-title')?.textContent || '' };
     })()`);
     assert.strictEqual(tuiUntitledTitle.inferred, '', 'Hermes TUI current untitled row must not infer a title');
     assert.strictEqual(tuiUntitledTitle.pane, 'No title', 'Hermes TUI current untitled row must clear stale pane title');
-    assert.strictEqual(tuiUntitledTitle.topbarPresent, false, 'topbar command/cwd description should stay removed');
 
     const titleLock = await evalExpr(cdp, sid, `(() => {
       const entry = [...state.sessions.values()][0];
@@ -2740,7 +2734,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     const touchSwipeSetup = await evalExpr(cdp, sid, `(async () => {
       const entry = state.sessions.get(state.activeId);
       window.__touchScrollRestore = { entry, command: entry.session.meta.command, snapshot: entry.serialize.serialize({ scrollback: 20000 }) };
-      entry.session.meta.command = 'hermes --tui';
+      entry.session.meta.command = 'hermes';
       entry.term.reset();
       await new Promise(resolve => entry.term.write(Array.from({ length: 100 }, (_, i) => 'touch-' + i + '\\r\\n').join(''), resolve));
       entry.term.scrollToBottom();
@@ -2765,10 +2759,52 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       delete window.__touchScrollRestore;
       return { before: ${touchSwipeSetup.before}, after };
     })()`);
+    assert.ok(touchSwipe.after < touchSwipe.before, `a vertical touch swipe must scroll PassiDeck terminal history: ${JSON.stringify(touchSwipe)}`);
+
+    const tuiTouchSetup = await evalExpr(cdp, sid, `(async () => {
+      const entry = state.sessions.get(state.activeId);
+      const mouseData = [];
+      const listener = entry.term.onData(data => mouseData.push(data));
+      window.__tuiTouchRestore = { entry, command: entry.session.meta.command, snapshot: entry.serialize.serialize({ scrollback: 20000 }), mouseData, listener };
+      entry.session.meta.command = 'hermes --tui';
+      entry.term.reset();
+      await new Promise(resolve => entry.term.write('\\x1b[?1049h\\x1b[?1000h\\x1b[?1006h', resolve));
+      const screen = entry.el.querySelector('.xterm-screen');
+      const rect = screen.getBoundingClientRect();
+      return {
+        x: rect.left + rect.width / 2,
+        startY: rect.top + rect.height * .35,
+        endY: rect.top + rect.height * .75,
+        width: rect.width,
+        height: rect.height,
+        bufferType: entry.term.buffer.active.type
+      };
+    })()`);
+    assert.ok(tuiTouchSetup.width > 0 && tuiTouchSetup.height > 0 && tuiTouchSetup.bufferType === 'alternate',
+      `Hermes TUI touch regression must use the visible alternate-screen terminal: ${JSON.stringify(tuiTouchSetup)}`);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: tuiTouchSetup.x, y: tuiTouchSetup.startY, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
+    for (let step = 1; step <= 6; step++) {
+      const y = tuiTouchSetup.startY + (tuiTouchSetup.endY - tuiTouchSetup.startY) * step / 6;
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: tuiTouchSetup.x, y, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
+    }
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, sid);
+    const tuiTouch = await evalExpr(cdp, sid, `(async () => {
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const { entry, command, snapshot, mouseData, listener } = window.__tuiTouchRestore;
+      const mouseEvents = mouseData.filter(data => data.includes('\\x1b[<')).length;
+      listener.dispose();
+      await new Promise(resolve => entry.term.write('\\x1b[?1000l\\x1b[?1006l\\x1b[?1049l', resolve));
+      entry.term.reset();
+      await new Promise(resolve => entry.term.write(snapshot, resolve));
+      entry.session.meta.command = command;
+      delete window.__tuiTouchRestore;
+      return { mouseEvents };
+    })()`);
+    assert.ok(tuiTouch.mouseEvents > 0, `Hermes TUI touch swipes must become terminal mouse-wheel input: ${JSON.stringify(tuiTouch)}`);
+
     await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false }, sid);
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false }, sid);
     await waitEval(cdp, sid, 'innerWidth === 1280 && innerHeight === 720');
-    assert.ok(touchSwipe.after < touchSwipe.before, `a vertical touch swipe must scroll PassiDeck terminal history: ${JSON.stringify(touchSwipe)}`);
 
     const altScreenWheel = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
@@ -3633,15 +3669,14 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const wasHidden = monitor.hidden;
       monitor.hidden = false;
       const displays = {
-        layout: getComputedStyle(document.querySelector('#compactActionsList > .layout-pack')).display,
         monitor: getComputedStyle(monitor).display,
         codex: getComputedStyle(document.getElementById('codexLimits')).display
       };
       monitor.hidden = wasHidden;
       return displays;
     })()`);
-    assert.deepStrictEqual(compactActionDisplays, { layout: 'flex', monitor: 'flex', codex: 'flex' },
-      `compact Actions menu must expose layout, enabled monitor, and Codex controls: ${JSON.stringify(compactActionDisplays)}`);
+    assert.deepStrictEqual(compactActionDisplays, { monitor: 'flex', codex: 'flex' },
+      `compact Actions menu must expose enabled monitor and Codex controls: ${JSON.stringify(compactActionDisplays)}`);
     await touchTap('#chromeToggle');
     await waitEval(cdp, sid, `document.body.classList.contains('chrome-hidden') && !document.getElementById('chromePeek').hidden`);
     const smartphonePeek = await evalExpr(cdp, sid, `(() => { const r = document.getElementById('chromePeek').getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; })()`);
@@ -3792,7 +3827,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         visible: visible.length,
         total: state.sessions.size,
         inBounds: rects.every(r => r.left >= 0 && r.right <= innerWidth),
-        persisted: state.panePrefs.minimized,
+        persisted: activeDesktop().minimized,
         expectedPersisted: window.__mobileUserMinimized
       };
     })()`);

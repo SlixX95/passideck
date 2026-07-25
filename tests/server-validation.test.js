@@ -192,6 +192,25 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
     const initialUi = await fetch(`${base}/api/ui-state`).then(res => res.json());
     assert.strictEqual(initialUi.performanceMode, false, 'new installs must default to Energy saver');
+    const legacyResponse = await fetch(`${base}/api/ui-state`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...initialUi,
+        panePrefs: {
+          order: ['validation'],
+          minimized: ['validation'],
+          windows: { desktop: { validation: { x: 10, y: 20, w: 700, h: 500, z: 11 } } },
+          viewport: { w: 1400, h: 850 }
+        }
+      })
+    });
+    assert.strictEqual(legacyResponse.status, 200);
+    const migratedUi = await legacyResponse.json();
+    assert.deepStrictEqual(migratedUi.panePrefs.desktopOrder, ['desktop-1'], 'legacy pane preferences must migrate into the default desktop');
+    assert.deepStrictEqual(migratedUi.panePrefs.desktops['desktop-1'].minimized, ['validation'], 'legacy minimized state must migrate');
+    assert.deepStrictEqual(migratedUi.panePrefs.desktops['desktop-1'].windows.validation, { x: 10, y: 20, w: 700, h: 500, z: 11 }, 'legacy geometry must migrate');
+    assert.deepStrictEqual(migratedUi.panePrefs.desktops['desktop-1'].viewport, { w: 1400, h: 850 }, 'legacy viewport must migrate');
     const uiEvents = await fetch(`${base}/api/ui-events`);
     assert.strictEqual(uiEvents.status, 200, 'UI state event stream must be available');
     const reader = uiEvents.body.getReader();
@@ -199,15 +218,20 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        ...initialUi,
-        revision: initialUi.revision,
+        ...migratedUi,
+        revision: migratedUi.revision,
         activeId: 'validation',
+        layout: '2x2',
+        baseLayout: '2x2',
+        focusedId: 'validation',
+        primaryId: 'validation',
+        minimized: ['validation'],
         notifyBlinking: false,
         performanceMode: true,
         transparencyMode: 'full',
         transparencyOpacity: 64,
         panePrefs: {
-          ...initialUi.panePrefs,
+          ...migratedUi.panePrefs,
           desktopOrder: ['work', 'monitoring'],
           paneDesktop: { validation: 'monitoring' },
           desktops: {
@@ -222,6 +246,13 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.strictEqual(savedUi.notifyBlinking, false, 'UI state must persist Notify blinking Off instead of dropping it during validation');
     assert.strictEqual(savedUi.performanceMode, true, 'UI state must persist Performance mode instead of dropping it during validation');
     assert.ok(!Object.hasOwn(savedUi, 'transparencyMode') && !Object.hasOwn(savedUi, 'transparencyOpacity'), 'retired transparency preferences must be dropped from authoritative UI state');
+    for (const field of ['layout', 'baseLayout', 'focusedId', 'primaryId', 'minimized']) {
+      assert.strictEqual(Object.hasOwn(savedUi, field), false, `retired top-level UI field ${field} must be dropped`);
+    }
+    for (const field of ['minimized', 'windows', 'viewport']) {
+      assert.strictEqual(Object.hasOwn(savedUi.panePrefs, field), false, `legacy panePrefs field ${field} must be read-only migration input`);
+    }
+    assert.deepStrictEqual(Object.keys(savedUi.panePrefs).sort(), ['desktopOrder', 'desktops', 'order', 'paneDesktop', 'titles'], 'serialized pane preferences must expose only the modern contract');
     assert.deepStrictEqual(savedUi.panePrefs.desktopOrder, ['work', 'monitoring'], 'desktop order must survive server validation');
     assert.deepStrictEqual(
       savedUi.panePrefs.desktopOrder.map(id => savedUi.panePrefs.desktops[id].name),
@@ -231,7 +262,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.strictEqual(savedUi.panePrefs.paneDesktop.validation, 'monitoring', 'pane desktop assignment must survive server validation');
     assert.deepStrictEqual(savedUi.panePrefs.desktops.monitoring.minimized, ['validation'], 'per-desktop minimized state must survive server validation');
     assert.deepStrictEqual(savedUi.panePrefs.desktops.monitoring.windows.validation, { x: 10, y: 20, w: 700, h: 500, z: 11 }, 'per-desktop geometry must survive server validation');
-    assert.ok(savedUi.revision > initialUi.revision, 'accepted UI changes must advance the server revision');
+    assert.ok(savedUi.revision > migratedUi.revision, 'accepted UI changes must advance the server revision');
     const eventChunk = new TextDecoder().decode((await reader.read()).value || new Uint8Array());
     assert.ok(eventChunk.includes('"activeId":"validation"') && eventChunk.includes(`"revision":${savedUi.revision}`), 'accepted UI changes must broadcast to every browser');
     const capped = await fetch(`${base}/api/ui-state`, {

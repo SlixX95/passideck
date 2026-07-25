@@ -7,15 +7,13 @@ const read = (...parts) => fs.readFileSync(path.join(root, ...parts), 'utf8').re
 const app = read('packages/client/public/app.js');
 const server = read('packages/server/src/index.js');
 const session = read('packages/server/src/session.js');
+const database = read('packages/server/src/database.js');
+const config = read('packages/server/src/config.js');
 const html = read('packages/client/public/index.html');
 const style = read('packages/client/public/style.css');
 const installer = read('scripts/install.sh');
 const service = read('scripts/passideck.service');
 const pkg = JSON.parse(read('package.json'));
-const electronMain = read('packages/electron/main.js');
-const electronShell = read('packages/electron/shell.js');
-const electronShellHtml = read('packages/electron/shell.html');
-const electronShellPreload = read('packages/electron/shell-preload.js');
 
 function cssBlock(source, marker) {
   const start = source.indexOf(marker);
@@ -33,28 +31,8 @@ for (const [name, source] of [
   ['client', app],
   ['client HTML', html],
   ['client CSS', style],
-  ['Electron main', electronMain],
-  ['Electron shell', electronShell],
-  ['Electron shell HTML', electronShellHtml],
-  ['Electron shell preload', electronShellPreload],
   ['server', server]
 ]) assert.ok(!/transparency/i.test(source), `${name} must not retain transparency code or controls`);
-assert.ok(
-  electronMain.includes("ipcMain.on('passideck:window-resize'") &&
-  electronMain.includes('const RESIZE_DIRECTIONS = new Set') &&
-  electronMain.includes('function resizeWindowFromRenderer') &&
-  electronShell.includes("document.querySelectorAll('.resize-handle')") &&
-  electronShellHtml.includes('data-resize="bottom-right"') &&
-  electronShellPreload.includes("ipcRenderer.send('passideck:window-resize'"),
-  'frameless Windows shell must retain a sender-validated eight-edge mouse-resize path'
-);
-assert.ok(
-  electronShellHtml.includes('.resize-handle { display: none;') &&
-  electronShellHtml.includes('html[data-platform="win32"] .resize-handle { display: block; }') &&
-  electronShell.includes("if (window.passideckShell.platform === 'win32') {") &&
-  electronShell.includes("document.querySelectorAll('.resize-handle').forEach"),
-  'custom resize hit layers and listeners must only be active on Windows'
-);
 
 for (const needle of [
   'function makeFreeWindow',
@@ -188,11 +166,29 @@ assert.ok(!html.includes('minimizedBar'), 'unused minimized bar markup should st
 assert.ok(!app.includes('function authQuery'), 'unused authQuery should stay deleted');
 assert.ok(!app.includes('function desktopWindowIds'), 'unused desktopWindowIds should stay deleted');
 assert.ok(!app.includes('function terminalViewportLines'), 'unused terminalViewportLines wrapper should stay deleted');
+for (const name of ['slotKey', 'rectOverlap', 'clampWindowPrefs', 'handleUploadPaste', 'updateMinimizedBar', 'visibleTopbarDescription']) {
+  assert.ok(!app.includes(`function ${name}`), `unused ${name} helper should stay deleted`);
+}
+assert.ok(!app.includes('activeSessionDescription') && !html.includes('activeSessionDescription'), 'removed topbar session description must not retain a DOM path');
+assert.ok(!app.includes('term-session-desc') && !style.includes('.term-session-desc'), 'removed pane session description must not retain hidden DOM or CSS');
+assert.ok(!app.includes('descEl'), 'removed pane description must not retain a runtime reference');
+assert.ok(!style.includes('.active-session-desc') && !style.includes('.minimized-bar'), 'removed description and minimized bars must not retain CSS');
+for (const token of ['--tg-green', '--tg-radius-sm', '--z-window-base', '--z-overlay']) assert.ok(!style.includes(token), `unused CSS token ${token} should stay deleted`);
+assert.ok(!style.includes('.command-center::before') && !style.includes('.command-center::after'), 'disabled command-center gradients should stay deleted');
+assert.ok(!style.includes('.chrome-btn.armed'), 'unused armed button state should stay deleted');
+assert.ok(!html.includes('layout-auto'), 'retired auto-layout class should stay deleted');
+assert.ok(!session.includes('OUTPUT_REPLAY_LIMIT') && !session.includes('appendOutput(') && !session.includes('replayOutput('), 'disabled server output replay must not retain a second output buffer');
+assert.ok(!database.includes('cleanupStaleSessions'), 'unused stale-session cleanup must stay deleted');
+assert.ok(!server.includes('insert: file') && !app.includes('upload?.insert'), 'uploads must expose one canonical path field');
+for (const field of ['minimized', 'windows', 'viewport']) assert.ok(!app.includes(`state.panePrefs.${field}`), `legacy panePrefs.${field} alias must stay read-only`);
+assert.ok(!installer.includes('defaultTheme:') && !installer.includes('projects:'), 'installer must not write ignored config fields');
+assert.ok(!config.includes('configDir: dir') && !config.includes('configPath: file'), 'loaded config must expose only runtime settings');
 assert.ok(!pkg.workspaces, 'fake workspaces should stay deleted');
 assert.ok(!pkg.dependencies.uuid && !pkg.dependencies.open, 'uuid/open packages should stay deleted');
 assert.ok(pkg.scripts.test.includes('tests/browser-cdp.test.js'), 'npm test must keep browser smoke');
 assert.strictEqual(pkg.engines.node, '>=20.0.0', 'runtime contract must match better-sqlite3 Node support');
-for (const script of ['prepare', 'predev', 'preserver', 'prestart']) {
+assert.ok(!pkg.scripts.predev, 'dev must not prepare assets twice through predev and prestart');
+for (const script of ['prepare', 'preserver', 'prestart']) {
   assert.ok(pkg.scripts[script]?.includes('prepare-assets'), `${script} must generate browser vendor assets`);
 }
 assert.ok(html.includes('role="region" aria-labelledby="settingsTitle"'), 'settings must use non-modal region semantics');

@@ -28,7 +28,6 @@ assert.deepStrictEqual(pkg.build.directories, { app: 'packages/electron', output
 assert.deepStrictEqual(pkg.build.files, ['**/*', '!node_modules/**', '!package-lock.json'], 'electron app dir should ship only wrapper files');
 assert.ok(pkg.devDependencies.electron, 'electron devDependency required');
 assert.ok(pkg.devDependencies['electron-builder'], 'electron-builder devDependency required');
-
 assert.ok(main.includes('let mainWindow'), 'main must retain BrowserWindow reference');
 assert.ok(main.includes('PASSIDECK_URL'), 'main must allow URL via env');
 assert.ok(main.includes("const LEGACY_DEV_URL = 'http://42.69.42.44:8792/';") && main.includes('url === LEGACY_DEV_URL ? DEFAULT_URL : url'), 'release portable must migrate the old dev backend URL');
@@ -80,9 +79,20 @@ for (const [name, source] of [['main', main], ['preload', preload], ['shell HTML
 assert.ok(main.includes("view.setBackgroundColor('#020505')"), 'backend views must be opaque');
 assert.ok(
   main.includes("ipcMain.on('passideck:set-notify-blinking'") &&
+  /function setNotifyBlinking[\s\S]*backendIdForSender[\s\S]*config\.notifyBlinking = Boolean\(enabled\)/.test(main) &&
   main.includes('config.notifyBlinking = Boolean(enabled)') &&
-  main.includes('notifyBlinking: config.notifyBlinking'),
+  main.includes('notifyBlinking: entry?.notifyBlinking ?? config.notifyBlinking'),
   'desktop Notify blinking must be sender-validated, persisted, and included in shell state'
+);
+assert.ok(
+  !main.includes('attentionAt') && !main.includes('responsePulse') &&
+  !main.includes('globalSoundEnabled: config.globalSoundEnabled,\n    notifyBlinking: config.notifyBlinking,') &&
+  (main.match(/return shellState\(\);/g) || []).length === 1 && !main.includes('selectedTextForContextMenu') &&
+  !main.includes("require('crypto')") && !main.includes('if (entry) entry.notifyBlinking') &&
+  !shellJs.includes('backend.responsePulse') && !shellJs.includes('tab.dataset.backendId') &&
+  !shellJs.includes('render(await window.passideckShell.setGlobalSoundEnabled') &&
+  !shellHtml.includes('dialog::backdrop'),
+  'Electron cleanup must not retain duplicated shell state, mutation replies, one-use wrappers, or ghost shell styling'
 );
 assert.ok(
   shellJs.includes("backend.notifyBlinking ? ' response-blinking' : ''") &&
@@ -189,7 +199,7 @@ assert.strictEqual(macCleanup.bounceIds.length, 0, 'macOS attention cleanup must
 assert.deepStrictEqual(nativeAttentionCleanupProbe('win32').flashCalls, [false], 'non-macOS attention cleanup must stop taskbar flashing');
 assert.deepStrictEqual(nativeAttentionCleanupProbe('win32', true).flashCalls, [], 'closed Windows cleanup must not call flashFrame on a destroyed BrowserWindow');
 assert.ok(
-  shellJs.includes("backend.attention ? ' attention' : ''") &&
+  shellJs.includes("backend.attention ? ' attention response-pulse' : ''") &&
   shellJs.includes("badge.className = 'response-badge'") &&
   shellJs.includes('new response'),
   'shell tabs must expose a visible and accessible response beacon'

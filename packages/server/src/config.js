@@ -43,9 +43,9 @@ function loadConfig() {
     console.warn('[config] using defaults:', err.message);
   }
 
-  const config = { ...defaultConfig(), ...parsed, configDir: dir, configPath: file };
+  const config = { ...defaultConfig(), ...parsed };
   config.titleGenLlm = normalizeTitleGenLlm(process.env.PASSIDECK_TITLE_GEN_LLM ?? config.titleGenLlm);
   return config;
 }
 
-module.exports = { loadConfig, configDir, configPath, normalizeTitleGenLlm };
+module.exports = { loadConfig, configDir, normalizeTitleGenLlm };

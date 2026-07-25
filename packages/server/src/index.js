@@ -32,7 +32,6 @@ function ensureDatabase() {
   return db;
 }
 
-const UI_LAYOUTS = new Set(['auto', '1x1', '1x2', '2x1', '1x3', '3x1', '1x4', '4x1']);
 const UI_THEMES = new Set(['blue', 'green', 'emerald', 'cyan', 'amber', 'purple', 'red', 'mono']);
 const UI_SKINS = new Set(['neon', 'stealth', 'prism']);
 const UPLOAD_RETENTION_DAYS = 7;
@@ -66,7 +65,7 @@ const CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 300;
 const UPLOAD_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const MAX_DESKTOPS = 3;
 
-const UI_STATE_DEFAULT = { revision: 0, layout: 'auto', baseLayout: 'auto', focusedId: null, primaryId: null, activeId: null, minimized: [], theme: 'blue', skin: 'neon', fontSize: 13, notifyBlinking: true, performanceMode: false, chromeHidden: false, systemMonitor: false, panePrefs: { titles: {}, order: [], minimized: [], windows: {}, viewport: null, desktopOrder: ['desktop-1'], paneDesktop: {}, desktops: { 'desktop-1': { name: 'Desktop 1', minimized: [], windows: {}, viewport: null } } }, updatedAt: null };
+const UI_STATE_DEFAULT = { revision: 0, activeId: null, theme: 'blue', skin: 'neon', fontSize: 13, notifyBlinking: true, performanceMode: false, chromeHidden: false, systemMonitor: false, panePrefs: { titles: {}, order: [], desktopOrder: ['desktop-1'], paneDesktop: {}, desktops: { 'desktop-1': { name: 'Desktop 1', minimized: [], windows: {}, viewport: null } } }, updatedAt: null };
 
 function uiStatePath() {
   return path.join(configDir(), 'ui-state.json');
@@ -107,7 +106,7 @@ function sanitizePanePrefs(input) {
   if (src.desktops && typeof src.desktops === 'object') {
     for (const [id, desktop] of Object.entries(src.desktops)) {
       if (typeof id !== 'string' || !id || id.length > 40 || !desktop || typeof desktop !== 'object') continue;
-      const desktopWindows = sanitizePanePrefs({ windows: { desktop: desktop.windows } }).windows.desktop || {};
+      const desktopWindows = sanitizePanePrefs({ windows: { desktop: desktop.windows } }).desktops['desktop-1'].windows;
       const desktopViewport = desktop.viewport && typeof desktop.viewport === 'object'
         ? { w: Math.max(1, Math.min(20000, Number(desktop.viewport.w) || 0)), h: Math.max(1, Math.min(20000, Number(desktop.viewport.h) || 0)) }
         : null;
@@ -146,20 +145,14 @@ function sanitizePanePrefs(input) {
     }
   }
   for (const paneId of cleanIdList(src.order)) if (!paneDesktop[paneId]) paneDesktop[paneId] = fallbackDesktop;
-  return { titles, order: cleanIdList(src.order), minimized: cleanIdList(src.minimized), windows, viewport: vp, desktopOrder, paneDesktop, desktops };
+  return { titles, order: cleanIdList(src.order), desktopOrder, paneDesktop, desktops };
 }
 
 function sanitizeUiState(input) {
   const src = input && typeof input === 'object' ? input : {};
   const out = { ...UI_STATE_DEFAULT };
   out.revision = Math.max(0, Math.floor(Number(src.revision) || 0));
-  if (UI_LAYOUTS.has(src.layout)) out.layout = src.layout;
-  if (UI_LAYOUTS.has(src.baseLayout) && !['focus', 'half'].includes(src.baseLayout)) out.baseLayout = src.baseLayout;
-  else if (!['focus', 'half'].includes(out.layout)) out.baseLayout = out.layout;
-  if (typeof src.focusedId === 'string' && src.focusedId.length <= 100) out.focusedId = src.focusedId;
-  if (typeof src.primaryId === 'string' && src.primaryId.length <= 100) out.primaryId = src.primaryId;
   if (typeof src.activeId === 'string' && src.activeId.length <= 100) out.activeId = src.activeId;
-  if (Array.isArray(src.minimized)) out.minimized = src.minimized.filter(id => typeof id === 'string' && id.length <= 100).slice(0, 100);
   if (UI_THEMES.has(src.theme)) out.theme = src.theme;
   if (UI_SKINS.has(src.skin)) out.skin = src.skin;
   out.fontSize = Math.max(10, Math.min(24, Number(src.fontSize) || UI_STATE_DEFAULT.fontSize));
@@ -285,8 +278,7 @@ function saveUploadedBlob(input) {
     type: mime,
     size: buffer.length,
     path: file,
-    url: `/uploads${rel}`,
-    insert: file
+    url: `/uploads${rel}`
   };
 }
 
@@ -896,7 +888,6 @@ function attachTmux(session) {
   session.meta.status = 'active';
   term.onData((data) => {
     const normalized = normalizeTerminalOutput(data);
-    session.appendOutput(normalized);
     session.broadcast({ type: 'output', data: normalized });
   });
   term.onExit(({ exitCode, signal }) => {

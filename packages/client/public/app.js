@@ -42,8 +42,6 @@ function terminalTheme(name) {
 const state = {
   sessions: new Map(),
   order: [],
-  layout: 'auto',
-  activeLayout: 'auto',
   activeId: null,
   theme: 'blue',
   skin: 'neon',
@@ -78,7 +76,7 @@ const state = {
   lastUiState: null,
   uiEvents: null,
   activeDesktopId: 'desktop-1',
-  panePrefs: { titles: {}, order: [], windows: {}, desktopOrder: ['desktop-1'], paneDesktop: {}, desktops: { 'desktop-1': { name: 'Desktop 1', minimized: [], windows: {}, viewport: null } } }
+  panePrefs: { titles: {}, order: [], desktopOrder: ['desktop-1'], paneDesktop: {}, desktops: { 'desktop-1': { name: 'Desktop 1', minimized: [], windows: {}, viewport: null } } }
 };
 
 const DESKTOP_VIEW_KEY = 'passideck:desktop-view:v1';
@@ -349,20 +347,10 @@ async function api(method, path, body) {
 }
 
 
-function slotKey(layout = state.layout) {
-  return 'desktop';
-}
-
 function windowPrefs(desktopId = state.activeDesktopId) {
   const resolvedDesktopId = state.panePrefs.desktops[desktopId] ? desktopId : state.panePrefs.desktopOrder[0];
   const desktop = state.panePrefs.desktops[resolvedDesktopId];
-  if (resolvedDesktopId === state.panePrefs.desktopOrder[0]) {
-    state.panePrefs.windows = state.panePrefs.windows && typeof state.panePrefs.windows === 'object' ? state.panePrefs.windows : {};
-    state.panePrefs.windows.desktop = state.panePrefs.windows.desktop || desktop.windows || {};
-    desktop.windows = state.panePrefs.windows.desktop;
-  } else {
-    desktop.windows = desktop.windows && typeof desktop.windows === 'object' ? desktop.windows : {};
-  }
+  desktop.windows = desktop.windows && typeof desktop.windows === 'object' ? desktop.windows : {};
   return desktop.windows;
 }
 
@@ -413,12 +401,6 @@ function responsiveMinimizeForViewport() {
   }
 }
 
-
-function rectOverlap(a, b) {
-  const x = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
-  const y = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
-  return x * y;
-}
 
 function rectCoveredArea(rect, blockers) {
   const covered = blockers.map(blocker => ({
@@ -600,13 +582,6 @@ function clampWindowRect(rect = {}) {
     h,
     z: Number(rect.z) > 0 && Number(rect.z) < 10000 ? Number(rect.z) : nextWindowZ()
   };
-}
-
-function clampWindowPrefs(prefs = windowPrefs()) {
-  for (const [id, rect] of Object.entries(prefs)) {
-    prefs[id] = clampWindowRect(rect);
-  }
-  return prefs;
 }
 
 function renderWindowRect(rect = {}) {
@@ -1104,11 +1079,6 @@ function applyLayoutVisibility() {
   const hidden = document.getElementById('hiddenPanes');
   if (!grid || !hidden) return;
   grid.className = 'grid-container layout-desktop';
-  grid.dataset.layout = 'desktop';
-  grid.dataset.activeLayout = 'desktop';
-  grid.style.gridTemplateColumns = '';
-  grid.style.gridTemplateRows = '';
-  grid.querySelectorAll('.empty-slot, .resize-gutter, .drop-placeholder').forEach(el => el.remove());
   clearDesktopSlotSuggestions();
   clearSharedResizeHandles();
   clearLayoutAssist();
@@ -1134,10 +1104,7 @@ function persistentMinimizedIds() {
 function uiPayload() {
   return {
     revision: state.uiRevision,
-    layout: state.activeLayout,
-    baseLayout: state.layout,
     activeId: state.activeId,
-    minimized: persistentMinimizedIds(),
     theme: state.theme,
     skin: state.skin,
     fontSize: state.fontSize,
@@ -1317,7 +1284,7 @@ function minimizePanel(id) {
   entry.el.classList.add('minimized');
   state.responsiveMinimized.delete(id);
   state.minimized.add(id);
-  updateMinimizedBar();
+  renderSwitcher();
   applyLayoutVisibility();
   savePanePrefs();
   scheduleTerminalFit();
@@ -1330,7 +1297,7 @@ function restorePanel(id) {
   state.responsiveMinimized.delete(id);
   state.minimized.delete(id);
   ensureFreeWindow(id);
-  updateMinimizedBar();
+  renderSwitcher();
   applyLayoutVisibility();
   selectPanel(id, { persist: false });
   savePanePrefs();
@@ -1340,10 +1307,6 @@ function restorePanel(id) {
   scheduleTerminalFit();
 }
 
-function updateMinimizedBar() {
-  // ponytail: minimized panes already live in the top switcher; no second bar.
-  renderSwitcher();
-}
 
 /* ── Close Confirmation ── */
 function setTheme(theme, opts = {}) {
@@ -2183,7 +2146,6 @@ function loadPanePrefs(prefs = {}) {
   const desktopOrder = Array.isArray(prefs.desktopOrder) ? prefs.desktopOrder.filter(id => desktops[id]) : [];
   for (const id of Object.keys(desktops)) if (!desktopOrder.includes(id)) desktopOrder.push(id);
   normalizeDesktopNames(desktops, desktopOrder);
-  const firstDesktop = desktops[desktopOrder[0]];
   const fallbackDesktop = desktopOrder[0] || 'desktop-1';
   const order = Array.isArray(prefs.order) ? prefs.order.filter(id => typeof id === 'string') : [];
   const paneDesktop = prefs.paneDesktop && typeof prefs.paneDesktop === 'object' ? { ...prefs.paneDesktop } : {};
@@ -2191,9 +2153,6 @@ function loadPanePrefs(prefs = {}) {
   state.panePrefs = {
     titles: prefs.titles && typeof prefs.titles === 'object' ? prefs.titles : {},
     order,
-    minimized: Array.isArray(firstDesktop.minimized) ? firstDesktop.minimized : [],
-    windows: { desktop: firstDesktop.windows || {} },
-    viewport: firstDesktop.viewport || null,
     desktopOrder,
     paneDesktop,
     desktops
@@ -2253,7 +2212,6 @@ function applyAuthoritativeUiState(ui, opts = {}) {
   }
   responsiveMinimizeForViewport();
   applyLayoutVisibility();
-  updateMinimizedBar();
   const localActiveValid = localActiveId && state.sessions.has(localActiveId) &&
     state.panePrefs.paneDesktop[localActiveId] === state.activeDesktopId && !state.minimized.has(localActiveId);
   const remoteActiveValid = ui.activeId && state.sessions.has(ui.activeId) &&
@@ -2296,13 +2254,7 @@ function savePanePrefs() {
   state.panePrefs.order = state.order.slice();
   const desktop = activeDesktop();
   desktop.minimized = persistentMinimizedIds().filter(id => state.panePrefs.paneDesktop[id] === state.activeDesktopId && state.sessions.has(id));
-  state.panePrefs.windows = state.panePrefs.windows && typeof state.panePrefs.windows === 'object' ? state.panePrefs.windows : {};
   if (innerWidth > 900) desktop.viewport = desktopSize();
-  if (state.activeDesktopId === state.panePrefs.desktopOrder[0]) {
-    state.panePrefs.minimized = desktop.minimized;
-    state.panePrefs.windows.desktop = desktop.windows;
-    state.panePrefs.viewport = desktop.viewport || null;
-  }
   const prefs = windowPrefs();
   for (const id of Object.keys(prefs)) {
     if (!state.sessions.has(id) || state.panePrefs.paneDesktop[id] !== state.activeDesktopId) delete prefs[id];
@@ -2353,10 +2305,6 @@ function generatedTitleFromSession(session) {
   return String(entry?.autoTitle || session?.meta?.title || session?.title || '').trim();
 }
 
-function visibleTopbarDescription(session) {
-  if (!session) return 'No session';
-  return sessionDescription(session) || panelTitle(session);
-}
 
 function terminalLineText(row) {
   return typeof row === 'string' ? row : String(row?.text || '');
@@ -2513,7 +2461,6 @@ function clearGeneratedTitle(id, opts = {}) {
   const titleEl = entry.el.querySelector('.term-title');
   if (titleEl && document.activeElement !== titleEl) titleEl.textContent = panelTitle(entry.session);
   renderSwitcher();
-  updateMinimizedBar();
   return true;
 }
 
@@ -2529,7 +2476,6 @@ function applyGeneratedTitle(id, title, opts = {}) {
   const titleEl = entry.el.querySelector('.term-title');
   if (titleEl && document.activeElement !== titleEl) titleEl.textContent = clean;
   renderSwitcher();
-  updateMinimizedBar();
   return true;
 }
 
@@ -2909,7 +2855,6 @@ function createPanel(session, opts = {}) {
     <div class="term-header">
       <span class="connection-dot" data-tooltip="Reconnecting" aria-label="Reconnecting"></span>
       <span class="term-title" contenteditable="true" spellcheck="false" aria-label="Window name">${escapeHtml(panelTitle(session))}</span>
-      <span class="term-session-desc" hidden></span>
       <div class="term-actions">
         <button class="arrange" data-tooltip="Arrange" aria-label="Arrange">▦</button>
         <button class="minimize" data-tooltip="Minimize" aria-label="Minimize">−</button>
@@ -2930,11 +2875,9 @@ function createPanel(session, opts = {}) {
   el.addEventListener('mousedown', () => clearResponseAttention(id));
 
   const titleEl = el.querySelector('.term-title');
-  const descEl = el.querySelector('.term-session-desc');
   const headerEl = el.querySelector('.term-header');
   const [arrangeBtn, minBtn, closeBtn] = el.querySelectorAll('button');
   setTooltip(headerEl, sessionDescription(session));
-  if (descEl && !descEl.textContent.trim()) descEl.hidden = true;
   arrangeBtn.dataset.paneId = id;
   minBtn.dataset.paneId = id;
   closeBtn.dataset.paneId = id;
@@ -2949,7 +2892,6 @@ function createPanel(session, opts = {}) {
     titleEl.textContent = panelTitle(session);
     savePanePrefs();
     renderSwitcher();
-    updateMinimizedBar();
   });
   titleEl.addEventListener('dblclick', e => { e.stopPropagation(); titleEl.dataset.editing = '1'; titleEl.focus(); });
   titleEl.addEventListener('blur', () => { delete titleEl.dataset.editing; });
@@ -3046,7 +2988,7 @@ function createPanel(session, opts = {}) {
     state.order.push(replaceId);
     state.minimized.add(replaceId);
     state.sessions.get(replaceId)?.el.classList.add('minimized');
-    updateMinimizedBar();
+    renderSwitcher();
   } else {
     state.order.push(id);
   }
@@ -3345,21 +3287,12 @@ function createDesktop() {
 
 function performDeleteDesktop(id) {
   if (state.panePrefs.desktopOrder.length <= 1 || !state.panePrefs.desktops[id]) return;
-  const deletingFirst = state.panePrefs.desktopOrder[0] === id;
   const paneIds = state.order.filter(paneId => state.panePrefs.paneDesktop[paneId] === id);
   const fallback = state.panePrefs.desktopOrder.find(desktopId => desktopId !== id);
   if (state.activeDesktopId === id) selectDesktop(fallback);
   for (const paneId of paneIds) movePaneToDesktop(paneId, fallback);
   delete state.panePrefs.desktops[id];
   state.panePrefs.desktopOrder = state.panePrefs.desktopOrder.filter(desktopId => desktopId !== id);
-  if (deletingFirst) {
-    const first = state.panePrefs.desktops[state.panePrefs.desktopOrder[0]];
-    first.windows = first.windows && typeof first.windows === 'object' ? first.windows : {};
-    state.panePrefs.windows = state.panePrefs.windows && typeof state.panePrefs.windows === 'object' ? state.panePrefs.windows : {};
-    state.panePrefs.windows.desktop = first.windows;
-    state.panePrefs.minimized = Array.isArray(first.minimized) ? first.minimized : [];
-    state.panePrefs.viewport = first.viewport || null;
-  }
   renderSwitcher();
   savePanePrefs();
 }
@@ -3406,13 +3339,6 @@ function renderDesktops() {
 function renderSwitcher() {
   renderDesktops();
   state.order = state.order.filter(id => state.sessions.has(id));
-  const desc = document.getElementById('activeSessionDescription');
-  const entry = state.activeId ? state.sessions.get(state.activeId) : null;
-  const text = entry ? visibleTopbarDescription(entry.session) : 'No session';
-  if (desc) {
-    desc.textContent = text;
-    setTooltip(desc, text);
-  }
   const switcher = document.getElementById('sessionSwitcher');
   if (!switcher) return;
   switcher.replaceChildren();
@@ -3522,7 +3448,6 @@ function discardPanel(id, opts = {}) {
   }
   updateEmpty();
   renderSwitcher();
-  updateMinimizedBar();
   if (state.activeId) selectPanel(state.activeId, { persist: false });
   responsiveMinimizeForViewport();
   applyLayoutVisibility();
@@ -3670,7 +3595,7 @@ function isHermesTuiEntry(entry) {
 }
 
 function uploadInsertion(upload, entry) {
-  const path = upload?.insert || upload?.path || '';
+  const path = upload?.path || '';
   if (String(upload?.type || '').startsWith('image/') && isHermesTuiEntry(entry)) return `\x01/image ${path}\r`;
   return `\x1b[200~${String(path).replace(/\x1b/g, '')} \x1b[201~`;
 }
@@ -3771,9 +3696,6 @@ function letBrowserOwnTerminalPasteShortcut(event) {
   event.stopImmediatePropagation();
 }
 
-function handleUploadPaste(event) {
-  handleTerminalPaste(event);
-}
 
 function handleUploadDragOver(event) {
   if (!event.dataTransfer?.files?.length) return;
@@ -3836,14 +3758,12 @@ async function init() {
   sessions.forEach(createPanel);
   restorePanelOrder();
 
-  state.layout = 'auto';
   scheduleTerminalFit();
 
   state.minimized = new Set((activeDesktop().minimized || []).filter(id => state.sessions.has(id)));
   state.minimized.forEach(id => state.sessions.get(id)?.el.classList.add('minimized'));
   responsiveMinimizeForViewport();
   applyLayoutVisibility();
-  updateMinimizedBar();
 
   const firstDesktopPane = desktopPaneIds().find(id => !state.minimized.has(id));
   if (!selectAuthoritativePane(ui?.activeId) && firstDesktopPane) selectPanel(firstDesktopPane, { persist: false });

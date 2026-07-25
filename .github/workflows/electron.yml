@@ -28,7 +28,6 @@ jobs:
       - run: node --check packages/client/public/app.js
       - run: node --check packages/electron/main.js
       - run: node --check packages/electron/preload.js
-      - run: npm run prepare-assets
       - run: node tests/ui-static.test.js
       - run: npm run test:electron
       - run: npm run dist:electron:win

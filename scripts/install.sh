@@ -10,7 +10,6 @@ command -v node >/dev/null
 command -v npm >/dev/null
 command -v tmux >/dev/null
 npm install
-npm run prepare-assets
 if command -v hermes >/dev/null; then
   HERMES_HOME_DIR="$(dirname "$(hermes config path)")"
   PLUGIN_DIR="$HERMES_HOME_DIR/plugins/passideck-retitle"
@@ -27,8 +26,6 @@ if [ ! -f "$HOME_DIR/config.yaml" ]; then
 host: $HOST
 port: $PORT
 shell: /bin/bash
-defaultTheme: tokyo-night
-projects: {}
 YAML
 fi
 quote_env() {

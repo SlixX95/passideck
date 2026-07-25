@@ -1,15 +1,12 @@
 const { randomUUID } = require('crypto');
 const os = require('os');
 
-const OUTPUT_REPLAY_LIMIT = 128 * 1024;
-
 class Session {
   constructor(options = {}) {
     this.id = options.id || randomUUID();
     this.pty = null;
     this.pid = null;
     this.clients = new Set();
-    this._outputBuffer = '';
     this.meta = {
       label: options.label || options.command || 'Terminal',
       command: options.command || '',
@@ -22,17 +19,6 @@ class Session {
       cols: options.cols || 120,
       rows: options.rows || 30
     };
-  }
-
-  appendOutput(data) {
-    this._outputBuffer += data;
-    if (this._outputBuffer.length > OUTPUT_REPLAY_LIMIT) {
-      this._outputBuffer = this._outputBuffer.slice(-OUTPUT_REPLAY_LIMIT);
-    }
-  }
-
-  replayOutput() {
-    return this._outputBuffer.slice(-OUTPUT_REPLAY_LIMIT);
   }
 
   broadcast(message) {

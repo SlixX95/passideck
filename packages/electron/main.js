@@ -1,7 +1,6 @@
 const { app, BrowserWindow, Menu, WebContentsView, clipboard, ipcMain, shell, webContents } = require('electron');
 const fs = require('fs');
 const path = require('path');
-const { randomUUID } = require('crypto');
 const { normalizeBackend, normalizeConfig, normalizeUrl } = require('./backend-profiles');
 
 const LEGACY_DEV_URL = 'http://42.69.42.44:8792/';
@@ -60,15 +59,12 @@ function shellState() {
   return {
     activeBackendId: config.activeBackendId,
     globalSoundEnabled: config.globalSoundEnabled,
-    notifyBlinking: config.notifyBlinking,
     backends: config.backends.map(backend => {
       const entry = backendViews.get(backend.id);
       return {
         ...backend,
         status: entry?.status || 'loading',
         attention: Boolean(entry?.attention),
-        attentionAt: entry?.attentionAt || 0,
-        responsePulse: Boolean(entry?.responsePulse),
         hiddenDesktopAttention: Boolean(entry?.hiddenDesktopAttention),
         notifyBlinking: entry?.notifyBlinking ?? config.notifyBlinking
       };
@@ -82,10 +78,8 @@ function notifyShell() {
 
 function clearBackendAttention(id, notify = true) {
   const entry = backendViews.get(id);
-  if (!entry || (!entry.attention && !entry.responsePulse && !entry.hiddenDesktopAttention)) return;
+  if (!entry || (!entry.attention && !entry.hiddenDesktopAttention)) return;
   entry.attention = false;
-  entry.attentionAt = 0;
-  entry.responsePulse = false;
   entry.hiddenDesktopAttention = false;
   if (notify) notifyShell();
 }
@@ -141,8 +135,6 @@ function markBackendResponseComplete(id, details = {}) {
   if (!entry || !mainWindow || mainWindow.isDestroyed()) return;
   requestNativeAttention();
   entry.attention = true;
-  entry.attentionAt = Date.now();
-  entry.responsePulse = true;
   entry.hiddenDesktopAttention ||= details?.hiddenDesktop === true;
   notifyShell();
 }
@@ -196,13 +188,12 @@ function setGlobalSoundEnabled(enabled) {
   for (const { view } of backendViews.values()) view.webContents.setAudioMuted(!config.globalSoundEnabled);
   writeConfig();
   notifyShell();
-  return shellState();
 }
 
-async function setNotifyBlinking(event, enabled) {
+function setNotifyBlinking(event, enabled) {
   const entry = backendViews.get(backendIdForSender(event));
   config.notifyBlinking = Boolean(enabled);
-  if (entry) entry.notifyBlinking = config.notifyBlinking;
+  entry.notifyBlinking = config.notifyBlinking;
   writeConfig();
   notifyShell();
 }
@@ -215,19 +206,15 @@ function activeUiHidden(toggle = false) {
   );
 }
 
-async function selectedTextForContextMenu(webContents, params) {
-  if (params.selectionText) return params.selectionText;
-  try {
-    return await webContents.executeJavaScript(
-      `typeof activeTerminalEntry === 'function' ? (() => { const entry = activeTerminalEntry(); return entry?.term ? entry.term.getSelection() : ''; })() : ''`
-    );
-  } catch {
-    return '';
-  }
-}
-
 async function copySelectionOnContextMenu(webContents, params) {
-  const selectedText = await selectedTextForContextMenu(webContents, params);
+  let selectedText = params.selectionText;
+  if (!selectedText) {
+    try {
+      selectedText = await webContents.executeJavaScript(
+        `typeof activeTerminalEntry === 'function' ? (() => { const entry = activeTerminalEntry(); return entry?.term ? entry.term.getSelection() : ''; })() : ''`
+      );
+    } catch {}
+  }
   if (!selectedText) return;
   clipboard.writeText(selectedText);
   try {
@@ -289,12 +276,11 @@ function selectBackend(id) {
   }
   writeConfig();
   notifyShell();
-  return shellState();
 }
 
 function saveBackend(value) {
   const existing = config.backends.find(item => item.id === value?.id);
-  const backend = normalizeBackend({ ...value, id: existing?.id || randomUUID() }, existing);
+  const backend = normalizeBackend({ ...value, id: existing?.id }, existing);
   if (existing) {
     Object.assign(existing, backend);
     const entry = backendViews.get(existing.id);
@@ -305,7 +291,6 @@ function saveBackend(value) {
   }
   writeConfig();
   notifyShell();
-  return shellState();
 }
 
 function removeBackend(id) {
@@ -323,7 +308,6 @@ function removeBackend(id) {
   if (wasActive) return selectBackend(config.backends[Math.min(index, config.backends.length - 1)].id);
   writeConfig();
   notifyShell();
-  return shellState();
 }
 
 function assertShellSender(event) {
