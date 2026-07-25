@@ -63,21 +63,23 @@ def _message_text(message: Any) -> str:
 def _build_title_context(user_message: str, conversation_history: Any, current_title: str = "") -> str:
     messages = []
     for message in conversation_history if isinstance(conversation_history, list) else []:
-        if isinstance(message, dict) and message.get("role") == "user":
-            text = _message_text(message)
-            if text:
-                messages.append(text)
+        role = message.get("role") if isinstance(message, dict) else ""
+        if role not in {"user", "assistant"}:
+            continue
+        text = _message_text(message)
+        if text:
+            messages.append((role, text))
     latest = _clean_text(user_message)
-    if latest and (not messages or messages[-1] != latest):
-        messages.append(latest)
-    original_goal = messages[0] if messages else latest
-    recent = messages[-4:]
+    if latest and (not messages or messages[-1] != ("user", latest)):
+        messages.append(("user", latest))
+    initial_topic = next((text for role, text in messages if role == "user"), latest)
+    recent = messages[-8:]
 
-    lines = ["Original session goal:", f"- {original_goal[:900]}"]
+    lines = ["Initial topic (background only):", f"- {initial_topic[:600]}"]
     if current_title:
         lines.append(f"Current title: {_clean_text(current_title)[:_TITLE_LIMIT]}")
-    lines.append("Recent user requests:")
-    lines.extend(f"- {message[:450]}" for message in recent)
+    lines.append("Recent conversation (latest context is authoritative):")
+    lines.extend(f"{role.title()}: {text[:240]}" for role, text in recent)
     context = "\n".join(lines)
     return context[:_CONTEXT_LIMIT]
 
@@ -125,11 +127,14 @@ def _call_title_model(context: str) -> str:
             {
                 "role": "system",
                 "content": (
-                    "Generate a stable title for this conversation's main objective in 3-7 words. "
-                    "Treat the Original session goal and Current title as anchors. "
-                    "Do not replace the main topic with a temporary subtask, implementation detail, "
-                    "status check, or tangent. Keep the current title when the main objective has not "
-                    "materially changed; update it only when the user clearly changes that objective. "
+                    "Generate a concise dynamic title for the conversation's currently active main work "
+                    "in 3-7 words. Use the latest clear user intent as the primary signal, and interpret "
+                    "short or ambiguous follow-ups using the adjacent assistant response and recent "
+                    "conversation. Treat the Initial topic and Current title as continuity and project "
+                    "identity, not fixed anchors. Refresh the action and scope when the active work evolves, "
+                    "and replace the title fully on a clear topic shift. Ignore temporary implementation "
+                    "details, status checks, tool output, and tangents unless they become the main task. "
+                    "Prefer 'Project: action or scope' when a project is identifiable. "
                     f"{language_rule}Return only the title, without quotes, prefix, or trailing punctuation."
                 ),
             },
