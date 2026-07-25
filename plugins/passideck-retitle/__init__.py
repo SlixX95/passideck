@@ -24,6 +24,18 @@ _DEFAULT_ENDPOINT = "http://127.0.0.1:8791/internal/session-title"
 _TITLE_LIMIT = 80
 _CONTEXT_LIMIT = 3000
 _INSTANCE_EPOCH = time.time_ns()
+_COMPACTION_PREFIX = "[CONTEXT COMPACTION — REFERENCE ONLY]"
+_SYNTHETIC_USER_PREFIXES = (
+    _COMPACTION_PREFIX,
+    "[Your active task list was preserved across context compression]",
+    "[ASYNC DELEGATION BATCH COMPLETE —",
+    "[ASYNC DELEGATION COMPLETE —",
+    "[IMPORTANT: Background process ",
+    "[System: Your previous response was truncated",
+    "[System: The previous response was cut off",
+    "[System: Your previous tool call",
+    "[System: Your previous response contained only internal reasoning",
+)
 
 _lock = threading.Lock()
 _versions: dict[str, int] = {}
@@ -60,25 +72,67 @@ def _message_text(message: Any) -> str:
     return ""
 
 
+def _is_synthetic_user_message(text: str) -> bool:
+    return _clean_text(text).startswith(_SYNTHETIC_USER_PREFIXES)
+
+
+def _is_delegated_child() -> bool:
+    try:
+        from agent.delegation_context import is_delegated_child_process_context
+
+        return is_delegated_child_process_context()
+    except Exception:
+        return bool(os.environ.get("HERMES_DELEGATED_CHILD_CONTEXT"))
+
+
+def _compaction_goal(message: Any) -> str:
+    if not isinstance(message, dict):
+        return ""
+    content = message.get("content", "")
+    if not isinstance(content, str) or not content.lstrip().startswith(_COMPACTION_PREFIX):
+        return ""
+    match = re.search(r"(?ms)^## Goal\s*$\n(.*?)(?=^## |\Z)", content)
+    return _clean_text(match.group(1)) if match else ""
+
+
 def _build_title_context(user_message: str, conversation_history: Any, current_title: str = "") -> str:
     messages = []
+    session_objective = ""
+    objective_from_compaction = False
     for message in conversation_history if isinstance(conversation_history, list) else []:
         role = message.get("role") if isinstance(message, dict) else ""
         if role not in {"user", "assistant"}:
             continue
+        compacted_goal = _compaction_goal(message)
+        if compacted_goal:
+            session_objective = compacted_goal
+            objective_from_compaction = True
         text = _message_text(message)
-        if text:
+        if text and not _is_synthetic_user_message(text):
             messages.append((role, text))
     latest = _clean_text(user_message)
-    if latest and (not messages or messages[-1] != ("user", latest)):
+    if (
+        latest
+        and not _is_synthetic_user_message(latest)
+        and (not messages or messages[-1] != ("user", latest))
+    ):
         messages.append(("user", latest))
-    initial_topic = next((text for role, text in messages if role == "user"), latest)
-    recent = messages[-8:]
+    if not session_objective:
+        session_objective = next((text for role, text in messages if role == "user"), latest)
+    recent = (
+        [message for message in messages if message[0] == "user"][-2:]
+        if objective_from_compaction
+        else messages[-8:]
+    )
 
-    lines = ["Initial topic (background only):", f"- {initial_topic[:600]}"]
-    if current_title:
-        lines.append(f"Current title: {_clean_text(current_title)[:_TITLE_LIMIT]}")
-    lines.append("Recent conversation (latest context is authoritative):")
+    lines = ["Session objective (authoritative overall scope):", f"- {session_objective[:900]}"]
+    if current_title and not objective_from_compaction:
+        lines.append(f"Current title (continuity clue only): {_clean_text(current_title)[:_TITLE_LIMIT]}")
+    lines.append(
+        "Recent user request (current phase unless clearly unrelated):"
+        if objective_from_compaction
+        else "Recent conversation (supporting context):"
+    )
     lines.extend(f"{role.title()}: {text[:240]}" for role, text in recent)
     context = "\n".join(lines)
     return context[:_CONTEXT_LIMIT]
@@ -127,14 +181,12 @@ def _call_title_model(context: str) -> str:
             {
                 "role": "system",
                 "content": (
-                    "Generate a concise dynamic title for the conversation's currently active main work "
-                    "in 3-7 words. Use the latest clear user intent as the primary signal, and interpret "
-                    "short or ambiguous follow-ups using the adjacent assistant response and recent "
-                    "conversation. Treat the Initial topic and Current title as continuity and project "
-                    "identity, not fixed anchors. Refresh the action and scope when the active work evolves, "
-                    "and replace the title fully on a clear topic shift. Ignore temporary implementation "
-                    "details, status checks, tool output, and tangents unless they become the main task. "
-                    "Prefer 'Project: action or scope' when a project is identifiable. "
+                    "Create a concise dynamic title in 3-7 words. Summarize the COMPLETE authoritative Session objective, "
+                    "including every major stage of one multi-stage objective. If the recent request is a phase already named "
+                    "in the Session objective, keep the broader objective. Compress stages into short category words instead "
+                    "of dropping them. Use recent conversation only to interpret a brief follow-up or an explicit replacement "
+                    "objective. Describe the work itself, never merely a status or result. "
+                    "Prefer '<actual project name>: scopes' when a project is identifiable; never use a generic label. "
                     f"{language_rule}Return only the title, without quotes, prefix, or trailing punctuation."
                 ),
             },
@@ -199,10 +251,13 @@ def _worker(pane_id: str) -> None:
 
 
 def on_pre_llm_call(**kwargs: Any) -> None:
+    if _is_delegated_child():
+        return None
+
     pane_id = os.environ.get("PASSIDECK_SESSION", "").strip()
     mode = os.environ.get("PASSIDECK_TITLE_GEN_LLM", _MODE).strip().lower()
     user_message = _clean_text(kwargs.get("user_message", ""))
-    if not pane_id or mode != _MODE or not user_message:
+    if not pane_id or mode != _MODE or not user_message or _is_synthetic_user_message(user_message):
         return None
 
     hermes_session_id = _clean_text(kwargs.get("session_id", ""))[:160]
@@ -232,6 +287,9 @@ def on_pre_llm_call(**kwargs: Any) -> None:
 
 
 def on_session_reset(**kwargs: Any) -> None:
+    if _is_delegated_child():
+        return None
+
     pane_id = os.environ.get("PASSIDECK_SESSION", "").strip()
     mode = os.environ.get("PASSIDECK_TITLE_GEN_LLM", _MODE).strip().lower()
     hermes_session_id = _clean_text(kwargs.get("session_id", ""))[:160]

@@ -25,6 +25,7 @@ class PassiDeckRetitlePluginTests(unittest.TestCase):
             "PASSIDECK_SESSION": "pane-1",
             "PASSIDECK_TITLE_GEN_LLM": "host_aux_title",
             "PASSIDECK_TITLE_ENDPOINT": "http://127.0.0.1:8791/internal/session-title",
+            "HERMES_DELEGATED_CHILD_CONTEXT": "",
         }, clear=False)
         self.env.start()
 
@@ -58,7 +59,7 @@ class PassiDeckRetitlePluginTests(unittest.TestCase):
             "pane-1", "hermes-1", "Dynamic session retitling", "model", 1
         ))
 
-    def test_title_context_keeps_recent_dialogue_and_initial_topic_as_background(self):
+    def test_title_context_keeps_session_objective_and_recent_dialogue(self):
         plugin = load_plugin()
         history = [
             {"role": "user", "content": "Improve PassiDeck session retitling"},
@@ -75,12 +76,129 @@ class PassiDeckRetitlePluginTests(unittest.TestCase):
             "PassiDeck Session Retitling",
         )
 
-        self.assertIn("Initial topic (background only):\n- Improve PassiDeck session retitling", context)
-        self.assertIn("Current title: PassiDeck Session Retitling", context)
-        self.assertIn("Recent conversation (latest context is authoritative):", context)
+        self.assertIn("Session objective (authoritative overall scope):\n- Improve PassiDeck session retitling", context)
+        self.assertIn("Current title (continuity clue only): PassiDeck Session Retitling", context)
+        self.assertIn("Recent conversation (supporting context):", context)
         self.assertIn("Assistant: Dialogue turn 2", context)
         self.assertIn("User: Yes, apply that improvement", context)
         self.assertNotIn("Dialogue turn 1", context)
+
+    def test_title_context_recovers_goal_after_compaction(self):
+        plugin = load_plugin()
+        compaction = """[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted.
+## Historical Task Snapshot
+An async review finished without findings.
+
+## Goal
+Audit and simplify PassiDeck, then roll it out to the MiniPC and all backends.
+
+## Constraints & Preferences
+- Preserve active sessions.
+"""
+        history = [
+            {"role": "user", "content": compaction},
+            {"role": "assistant", "content": "The staged review completed without findings."},
+            {"role": "user", "content": "Okay, now deploy the app and update all backends."},
+        ]
+
+        context = plugin._build_title_context(
+            "Okay, now deploy the app and update all backends.",
+            history,
+            "Completed staged review",
+        )
+
+        self.assertIn(
+            "Session objective (authoritative overall scope):\n- Audit and simplify PassiDeck, then roll it out to the MiniPC and all backends.",
+            context,
+        )
+        self.assertNotIn("CONTEXT COMPACTION", context)
+        self.assertNotIn("Historical Task Snapshot", context)
+        self.assertNotIn("Completed staged review", context)
+        self.assertNotIn("staged review completed", context)
+        self.assertIn("Recent user request (current phase unless clearly unrelated):", context)
+        self.assertEqual(context.count("Okay, now deploy the app and update all backends."), 1)
+
+    def test_title_context_recovers_goal_from_assistant_compaction(self):
+        plugin = load_plugin()
+        compaction = """[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted.
+## Goal
+Keep the complete PassiDeck audit and rollout objective.
+
+## Constraints
+- Preserve context.
+"""
+
+        context = plugin._build_title_context(
+            "Continue the rollout.",
+            [{"role": "assistant", "content": compaction}],
+            "Latest rollout phase",
+        )
+
+        self.assertIn(
+            "Session objective (authoritative overall scope):\n- Keep the complete PassiDeck audit and rollout objective.",
+            context,
+        )
+        self.assertNotIn("CONTEXT COMPACTION", context)
+        self.assertNotIn("Latest rollout phase", context)
+
+    def test_repeated_user_request_is_kept_as_latest_context(self):
+        plugin = load_plugin()
+        repeated = "Deploy PassiDeck to every backend."
+        history = [
+            {"role": "user", "content": repeated},
+            {"role": "assistant", "content": "The first rollout completed."},
+        ]
+
+        context = plugin._build_title_context(repeated, history)
+
+        self.assertEqual(context.splitlines()[-1], f"User: {repeated}")
+
+    def test_synthetic_messages_do_not_retitle_the_pane(self):
+        plugin = load_plugin()
+        plugin._post_title = lambda *_args: self.fail("synthetic turns must not post titles")
+        plugin._call_title_model = lambda _context: self.fail("synthetic turns must not call the title model")
+
+        for message in (
+            "[ASYNC DELEGATION BATCH COMPLETE — deleg_123]\nReview passed without findings.",
+            "[System: Your previous response contained only internal reasoning and never produced a visible answer.",
+        ):
+            plugin.on_pre_llm_call(
+                session_id="hermes-1",
+                user_message=message,
+                conversation_history=[],
+                is_first_turn=False,
+            )
+
+        self.assertNotIn("pane-1", plugin._versions)
+
+    def test_delegated_child_does_not_retitle_the_parent_pane(self):
+        with patch.dict(os.environ, {"HERMES_DELEGATED_CHILD_CONTEXT": "1"}):
+            plugin = load_plugin()
+            plugin._post_title = lambda *_args: self.fail("delegated children must not post parent-pane titles")
+            plugin._call_title_model = lambda _context: self.fail("delegated children must not call the title model")
+
+            plugin.on_pre_llm_call(
+                session_id="child-session",
+                user_message="Review the staged diff and report findings.",
+                conversation_history=[],
+                is_first_turn=True,
+            )
+            plugin.on_session_reset(session_id="child-session-reset")
+
+        self.assertNotIn("pane-1", plugin._versions)
+
+    def test_same_process_delegation_context_is_detected(self):
+        agent_module = types.ModuleType("agent")
+        agent_module.__path__ = []
+        delegation_module = types.ModuleType("agent.delegation_context")
+        setattr(delegation_module, "is_delegated_child_process_context", lambda: True)
+
+        with patch.dict(
+            sys.modules,
+            {"agent": agent_module, "agent.delegation_context": delegation_module},
+        ):
+            plugin = load_plugin()
+            self.assertTrue(plugin._is_delegated_child())
 
     def test_latest_prompt_wins_without_parallel_model_calls(self):
         plugin = load_plugin()
@@ -238,9 +356,12 @@ class PassiDeckRetitlePluginTests(unittest.TestCase):
         self.assertIsNone(recorded.get("provider"), "the plugin must not bring or select its own provider")
         self.assertIsNone(recorded.get("model"), "Hermes must resolve the user's configured title auxiliary model")
         self.assertIn("Write the title in English", recorded["messages"][0]["content"])
-        self.assertIn("latest clear user intent", recorded["messages"][0]["content"])
-        self.assertIn("adjacent assistant response", recorded["messages"][0]["content"])
-        self.assertIn("not fixed anchors", recorded["messages"][0]["content"])
+        self.assertIn("COMPLETE authoritative Session objective", recorded["messages"][0]["content"])
+        self.assertIn("brief follow-up", recorded["messages"][0]["content"])
+        self.assertIn("multi-stage objective", recorded["messages"][0]["content"])
+        self.assertIn("phase already named", recorded["messages"][0]["content"])
+        self.assertIn("actual project name", recorded["messages"][0]["content"])
+        self.assertIn("status or result", recorded["messages"][0]["content"])
         self.assertEqual(title, "Portable PassiDeck Titles")
 
     def test_non_passideck_and_off_sessions_are_inert(self):
