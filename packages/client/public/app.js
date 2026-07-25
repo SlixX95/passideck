@@ -52,6 +52,7 @@ const state = {
   responseSoundTone: 'soft',
   responseSoundVolume: 60,
   notifyBlinking: true,
+  performanceMode: false,
   minimized: new Set(),
   responsiveMinimized: new Set(),
   saveTimer: null,
@@ -1141,6 +1142,7 @@ function uiPayload() {
     skin: state.skin,
     fontSize: state.fontSize,
     notifyBlinking: state.notifyBlinking,
+    performanceMode: state.performanceMode,
     chromeHidden: document.body.classList.contains('chrome-hidden'),
     systemMonitor: document.body.classList.contains('system-monitor-on'),
     panePrefs: state.panePrefs
@@ -1413,6 +1415,19 @@ function setNotifyBlinking(enabled, opts = {}) {
   const select = document.getElementById('notifyBlinkingSelect');
   if (select) select.value = state.notifyBlinking ? 'on' : 'off';
   window.passideckDesktop?.setNotifyBlinking?.(state.notifyBlinking);
+  if (opts.persist !== false) saveUiState();
+}
+
+function setPerformanceMode(enabled, opts = {}) {
+  state.performanceMode = Boolean(enabled);
+  const select = document.getElementById('performanceModeSelect');
+  if (select) select.value = state.performanceMode ? 'on' : 'off';
+  for (const [id, entry] of state.sessions) {
+    if (!entry.outputFlushTimer || entry.outputWriteInFlight || !entry.outputBuffer) continue;
+    clearTimeout(entry.outputFlushTimer);
+    entry.outputFlushTimer = null;
+    scheduleTerminalOutputFlush(id, entry.term);
+  }
   if (opts.persist !== false) saveUiState();
 }
 
@@ -1989,6 +2004,7 @@ function writeTerminalOutput(term, data, done, sanitize = true, onFrame = null, 
 function terminalOutputDelay(id) {
   const visible = state.panePrefs.paneDesktop[id] === state.activeDesktopId && !state.minimized.has(id);
   if (!visible) return TERM_OUTPUT_HIDDEN_FLUSH_MS;
+  if (state.performanceMode && visible) return TERM_OUTPUT_ACTIVE_FLUSH_MS;
   return state.activeId === id ? TERM_OUTPUT_ACTIVE_FLUSH_MS : TERM_OUTPUT_VISIBLE_FLUSH_MS;
 }
 
@@ -2225,6 +2241,7 @@ function applyAuthoritativeUiState(ui, opts = {}) {
   setSkin(ui.skin || 'neon', { persist: false });
   setFontSize(ui.fontSize || state.fontSize, { persist: false });
   setNotifyBlinking(ui.notifyBlinking !== false, { persist: false });
+  setPerformanceMode(ui.performanceMode === true, { persist: false });
   setChromeHidden(Boolean(ui.chromeHidden), { persist: false, resize: false });
   setSystemMonitorVisible(Boolean(ui.systemMonitor), { persist: false });
   restorePanelOrder();
@@ -3810,6 +3827,7 @@ async function init() {
   setSkin(ui?.skin || 'neon', { persist: false });
   setFontSize(ui?.fontSize || state.fontSize, { persist: false });
   setNotifyBlinking(ui?.notifyBlinking !== false, { persist: false });
+  setPerformanceMode(ui?.performanceMode === true, { persist: false });
   setChromeHidden(Boolean(ui?.chromeHidden), { persist: false, resize: false });
   setSystemMonitorVisible(Boolean(ui?.systemMonitor), { persist: false });
   startCodexLimitsPolling();
@@ -3895,6 +3913,7 @@ document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
 document.getElementById('skinSelect').onchange = e => setSkin(e.target.value);
 document.getElementById('fontSizeSelect').onchange = e => previewFontSize(Number(e.target.value));
 document.getElementById('notifyBlinkingSelect').onchange = e => setNotifyBlinking(e.target.value === 'on');
+document.getElementById('performanceModeSelect').onchange = e => setPerformanceMode(e.target.value === 'on');
 document.getElementById('responseSoundModeSelect').onchange = e => setResponseSoundMode(e.target.value);
 document.getElementById('responseSoundToneSelect').onchange = e => setResponseSoundTone(e.target.value);
 document.getElementById('responseSoundVolume').oninput = e => setResponseSoundVolume(e.target.value);

@@ -105,7 +105,7 @@ assert.ok(
   app.includes('RAM: ${formatBytes(info.used)} used of ${formatBytes(info.total)} · ${formatBytes(info.free)} free'),
   'CPU and RAM monitor cells must expose informative usage tooltips'
 );
-assert.ok(html.includes('app.js?v=20260725-system-monitor-tooltips') && html.includes('style.css?v=20260725-system-monitor-tooltips'), 'client cache keys must activate the CPU and RAM monitor tooltips');
+assert.ok(html.includes('app.js?v=20260725-performance-mode-system-monitor-tooltips') && html.includes('style.css?v=20260725-performance-mode-system-monitor-tooltips'), 'client cache keys must activate the rendering mode setting and CPU/RAM tooltips');
 assert.ok(
   html.includes('id="backendLatency"') && html.includes('<span>NET</span><b>-- ms</b>') &&
   app.includes('const LATENCY_PROBE_MS = 3000;') &&
@@ -210,6 +210,16 @@ assert.ok(
   app.includes('function setNotifyBlinking') &&
   app.includes('window.passideckDesktop?.setNotifyBlinking?.(state.notifyBlinking)'),
   'Notify blinking must default on, persist in shared UI state, and synchronize the Electron shell'
+);
+assert.ok(
+  html.includes('id="performanceModeSelect"') &&
+  html.includes('<option value="off">Energy saver</option>') &&
+  html.includes('<option value="on">Performance</option>') &&
+  app.includes('performanceMode: false') &&
+  app.includes('performanceMode: state.performanceMode') &&
+  app.includes('function setPerformanceMode') &&
+  app.includes('if (state.performanceMode && visible) return TERM_OUTPUT_ACTIVE_FLUSH_MS;'),
+  'Settings must expose a persisted Performance mode that removes visible-pane output throttling while Energy saver stays the default'
 );
 assert.ok(
   style.includes('.term-header.response-pulse {') &&

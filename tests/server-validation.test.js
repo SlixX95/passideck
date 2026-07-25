@@ -191,6 +191,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.deepStrictEqual(writes, ['first-client', 'second-client'], 'all connected browsers must retain terminal input control');
 
     const initialUi = await fetch(`${base}/api/ui-state`).then(res => res.json());
+    assert.strictEqual(initialUi.performanceMode, false, 'new installs must default to Energy saver');
     const uiEvents = await fetch(`${base}/api/ui-events`);
     assert.strictEqual(uiEvents.status, 200, 'UI state event stream must be available');
     const reader = uiEvents.body.getReader();
@@ -202,6 +203,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
         revision: initialUi.revision,
         activeId: 'validation',
         notifyBlinking: false,
+        performanceMode: true,
         transparencyMode: 'full',
         transparencyOpacity: 64,
         panePrefs: {
@@ -218,6 +220,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.strictEqual(saved.status, 200);
     const savedUi = await saved.json();
     assert.strictEqual(savedUi.notifyBlinking, false, 'UI state must persist Notify blinking Off instead of dropping it during validation');
+    assert.strictEqual(savedUi.performanceMode, true, 'UI state must persist Performance mode instead of dropping it during validation');
     assert.ok(!Object.hasOwn(savedUi, 'transparencyMode') && !Object.hasOwn(savedUi, 'transparencyOpacity'), 'retired transparency preferences must be dropped from authoritative UI state');
     assert.deepStrictEqual(savedUi.panePrefs.desktopOrder, ['work', 'monitoring'], 'desktop order must survive server validation');
     assert.deepStrictEqual(
