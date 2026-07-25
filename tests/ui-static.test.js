@@ -83,7 +83,7 @@ assert.ok(
   app.includes('RAM: ${formatBytes(info.used)} used of ${formatBytes(info.total)} · ${formatBytes(info.free)} free'),
   'CPU and RAM monitor cells must expose informative usage tooltips'
 );
-assert.ok(html.includes('app.js?v=20260725-terminal-http-links') && html.includes('style.css?v=20260725-terminal-http-links'), 'client cache keys must activate the terminal HTTP link fix');
+assert.ok(html.includes('app.js?v=20260725-local-performance-mode') && html.includes('style.css?v=20260725-local-performance-mode'), 'client cache keys must activate local Performance mode persistence');
 assert.ok(
   html.includes('id="backendLatency"') && html.includes('<span>NET</span><b>-- ms</b>') &&
   app.includes('const LATENCY_PROBE_MS = 3000;') &&
@@ -212,10 +212,17 @@ assert.ok(
   html.includes('<option value="off">Energy saver</option>') &&
   html.includes('<option value="on">Performance</option>') &&
   app.includes('performanceMode: false') &&
-  app.includes('performanceMode: state.performanceMode') &&
+  app.includes("const PERFORMANCE_MODE_KEY = 'passideck:performance-mode'") &&
+  app.includes("localStorage.setItem(PERFORMANCE_MODE_KEY, state.performanceMode ? 'on' : 'off')") &&
+  app.includes('function loadPerformanceMode(sharedValue)') &&
+  app.includes("stored === null && typeof sharedValue === 'boolean'") &&
+  app.includes('loadPerformanceMode(ui?.performanceMode);') &&
+  app.includes("window.addEventListener('storage', event => {") &&
+  app.includes('event.storageArea !== localStorage || event.key !== PERFORMANCE_MODE_KEY') &&
+  !app.includes('performanceMode: state.performanceMode') &&
   app.includes('function setPerformanceMode') &&
   app.includes('if (state.performanceMode && visible) return TERM_OUTPUT_ACTIVE_FLUSH_MS;'),
-  'Settings must expose a persisted Performance mode that removes visible-pane output throttling while Energy saver stays the default'
+  'Settings must persist Performance mode per browser profile/backend origin so shared UI updates cannot reset it'
 );
 assert.ok(
   style.includes('.term-header.response-pulse {') &&

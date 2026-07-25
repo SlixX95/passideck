@@ -215,6 +215,68 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.ok(migratedDesktop.assignments.every(id => id === 'desktop-1'), 'legacy panes must remain assigned to Desktop 1');
     assert.strictEqual(migratedDesktop.active, 'desktop-1', 'default desktop must become locally active');
     assert.strictEqual(migratedDesktop.local, 'desktop-1', 'active desktop must persist locally, not in shared UI state');
+    const localPerformanceMode = await evalExpr(cdp, sid, `(() => {
+      const key = 'passideck:performance-mode';
+      const previousStored = localStorage.getItem(key);
+      const previousMode = state.performanceMode;
+      const previousRevision = state.uiRevision;
+      const previousBaseline = structuredClone(state.lastUiState);
+      try {
+        localStorage.removeItem(key);
+        loadPerformanceMode(undefined);
+        const unavailable = {
+          stored: localStorage.getItem(key),
+          mode: state.performanceMode
+        };
+        loadPerformanceMode(true);
+        const migrated = { stored: localStorage.getItem(key), mode: state.performanceMode };
+        setPerformanceMode(true);
+        const remote = structuredClone(uiPayload());
+        remote.revision = state.uiRevision + 1;
+        remote.performanceMode = false;
+        applyAuthoritativeUiState(remote, { force: true });
+        const afterRemote = state.performanceMode;
+        window.dispatchEvent(new StorageEvent('storage', {
+          key,
+          newValue: 'off',
+          storageArea: localStorage
+        }));
+        const afterSiblingTab = state.performanceMode;
+        window.dispatchEvent(new StorageEvent('storage', {
+          key,
+          newValue: 'on',
+          storageArea: localStorage
+        }));
+        setPerformanceMode(false, { persist: false });
+        loadPerformanceMode(false);
+        return {
+          stored: localStorage.getItem(key),
+          afterRemote,
+          afterSiblingTab,
+          afterReload: state.performanceMode,
+          selected: document.getElementById('performanceModeSelect').value,
+          shared: Object.hasOwn(uiPayload(), 'performanceMode'),
+          migrated,
+          unavailable
+        };
+      } finally {
+        state.uiRevision = previousRevision;
+        state.lastUiState = previousBaseline;
+        setPerformanceMode(previousMode, { persist: false });
+        if (previousStored === null) localStorage.removeItem(key);
+        else localStorage.setItem(key, previousStored);
+      }
+    })()`);
+    assert.deepStrictEqual(localPerformanceMode, {
+      stored: 'on',
+      afterRemote: true,
+      afterSiblingTab: false,
+      afterReload: true,
+      selected: 'on',
+      shared: false,
+      migrated: { stored: 'on', mode: true },
+      unavailable: { stored: null, mode: false }
+    }, 'Performance mode must persist per browser profile/backend origin and ignore shared UI updates from stale or different clients');
     const modernDesktopIgnoresLegacy = await evalExpr(cdp, sid, `(() => {
       const snapshot = structuredClone(state.panePrefs);
       loadPanePrefs({
@@ -1006,8 +1068,10 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const rect = windowPrefs()['${madeSessions[0]}'];
       return { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
     })()`);
+    await evalExpr(cdp, sid, 'savePanePrefs()');
+    await waitEval(cdp, sid, 'state.saveTimer === null && state.saveInFlight === 0');
     const afterDesktopPeerInit = await requestJson(base, 'GET', '/api/ui-state');
-    const desktopPeerRect = afterDesktopPeerInit.panePrefs?.windows?.desktop?.[madeSessions[0]];
+    const desktopPeerRect = afterDesktopPeerInit.panePrefs?.desktops?.['desktop-1']?.windows?.[madeSessions[0]];
     assert.deepStrictEqual(
       desktopPeerRect && { x: desktopPeerRect.x, y: desktopPeerRect.y, w: desktopPeerRect.w, h: desktopPeerRect.h },
       expectedSharedDesktopRect,
@@ -1030,7 +1094,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await evalExpr(cdp, peerSid, `(() => { responsiveMinimizeForViewport(); applyLayoutVisibility(); savePanePrefs(); })()`);
     await sleep(300);
     const afterMobile = await requestJson(base, 'GET', '/api/ui-state');
-    const mobileRect = afterMobile.panePrefs?.windows?.desktop?.[madeSessions[0]];
+    const mobileRect = afterMobile.panePrefs?.desktops?.['desktop-1']?.windows?.[madeSessions[0]];
     assert.deepStrictEqual(
       mobileRect && { x: mobileRect.x, y: mobileRect.y, w: mobileRect.w, h: mobileRect.h },
       expectedSharedDesktopRect,
@@ -1043,7 +1107,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await waitEval(cdp, peerSid, 'location.search === "?peer-reload=1" && document.readyState === "complete" && typeof windowPrefs === "function" && document.querySelectorAll(".term-panel").length >= 11');
     await sleep(300);
     const afterPeerReload = await requestJson(base, 'GET', '/api/ui-state');
-    const reloadRect = afterPeerReload.panePrefs?.windows?.desktop?.[madeSessions[0]];
+    const reloadRect = afterPeerReload.panePrefs?.desktops?.['desktop-1']?.windows?.[madeSessions[0]];
     assert.deepStrictEqual(
       reloadRect && { x: reloadRect.x, y: reloadRect.y, w: reloadRect.w, h: reloadRect.h },
       expectedSharedDesktopRect,

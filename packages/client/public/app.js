@@ -2,6 +2,7 @@ const API = window.location.origin;
 const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const WS_BASE = `${WS_PROTOCOL}//${window.location.host}/ws`;
 const AUTH_TOKEN_KEY = 'passideck:auth-token';
+const PERFORMANCE_MODE_KEY = 'passideck:performance-mode';
 const SOCKET_HEARTBEAT_MS = 15000;
 const SOCKET_STALE_MS = SOCKET_HEARTBEAT_MS * 3;
 const LATENCY_PROBE_MS = 3000;
@@ -1109,7 +1110,6 @@ function uiPayload() {
     skin: state.skin,
     fontSize: state.fontSize,
     notifyBlinking: state.notifyBlinking,
-    performanceMode: state.performanceMode,
     chromeHidden: document.body.classList.contains('chrome-hidden'),
     systemMonitor: document.body.classList.contains('system-monitor-on'),
     panePrefs: state.panePrefs
@@ -1391,7 +1391,19 @@ function setPerformanceMode(enabled, opts = {}) {
     entry.outputFlushTimer = null;
     scheduleTerminalOutputFlush(id, entry.term);
   }
-  if (opts.persist !== false) saveUiState();
+  if (opts.persist !== false) {
+    try { localStorage.setItem(PERFORMANCE_MODE_KEY, state.performanceMode ? 'on' : 'off'); } catch {}
+  }
+}
+
+function loadPerformanceMode(sharedValue) {
+  try {
+    const stored = localStorage.getItem(PERFORMANCE_MODE_KEY);
+    setPerformanceMode(stored === null ? sharedValue === true : stored === 'on', { persist: false });
+    if (stored === null && typeof sharedValue === 'boolean') {
+      localStorage.setItem(PERFORMANCE_MODE_KEY, state.performanceMode ? 'on' : 'off');
+    }
+  } catch { setPerformanceMode(sharedValue === true, { persist: false }); }
 }
 
 function shouldPlayResponseSound(id, hasDocumentFocus = document.hasFocus(), hidden = document.hidden) {
@@ -2200,7 +2212,6 @@ function applyAuthoritativeUiState(ui, opts = {}) {
   setSkin(ui.skin || 'neon', { persist: false });
   setFontSize(ui.fontSize || state.fontSize, { persist: false });
   setNotifyBlinking(ui.notifyBlinking !== false, { persist: false });
-  setPerformanceMode(ui.performanceMode === true, { persist: false });
   setChromeHidden(Boolean(ui.chromeHidden), { persist: false, resize: false });
   setSystemMonitorVisible(Boolean(ui.systemMonitor), { persist: false });
   restorePanelOrder();
@@ -3742,6 +3753,7 @@ async function init() {
     api('GET', '/api/health').catch(() => null)
   ]);
   void updateVersionFooter(health);
+  loadPerformanceMode(ui?.performanceMode);
 
   state.uiRevision = Number(ui?.revision) || 0;
   state.lastUiState = ui ? structuredClone(ui) : null;
@@ -3750,7 +3762,6 @@ async function init() {
   setSkin(ui?.skin || 'neon', { persist: false });
   setFontSize(ui?.fontSize || state.fontSize, { persist: false });
   setNotifyBlinking(ui?.notifyBlinking !== false, { persist: false });
-  setPerformanceMode(ui?.performanceMode === true, { persist: false });
   setChromeHidden(Boolean(ui?.chromeHidden), { persist: false, resize: false });
   setSystemMonitorVisible(Boolean(ui?.systemMonitor), { persist: false });
   startCodexLimitsPolling();
@@ -3835,6 +3846,10 @@ document.getElementById('skinSelect').onchange = e => setSkin(e.target.value);
 document.getElementById('fontSizeSelect').onchange = e => previewFontSize(Number(e.target.value));
 document.getElementById('notifyBlinkingSelect').onchange = e => setNotifyBlinking(e.target.value === 'on');
 document.getElementById('performanceModeSelect').onchange = e => setPerformanceMode(e.target.value === 'on');
+window.addEventListener('storage', event => {
+  if (event.storageArea !== localStorage || event.key !== PERFORMANCE_MODE_KEY) return;
+  setPerformanceMode(event.newValue === 'on', { persist: false });
+});
 document.getElementById('responseSoundModeSelect').onchange = e => setResponseSoundMode(e.target.value);
 document.getElementById('responseSoundToneSelect').onchange = e => setResponseSoundTone(e.target.value);
 document.getElementById('responseSoundVolume').oninput = e => setResponseSoundVolume(e.target.value);
