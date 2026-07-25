@@ -3031,6 +3031,70 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.strictEqual(tuiKeyboardCopy.selection, '', `copy must clear the visible TUI selection: ${JSON.stringify(tuiKeyboardCopy)}`);
     assert.strictEqual(tuiKeyboardCopy.mouseProtocol, tuiDragSelection.mouseProtocolBeforeDrag, `copy must restore Hermes TUI mouse reporting after clearing the selection: ${JSON.stringify({ tuiDragSelection, tuiKeyboardCopy })}`);
 
+    const tuiMouseOnlySelection = await evalExpr(cdp, sid, `(() => {
+      const entry = [...state.sessions.values()][0];
+      const screen = entry.el.querySelector('.xterm-screen');
+      const rect = screen.getBoundingClientRect();
+      const cellWidth = rect.width / entry.term.cols;
+      const cellHeight = rect.height / entry.term.rows;
+      const y = rect.top + cellHeight / 2;
+      const x1 = rect.left + cellWidth;
+      const x2 = rect.left + cellWidth * 18;
+      screen.dispatchEvent(new MouseEvent('mousedown', { button: 0, buttons: 1, clientX: x1, clientY: y, bubbles: true, cancelable: true }));
+      screen.dispatchEvent(new MouseEvent('mousemove', { button: 0, buttons: 1, clientX: x2, clientY: y, bubbles: true, cancelable: true }));
+      screen.dispatchEvent(new MouseEvent('mouseup', { button: 0, buttons: 0, clientX: x2, clientY: y, bubbles: true, cancelable: true }));
+      const out = {
+        selection: entry.term.getSelection(),
+        mouseProtocol: entry.term._core.coreMouseService.activeProtocol
+      };
+      clearCopiedSelection(entry);
+      return out;
+    })()`);
+    assert.ok(tuiMouseOnlySelection.selection.length >= 8 && 'drag-to-copy-this-text'.includes(tuiMouseOnlySelection.selection), `mouse-only input from the visible browser/desktop must select TUI text: ${JSON.stringify(tuiMouseOnlySelection)}`);
+    assert.strictEqual(tuiMouseOnlySelection.mouseProtocol, 'NONE', `mouse reporting must stay suspended while a mouse-only copy selection is visible: ${JSON.stringify(tuiMouseOnlySelection)}`);
+
+    const tuiDirectLinkActivation = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const providers = entry.term._core._linkProviderService.linkProviders;
+      const originalProviders = providers.slice();
+      const originalDesktop = window.passideckDesktop;
+      const originalSize = { cols: entry.term.cols, rows: entry.term.rows };
+      const calls = [];
+      const clickCell = (col, row) => {
+        const screen = entry.el.querySelector('.xterm-screen');
+        const rect = screen.getBoundingClientRect();
+        const x = rect.left + rect.width / entry.term.cols * (col + 0.5);
+        const y = rect.top + rect.height / entry.term.rows * (row + 0.5);
+        screen.dispatchEvent(new PointerEvent('pointerdown', { button: 0, buttons: 1, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+        screen.dispatchEvent(new PointerEvent('pointerup', { button: 0, buttons: 0, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+      };
+      try {
+        providers.splice(0, providers.length, { provideLinks: (_line, callback) => setTimeout(() => callback([]), 0) });
+        window.passideckDesktop = { openExternal: async url => { calls.push(url); return true; } };
+
+        entry.term.reset();
+        await new Promise(resolve => entry.term.write('\\x1b]8;;https://example.com/passideck-osc8\\x07PassiDeck Link Test\\x1b]8;;\\x07', resolve));
+        clickCell(4, 0);
+        await new Promise(resolve => setTimeout(resolve, 20));
+
+        entry.term.resize(12, 4);
+        entry.term.reset();
+        await new Promise(resolve => entry.term.write('https://example.com/passideck-wrapped-link', resolve));
+        clickCell(4, 1);
+        await new Promise(resolve => setTimeout(resolve, 20));
+        return calls;
+      } finally {
+        entry.term.resize(originalSize.cols, originalSize.rows);
+        providers.splice(0, providers.length, ...originalProviders);
+        if (originalDesktop === undefined) delete window.passideckDesktop;
+        else window.passideckDesktop = originalDesktop;
+      }
+    })()`);
+    assert.deepStrictEqual(tuiDirectLinkActivation, [
+      'https://example.com/passideck-osc8',
+      'https://example.com/passideck-wrapped-link'
+    ], 'one-cell Hermes TUI gestures must resolve OSC 8 and wrapped raw links synchronously from the buffer even when a provider replies asynchronously');
+
     const terminalLinks = await evalExpr(cdp, sid, `(async () => {
       const originalDesktop = window.passideckDesktop;
       const originalOpen = window.open;
@@ -3046,7 +3110,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         const desktop = await handleTerminalLink(null, 'https://example.com/desktop?q=1');
 
         delete window.passideckDesktop;
-        const openedWindow = { opener: 'unsafe' };
+        const openedWindow = { opener: 'unsafe', location: { replace: url => { calls.push(['navigate', url]); } } };
         window.open = (url, target) => { calls.push(['browser', url, target]); return openedWindow; };
         const browser = await handleTerminalLink(null, 'http://example.com/browser');
 
@@ -3071,8 +3135,9 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       unsafe: false,
       calls: [
         ['desktop', 'https://example.com/desktop?q=1'],
-        ['browser', 'http://example.com/browser', '_blank'],
-        ['blocked', 'https://example.com/copy', '_blank']
+        ['browser', 'about:blank', '_blank'],
+        ['navigate', 'http://example.com/browser'],
+        ['blocked', 'about:blank', '_blank']
       ],
       copied: ['https://example.com/copy'],
       toasts: [['Link copied', '']],

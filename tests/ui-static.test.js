@@ -83,7 +83,6 @@ assert.ok(
   app.includes('RAM: ${formatBytes(info.used)} used of ${formatBytes(info.total)} · ${formatBytes(info.free)} free'),
   'CPU and RAM monitor cells must expose informative usage tooltips'
 );
-assert.ok(html.includes('app.js?v=20260725-local-performance-mode') && html.includes('style.css?v=20260725-local-performance-mode'), 'client cache keys must activate local Performance mode persistence');
 assert.ok(
   html.includes('id="backendLatency"') && html.includes('<span>NET</span><b>-- ms</b>') &&
   app.includes('const LATENCY_PROBE_MS = 3000;') &&
@@ -256,10 +255,21 @@ assert.ok(
   app.includes('new WebLinksAddon.WebLinksAddon(handleTerminalLink)') &&
   app.includes('linkHandler: { activate: handleTerminalLink }') &&
   app.includes('window.passideckDesktop?.openExternal') &&
-  app.includes("window.open(url, '_blank')") &&
+  app.includes("window.open('about:blank', '_blank')") &&
   app.includes("showToast('Link copied')"),
   'raw and OSC 8 terminal links must share the desktop/browser opener and copy with visible feedback when opening fails'
 );
+assert.ok(app.includes("window.open('about:blank', '_blank')") && app.includes('openedWindow.location.replace(url)'), 'browser link fallback must create a safe tab and navigate it explicitly');
+assert.ok(
+  app.includes("window.addEventListener('mousedown', startDrag, true)") &&
+  app.includes("window.addEventListener('mouseup', finishDrag, true)") &&
+  app.includes('term?._core?._oscLinkService?.getLinkData') &&
+  app.includes('buffer.getLine(firstLineIndex)?.isWrapped') &&
+  !app.includes('provider.provideLinks(y') &&
+  app.includes('handleTerminalLink(event, link)'),
+  'Hermes TUI selection must support mouse-only browser/desktop input and activate terminal links from the trusted pointer event'
+);
+assert.ok(html.includes('app.js?v=20260725-tui-selection-links-v2') && html.includes('style.css?v=20260725-tui-selection-links-v2'), 'client cache keys must activate TUI mouse selection and link clicks');
 
 assert.ok(html.includes('id="uploadFileBtn"') && html.includes('id="clipboardImageBtn"') && html.includes('id="fileInput"'), 'upload, clipboard image, and file picker controls must stay available');
 assert.ok(app.includes("document.addEventListener('contextmenu', handleTerminalContextMenu, true)") && app.includes('term.clearSelection()'), 'right-click copy must clear terminal selection in browser and desktop renderers');

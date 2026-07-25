@@ -1768,21 +1768,68 @@ function installTerminalDragSelection(termEl, term, session) {
       row: Math.max(0, Math.min(term.rows - 1, Math.floor((event.clientY - rect.top) / (rect.height / term.rows))))
     };
   };
-  window.addEventListener('pointerdown', event => {
-    if (event.button !== 0 || !termEl.contains(event.target) || !isTui()) return;
+  const linkAt = point => {
+    const x = point.col + 1;
+    const y = (term.buffer.active.viewportY || 0) + point.row + 1;
+    const hovered = term?._core?.linkifier?.currentLink?.link;
+    if (hovered &&
+      (y > hovered.range.start.y || y === hovered.range.start.y && x >= hovered.range.start.x) &&
+      (y < hovered.range.end.y || y === hovered.range.end.y && x <= hovered.range.end.x)
+    ) return hovered.text;
+
+    const buffer = term.buffer.active;
+    const lineIndex = y - 1;
+    const line = buffer.getLine(lineIndex);
+    const urlId = line?.getCell(point.col)?.extended?.urlId;
+    const oscLink = urlId && term?._core?._oscLinkService?.getLinkData(urlId)?.uri;
+    if (oscLink) return oscLink;
+
+    let firstLineIndex = lineIndex;
+    while (firstLineIndex > 0 && buffer.getLine(firstLineIndex)?.isWrapped) firstLineIndex -= 1;
+    let lastLineIndex = lineIndex;
+    while (buffer.getLine(lastLineIndex + 1)?.isWrapped) lastLineIndex += 1;
+    let text = '';
+    let offset = 0;
+    for (let index = firstLineIndex; index <= lastLineIndex; index += 1) {
+      const rowText = buffer.getLine(index)?.translateToString(false) || '';
+      if (index < lineIndex) offset += rowText.length;
+      text += rowText;
+    }
+    for (let col = 0; col < point.col; col += 1) {
+      const cell = line?.getCell(col);
+      if (cell?.getWidth() !== 0) offset += cell?.getChars()?.length || 1;
+    }
+    for (const match of text.matchAll(/https?:\/\/[^\s<>"'`]+/g)) {
+      const value = match[0].replace(/[),.;!?]+$/, '');
+      if (offset >= match.index && offset < match.index + value.length) return value;
+    }
+    return '';
+  };
+  const startDrag = event => {
+    if (replaying || event.button !== 0 || !termEl.contains(event.target) || !isTui()) return;
+    if (start) {
+      block(event);
+      return;
+    }
     start = cell(event);
     origin = { target: event.target, clientX: event.clientX, clientY: event.clientY };
     if (start) {
       suspendMouse();
       block(event);
     }
-  }, true);
+  };
+  window.addEventListener('pointerdown', startDrag, true);
+  window.addEventListener('mousedown', startDrag, true);
   window.addEventListener('pointermove', event => {
     if (start && !replaying) block(event);
   }, true);
-  window.addEventListener('pointerup', event => {
-    const end = start && cell(event);
-    if (!start || !end) {
+  window.addEventListener('mousemove', event => {
+    if (start && !replaying) block(event);
+  }, true);
+  const finishDrag = event => {
+    if (replaying || !start) return;
+    const end = cell(event);
+    if (!end) {
       start = origin = null;
       resumeMouse();
       return;
@@ -1800,6 +1847,13 @@ function installTerminalDragSelection(termEl, term, session) {
     }
     term.clearSelection();
     term.focus();
+    const link = linkAt(end);
+    if (link) {
+      origin = null;
+      resumeMouse();
+      void handleTerminalLink(event, link);
+      return;
+    }
     resumeMouse();
     replaying = true;
     const options = { button: 0, buttons: 1, clientX: origin.clientX, clientY: origin.clientY, bubbles: true, cancelable: true };
@@ -1807,12 +1861,9 @@ function installTerminalDragSelection(termEl, term, session) {
     origin.target.dispatchEvent(new MouseEvent('mouseup', { ...options, buttons: 0 }));
     replaying = false;
     origin = null;
-  }, true);
-  for (const type of ['mousedown', 'mousemove', 'mouseup']) {
-    window.addEventListener(type, event => {
-      if (start && !replaying) block(event);
-    }, true);
-  }
+  };
+  window.addEventListener('pointerup', finishDrag, true);
+  window.addEventListener('mouseup', finishDrag, true);
   window.addEventListener('pointercancel', cancelInterruptedDrag, true);
   window.addEventListener('blur', cancelInterruptedDrag, true);
 }
@@ -3538,10 +3589,15 @@ async function handleTerminalLink(_event, value) {
     if (window.passideckDesktop?.openExternal) {
       opened = Boolean(await window.passideckDesktop.openExternal(url));
     } else {
-      const openedWindow = window.open(url, '_blank');
+      const openedWindow = window.open('about:blank', '_blank');
       if (openedWindow) {
-        try { openedWindow.opener = null; } catch {}
-        opened = true;
+        try {
+          openedWindow.opener = null;
+          openedWindow.location.replace(url);
+          opened = true;
+        } catch {
+          try { openedWindow.close(); } catch {}
+        }
       }
     }
   } catch {}
