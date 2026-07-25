@@ -100,7 +100,12 @@ assert.ok(
   !style.includes('.grid-picker-inline') && !style.includes('.layout-select'),
   'retired Desktop layout chip must not leave markup, JavaScript, or CSS behind'
 );
-assert.ok(html.includes('app.js?v=20260725-remove-layout-chip') && html.includes('style.css?v=20260725-remove-layout-chip'), 'client cache keys must activate removal of the retired Desktop layout chip');
+assert.ok(
+  app.includes('CPU: ${value}% total usage') && app.includes('load ${load.toFixed(2)} (1 min)') &&
+  app.includes('RAM: ${formatBytes(info.used)} used of ${formatBytes(info.total)} · ${formatBytes(info.free)} free'),
+  'CPU and RAM monitor cells must expose informative usage tooltips'
+);
+assert.ok(html.includes('app.js?v=20260725-system-monitor-tooltips') && html.includes('style.css?v=20260725-system-monitor-tooltips'), 'client cache keys must activate the CPU and RAM monitor tooltips');
 assert.ok(
   html.includes('id="backendLatency"') && html.includes('<span>NET</span><b>-- ms</b>') &&
   app.includes('const LATENCY_PROBE_MS = 3000;') &&

@@ -1505,6 +1505,21 @@ function updateSystemMonitor(metrics) {
     cell.classList.remove('unavailable');
     cell.style.setProperty('--v', `${value}%`);
     if (label) label.textContent = `${value}%`;
+    if (key === 'cpu') {
+      const load = Number(metrics.load);
+      const details = `CPU: ${value}% total usage${Number.isFinite(load) ? ` · load ${load.toFixed(2)} (1 min)` : ''}`;
+      setTooltip(cell, details);
+      cell.setAttribute('aria-label', details);
+    }
+    if (key === 'ram') {
+      const info = metrics.memory || {};
+      const hasDetails = Number.isFinite(Number(info.used)) && Number.isFinite(Number(info.total)) && Number(info.total) > 0 && Number.isFinite(Number(info.free));
+      const details = hasDetails
+        ? `RAM: ${formatBytes(info.used)} used of ${formatBytes(info.total)} · ${formatBytes(info.free)} free`
+        : `RAM: ${value}% used`;
+      setTooltip(cell, details);
+      cell.setAttribute('aria-label', details);
+    }
     if (key === 'disk') {
       const info = metrics.diskInfo || {};
       const details = info.error
