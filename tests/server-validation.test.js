@@ -162,6 +162,22 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.ok(persistentPaneEnv.includes('PROMPT_TOOLKIT_NO_CPR=1'), 'PassiDeck panes must disable prompt_toolkit cursor position reports');
     assert.ok(persistentPaneEnv.includes('PROMPT_TOOLKIT_BELL=false'), 'PassiDeck panes must suppress prompt_toolkit feedback BELs without suppressing Hermes completion BELs');
 
+    const redrawSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?session=${persistent.id}`);
+    let redrawOutput = '';
+    redrawSocket.on('message', raw => {
+      try {
+        const message = JSON.parse(raw.toString());
+        if (message.type === 'output') redrawOutput += String(message.data || '');
+      } catch {}
+    });
+    await opened(redrawSocket);
+    await delay(100);
+    redrawOutput = '';
+    redrawSocket.send(JSON.stringify({ type: 'redraw' }));
+    await delay(100);
+    assert.ok(redrawOutput.length > 0, 'a client redraw request must make tmux repaint its current full terminal frame');
+    redrawSocket.close();
+
     const inputResponse = await fetch(`${base}/api/sessions/validation/input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

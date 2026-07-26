@@ -6,6 +6,7 @@ const PERFORMANCE_MODE_KEY = 'passideck:performance-mode';
 const SOCKET_HEARTBEAT_MS = 15000;
 const SOCKET_STALE_MS = SOCKET_HEARTBEAT_MS * 3;
 const LATENCY_PROBE_MS = 3000;
+const HERMES_TUI_WHEEL_MULTIPLIER = 3;
 
 function authToken() {
   const urlToken = new URLSearchParams(window.location.search).get('token') || '';
@@ -1685,6 +1686,16 @@ function sendResize(id, entry, force = false) {
   entry.ws.send(JSON.stringify({ type: 'resize', cols, rows }));
 }
 
+function requestTerminalRedraw(entry) {
+  entry.term.__passideckSnapshotLinks = null;
+  if (entry.ws?.readyState !== WebSocket.OPEN) {
+    entry.redrawPending = true;
+    return;
+  }
+  entry.redrawPending = false;
+  entry.ws.send(JSON.stringify({ type: 'redraw' }));
+}
+
 function fitEntry(id, entry, opts = {}) {
   if (entry.el.classList.contains('layout-hidden') || entry.el.offsetParent === null) return;
   const next = entry.fit.proposeDimensions?.();
@@ -2201,7 +2212,7 @@ function scheduleTerminalSnapshot(id) {
   entry.snapshotTimer = setTimeout(() => saveTerminalSnapshot(id), TERM_SNAPSHOT_DEBOUNCE_MS);
 }
 
-function restoreTerminalSnapshot(id, term) {
+function restoreTerminalSnapshot(id, term, done = null) {
   try {
     const raw = localStorage.getItem(snapshotKey(id));
     if (!raw) return false;
@@ -2226,7 +2237,8 @@ function restoreTerminalSnapshot(id, term) {
     }) : [];
     const replayPendingOutput = () => {
       if (links.length) term.__passideckSnapshotLinks = { baseY: term.buffer.active.viewportY || 0, links };
-      if (pendingOutput) writeTerminalOutput(term, pendingOutput, null, false);
+      if (pendingOutput) writeTerminalOutput(term, pendingOutput, done, false);
+      else done?.();
     };
     if (text) term.write(text, replayPendingOutput);
     else replayPendingOutput();
@@ -3102,12 +3114,13 @@ function createPanel(session, opts = {}) {
   term.onData(data => {
     clearResponseAttention(id);
     const entry = state.sessions.get(id);
-    const clean = sanitizeTerminalInput(data);
+    let clean = sanitizeTerminalInput(data);
+    if (isHermesTuiEntry(entry) && /^(?:\x1b\[<6[45];\d+;\d+M)+$/.test(clean)) clean = clean.repeat(HERMES_TUI_WHEEL_MULTIPLIER);
     if (clean && entry?.ws?.readyState === WebSocket.OPEN) entry.ws.send(JSON.stringify({ type: 'input', data: clean }));
   });
 
   const hasSnapshot = hasTerminalSnapshot(id);
-  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, arrangeCleanup: dismissArrange, restored: hasSnapshot, snapshotTimer: null, outputBuffer: '', outputFlushTimer: null, outputWriteInFlight: false, outputFrameHandle: null, outputCancelled: false, titleSource: '', lastSentCols: 0, lastSentRows: 0 });
+  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, arrangeCleanup: dismissArrange, restored: hasSnapshot, redrawPending: true, snapshotTimer: null, outputBuffer: '', outputFlushTimer: null, outputWriteInFlight: false, outputFrameHandle: null, outputCancelled: false, titleSource: '', lastSentCols: 0, lastSentRows: 0 });
   term.onWriteParsed?.(() => refreshTitleFromTerminal(id));
   term.onBell?.(() => notifyResponseComplete(id));
 
@@ -3137,11 +3150,12 @@ function createPanel(session, opts = {}) {
     fitAll({ allowHeight: true, scrollBottom: true });
     const entry = state.sessions.get(id);
     if (entry && hasSnapshot) {
-      entry.restored = restoreTerminalSnapshot(id, term);
-      requestAnimationFrame(() => {
+      entry.restored = restoreTerminalSnapshot(id, term, () => requestAnimationFrame(() => {
+        if (state.sessions.get(id) !== entry) return;
         try { fitEntry(id, entry, { force: true, allowHeight: true }); } catch {}
+        requestTerminalRedraw(entry);
         scheduleTerminalSnapshot(id);
-      });
+      }));
     }
   });
 }
@@ -3262,11 +3276,17 @@ function attachSocket(id, term, el) {
     }
   };
   ws.onopen = () => {
-    if (state.sessions.get(id)?.ws !== ws) return;
+    const entry = state.sessions.get(id);
+    if (entry?.ws !== ws) return;
     ws.lastMessageAt = ws.lastPongAt = Date.now();
     setConnectionStatus(id, 'live');
-    try { sendSocketPing(state.sessions.get(id)); } catch {}
+    try { sendSocketPing(entry); } catch {}
     scheduleTerminalFit({ force: true });
+    if (entry.redrawPending) requestAnimationFrame(() => {
+      if (state.sessions.get(id)?.ws !== ws) return;
+      try { fitEntry(id, entry, { force: true, allowHeight: true }); } catch {}
+      requestTerminalRedraw(entry);
+    });
   };
   ws.onerror = () => {
     if (state.sessions.get(id)?.ws === ws) setConnectionStatus(id, 'offline');
@@ -3280,6 +3300,7 @@ function reconnect(id, force = false) {
   if (!entry || entry.el.classList.contains('exited')) return;
   const oldSocket = entry.ws;
   if (!force && oldSocket?.readyState === WebSocket.OPEN) return;
+  entry.redrawPending = true;
   entry.ws = attachSocket(id, entry.term, entry.el);
   if (oldSocket && oldSocket !== entry.ws) {
     try { oldSocket.close(4000, 'superseded'); } catch {}
@@ -3334,10 +3355,16 @@ function startSocketHeartbeat() {
 function resumeAllPanes(forceReconnect = false) {
   if (document.hidden) return;
   const now = Date.now();
+  fitAll({ force: true, allowHeight: true, scrollBottom: true });
   for (const [id, entry] of state.sessions) {
     try { entry.term.refresh(0, Math.max(0, entry.term.rows - 1)); } catch {}
-    if (forceReconnect) reconnect(id, true);
-    else if (ensureSocketLive(id, entry, now)) sendResize(id, entry, true);
+    if (forceReconnect) {
+      entry.redrawPending = true;
+      reconnect(id, true);
+    } else if (ensureSocketLive(id, entry, now)) {
+      sendResize(id, entry, true);
+      requestTerminalRedraw(entry);
+    }
   }
   scheduleTerminalFit({ force: true });
   pollCodexLimits();

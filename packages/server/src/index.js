@@ -876,6 +876,24 @@ function tmuxKill(name) {
   try { execFileSync(TMUX_CMD, tmuxArgs(['kill-session', '-t', name]), { stdio: 'ignore' }); } catch {}
 }
 
+function tmuxRefreshClient(session) {
+  if (!session?.tmuxName || session.tmuxRefreshTimer) return;
+  const delay = Math.max(0, 100 - (Date.now() - (session.lastTmuxRefreshAt || 0)));
+  session.tmuxRefreshTimer = setTimeout(() => {
+    session.tmuxRefreshTimer = null;
+    session.lastTmuxRefreshAt = Date.now();
+    let clients = [];
+    try {
+      clients = execFileSync(TMUX_CMD, tmuxArgs(['list-clients', '-t', session.tmuxName, '-F', '#{client_name}']), { encoding: 'utf8' })
+        .split(/\r?\n/).filter(Boolean).slice(0, 4);
+    } catch {}
+    for (const client of clients) {
+      try { execFileSync(TMUX_CMD, tmuxArgs(['refresh-client', '-t', client]), { stdio: 'ignore' }); } catch {}
+    }
+  }, delay);
+  session.tmuxRefreshTimer.unref?.();
+}
+
 function attachTmux(session) {
   if (!pty) throw new Error('PTY support not available');
   const name = tmuxName(session.id);
@@ -1126,6 +1144,7 @@ function createServer(config = loadConfig()) {
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (msg.type === 'ping') return ws.send(JSON.stringify({ type: 'pong' }));
       if (msg.type === 'input' && session.pty) session.pty.write(String(msg.data || ''));
+      if (msg.type === 'redraw' && session.pty) tmuxRefreshClient(session);
       if (msg.type === 'resize' && session.pty) {
         const cols = Math.min(TERMINAL_MAX_DIMENSION, Math.max(2, Number(msg.cols) || 120));
         const rows = Math.min(TERMINAL_MAX_DIMENSION, Math.max(2, Number(msg.rows) || 30));

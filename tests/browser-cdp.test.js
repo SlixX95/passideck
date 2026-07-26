@@ -2878,7 +2878,15 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       entry.session.meta.command = 'hermes --tui';
       let scrollCalls = 0;
       const mouseData = [];
+      const acceleratedInput = [];
       const dataListener = entry.term.onData(data => mouseData.push(data));
+      const socket = entry.ws;
+      const originalSend = socket.send;
+      socket.send = function(raw) {
+        const message = JSON.parse(raw);
+        if (message.type === 'input') acceleratedInput.push(message.data);
+        else return originalSend.call(this, raw);
+      };
       const oldScrollLines = entry.term.scrollLines.bind(entry.term);
       entry.term.scrollLines = n => { scrollCalls += 1; return oldScrollLines(n); };
       await new Promise(resolve => entry.term.write('\\x1b[?1049h\\x1b[?1000h\\x1b[?1006h', resolve));
@@ -2901,17 +2909,19 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const out = {
         scrollCalls,
         mouseEvents: mouseData.filter(data => data.includes('\\x1b[<')).length,
+        acceleratedMouseEvents: (acceleratedInput.join('').match(/\\x1b\\[<6[45];\\d+;\\d+M/g) || []).length,
         wheelStable: baseBeforeFirst === baseAfterFirst && baseBeforeSecond === baseAfterSecond,
         canceled: !firstDispatched || first.defaultPrevented || !secondDispatched || second.defaultPrevented,
         capturePrevented
       };
       await new Promise(resolve => entry.term.write('\\x1b[?1000l\\x1b[?1006l\\x1b[?1049l', resolve));
       dataListener.dispose();
+      socket.send = originalSend;
       entry.term.scrollLines = oldScrollLines;
       entry.session.meta.command = oldCommand;
       return out;
     })()`);
-    assert.deepStrictEqual(altScreenWheel, { scrollCalls: 0, mouseEvents: 2, wheelStable: true, canceled: true, capturePrevented: false }, 'Hermes TUI wheel must reach the TUI before and after resumed-session output without scrolling xterm/browser chrome');
+    assert.deepStrictEqual(altScreenWheel, { scrollCalls: 0, mouseEvents: 2, acceleratedMouseEvents: 6, wheelStable: true, canceled: true, capturePrevented: false }, 'Hermes TUI wheel must reach the TUI at accelerated speed before and after resumed-session output without scrolling xterm/browser chrome');
 
     const resizedNormalBufferTuiWheel = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
@@ -4132,7 +4142,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       }
     })()`);
     assert.deepStrictEqual(resumeLifecycle.stale, { reconnects: 1, staleClosed: 1, refreshes: 1 }, `resume must replace stale sockets and repaint every pane: ${JSON.stringify(resumeLifecycle)}`);
-    assert.ok(resumeLifecycle.healthy.sent.includes('ping') && resumeLifecycle.healthy.sent.includes('resize') && resumeLifecycle.healthy.refreshes >= 2,
+    assert.ok(resumeLifecycle.healthy.sent.includes('ping') && resumeLifecycle.healthy.sent.includes('resize') && resumeLifecycle.healthy.sent.includes('redraw') && resumeLifecycle.healthy.refreshes >= 2,
       `resume must probe live sockets, force PTY redraw, and repaint xterm: ${JSON.stringify(resumeLifecycle)}`);
     assert.deepStrictEqual(resumeLifecycle.online, { reconnects: 2, onlineClosed: 1 }, `returning online must replace even a nominally open socket immediately: ${JSON.stringify(resumeLifecycle)}`);
 
