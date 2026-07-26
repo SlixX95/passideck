@@ -269,8 +269,10 @@ assert.ok(
   app.includes('handleTerminalLink(event, link)'),
   'Hermes TUI selection must support mouse-only browser/desktop input and activate terminal links from the trusted pointer event'
 );
-assert.ok(html.includes('app.js?v=20260726-terminal-link-snapshot-v4') && html.includes('style.css?v=20260726-terminal-link-snapshot-v4'), 'client cache keys must activate TUI mouse selection and link clicks');
+assert.ok(html.includes('app.js?v=20260726-terminal-link-reflow-v5') && html.includes('style.css?v=20260726-terminal-link-reflow-v5'), 'client cache keys must activate TUI mouse selection and link clicks');
 assert.ok(app.includes("const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v2:'"), 'legacy snapshots without OSC 8 targets must be invalidated');
+assert.ok(app.includes('cols: entry.term.cols') && app.includes('Number.isInteger(snapshot.cols) && snapshot.cols === term.cols'), 'snapshot OSC 8 targets must fail closed after terminal column reflow');
+assert.ok(app.includes('if (changed) entry.term.__passideckSnapshotLinks = null'), 'later terminal resize must invalidate restored OSC 8 target coordinates');
 
 assert.ok(html.includes('id="uploadFileBtn"') && html.includes('id="clipboardImageBtn"') && html.includes('id="fileInput"'), 'upload, clipboard image, and file picker controls must stay available');
 assert.ok(app.includes("document.addEventListener('contextmenu', handleTerminalContextMenu, true)") && app.includes('term.clearSelection()'), 'right-click copy must clear terminal selection in browser and desktop renderers');

@@ -3102,6 +3102,9 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const originalDesktop = window.passideckDesktop;
       const originalSnapshot = localStorage.getItem(snapshotKey(entry.session.id));
       const originalTerminal = entry.serialize.serialize({ scrollback: TERM_SNAPSHOT_MAX_LINES });
+      const originalCols = entry.term.cols;
+      const originalRows = entry.term.rows;
+      const originalProposeDimensions = entry.fit.proposeDimensions;
       const calls = [];
       const url = 'http://42.69.42.46:6080/vnc.html?autoconnect=true&resize=scale';
       const clickCell = (col, row) => {
@@ -3124,8 +3127,27 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         await new Promise(resolve => setTimeout(resolve, 20));
         clickCell(2, 0);
         await new Promise(resolve => setTimeout(resolve, 20));
-        return calls;
+        const sameWidth = calls.slice();
+        calls.length = 0;
+        entry.term.resize(originalCols - 1, originalRows);
+        entry.term.reset();
+        restoreTerminalSnapshot(entry.session.id, entry.term);
+        await new Promise(resolve => setTimeout(resolve, 20));
+        clickCell(2, 0);
+        await new Promise(resolve => setTimeout(resolve, 20));
+        const changedWidth = calls.slice();
+        calls.length = 0;
+        entry.term.resize(originalCols, originalRows);
+        restoreTerminalSnapshot(entry.session.id, entry.term);
+        await new Promise(resolve => setTimeout(resolve, 20));
+        entry.fit.proposeDimensions = () => ({ cols: originalCols - 1, rows: originalRows });
+        fitEntry(entry.session.id, entry, { allowHeight: true });
+        clickCell(2, 0);
+        await new Promise(resolve => setTimeout(resolve, 20));
+        return { sameWidth, changedWidth, resizedAfterRestore: calls };
       } finally {
+        entry.fit.proposeDimensions = originalProposeDimensions;
+        entry.term.resize(originalCols, originalRows);
         entry.term.reset();
         await new Promise(resolve => entry.term.write(originalTerminal, resolve));
         if (originalSnapshot === null) localStorage.removeItem(snapshotKey(entry.session.id));
@@ -3134,9 +3156,11 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         else window.passideckDesktop = originalDesktop;
       }
     })()`);
-    assert.deepStrictEqual(tuiSnapshotLinkActivation, [
-      'http://42.69.42.46:6080/vnc.html?autoconnect=true&resize=scale'
-    ], 'OSC 8 links restored from a terminal snapshot must retain their external target');
+    assert.deepStrictEqual(tuiSnapshotLinkActivation, {
+      sameWidth: ['http://42.69.42.46:6080/vnc.html?autoconnect=true&resize=scale'],
+      changedWidth: [],
+      resizedAfterRestore: []
+    }, 'OSC 8 snapshot targets must survive unchanged geometry and fail closed after terminal reflow');
 
     const terminalLinks = await evalExpr(cdp, sid, `(async () => {
       const originalDesktop = window.passideckDesktop;

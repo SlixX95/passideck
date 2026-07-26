@@ -1688,7 +1688,14 @@ function sendResize(id, entry, force = false) {
 function fitEntry(id, entry, opts = {}) {
   if (entry.el.classList.contains('layout-hidden') || entry.el.offsetParent === null) return;
   const next = entry.fit.proposeDimensions?.();
-  if (!next) { entry.fit.fit(); sendResize(id, entry, opts.force); return; }
+  if (!next) {
+    const oldCols = entry.term.cols;
+    const oldRows = entry.term.rows;
+    entry.fit.fit();
+    if (entry.term.cols !== oldCols || entry.term.rows !== oldRows) entry.term.__passideckSnapshotLinks = null;
+    sendResize(id, entry, opts.force);
+    return;
+  }
   const oldCols = entry.term.cols;
   const oldRows = entry.term.rows;
   const buffer = entry.term.buffer?.active;
@@ -1698,6 +1705,7 @@ function fitEntry(id, entry, opts = {}) {
   const heightOnly = oldCols === cols && oldRows && oldRows !== rows;
   const targetRows = heightOnly && !opts.allowHeight ? oldRows : rows;
   const changed = oldCols !== cols || oldRows !== targetRows;
+  if (changed) entry.term.__passideckSnapshotLinks = null;
   if (changed) entry.term.resize(cols, targetRows);
   if ((opts.scrollBottom || atBottom) && changed) entry.term.scrollToBottom?.();
   sendResize(id, entry, opts.force || changed);
@@ -2175,7 +2183,7 @@ function saveTerminalSnapshot(id) {
   // if quota is full, degrade gracefully instead of losing reload restore entirely.
   while (true) {
     try {
-      const snapshot = { id, text, savedAt: Date.now() };
+      const snapshot = { id, text, cols: entry.term.cols, savedAt: Date.now() };
       if (links.length) snapshot.links = links;
       if (pendingOutput) snapshot.pendingOutput = pendingOutput;
       localStorage.setItem(snapshotKey(id), JSON.stringify(snapshot));
@@ -2203,7 +2211,7 @@ function restoreTerminalSnapshot(id, term) {
     if (!text && !pendingOutput) return false;
     try { term.reset(); } catch {}
     term.__passideckSnapshotLinks = null;
-    const links = Array.isArray(snapshot.links) ? snapshot.links.slice(0, 256).flatMap(item => {
+    const links = Number.isInteger(snapshot.cols) && snapshot.cols === term.cols && Array.isArray(snapshot.links) ? snapshot.links.slice(0, 256).flatMap(item => {
       const row = Number(item?.row);
       const startCol = Number(item?.startCol);
       const endCol = Number(item?.endCol);
