@@ -158,6 +158,8 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     const firstPanePid = execFileSync('tmux', ['-L', socket, 'list-panes', '-t', firstTmux, '-F', '#{pane_pid}'], { encoding: 'utf8' }).trim();
     const firstPaneEnv = fs.readFileSync(`/proc/${firstPanePid}/environ`, 'utf8').split('\0');
     assert.ok(firstPaneEnv.includes(`HERMES_SESSION_SOURCE=passideck:${madeSessions[0]}`), 'tmux pane must tag Hermes sessions with its stable PassiDeck id');
+    const firstClientFeatures = execFileSync('tmux', ['-L', socket, 'display-message', '-p', '-t', firstTmux, '#{client_termfeatures}'], { encoding: 'utf8' }).trim().split(',');
+    assert.ok(firstClientFeatures.includes('hyperlinks'), 'tmux clients must preserve OSC 8 link targets for the terminal renderer');
     await requestJson(base, 'PUT', '/api/ui-state', {
       baseLayout: 'auto',
       layout: 'auto',
@@ -3094,6 +3096,47 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       'https://example.com/passideck-osc8',
       'https://example.com/passideck-wrapped-link'
     ], 'one-cell Hermes TUI gestures must resolve OSC 8 and wrapped raw links synchronously from the buffer even when a provider replies asynchronously');
+
+    const tuiSnapshotLinkActivation = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const originalDesktop = window.passideckDesktop;
+      const originalSnapshot = localStorage.getItem(snapshotKey(entry.session.id));
+      const originalTerminal = entry.serialize.serialize({ scrollback: TERM_SNAPSHOT_MAX_LINES });
+      const calls = [];
+      const url = 'http://42.69.42.46:6080/vnc.html?autoconnect=true&resize=scale';
+      const clickCell = (col, row) => {
+        const screen = entry.el.querySelector('.xterm-screen');
+        const rect = screen.getBoundingClientRect();
+        const x = rect.left + rect.width / entry.term.cols * (col + 0.5);
+        const y = rect.top + rect.height / entry.term.rows * (row + 0.5);
+        screen.dispatchEvent(new PointerEvent('pointerdown', { button: 0, buttons: 1, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+        screen.dispatchEvent(new PointerEvent('pointerup', { button: 0, buttons: 0, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+      };
+      try {
+        window.passideckDesktop = { openExternal: async value => { calls.push(value); return true; } };
+        entry.term.reset();
+        const escape = String.fromCharCode(27);
+        const oscTerminator = String.fromCharCode(27, 92);
+        await new Promise(resolve => entry.term.write(escape + ']8;id=passideck-snapshot;' + url + oscTerminator + 'noVNC' + escape + ']8;;' + oscTerminator, resolve));
+        saveTerminalSnapshot(entry.session.id);
+        entry.term.reset();
+        restoreTerminalSnapshot(entry.session.id, entry.term);
+        await new Promise(resolve => setTimeout(resolve, 20));
+        clickCell(2, 0);
+        await new Promise(resolve => setTimeout(resolve, 20));
+        return calls;
+      } finally {
+        entry.term.reset();
+        await new Promise(resolve => entry.term.write(originalTerminal, resolve));
+        if (originalSnapshot === null) localStorage.removeItem(snapshotKey(entry.session.id));
+        else localStorage.setItem(snapshotKey(entry.session.id), originalSnapshot);
+        if (originalDesktop === undefined) delete window.passideckDesktop;
+        else window.passideckDesktop = originalDesktop;
+      }
+    })()`);
+    assert.deepStrictEqual(tuiSnapshotLinkActivation, [
+      'http://42.69.42.46:6080/vnc.html?autoconnect=true&resize=scale'
+    ], 'OSC 8 links restored from a terminal snapshot must retain their external target');
 
     const terminalLinks = await evalExpr(cdp, sid, `(async () => {
       const originalDesktop = window.passideckDesktop;

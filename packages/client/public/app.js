@@ -113,7 +113,7 @@ function frontmostDesktopPaneId(id = state.activeDesktopId) {
     .sort((a, b) => (Number(prefs[b]?.z) || 0) - (Number(prefs[a]?.z) || 0) || orderIndex(b) - orderIndex(a))[0] || ids[0] || null;
 }
 
-const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v1:';
+const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v2:';
 const TERM_SNAPSHOT_MAX_LINES = 20000;
 const TERM_SNAPSHOT_MAX_CHARS = 1024 * 1024;
 const TERM_SNAPSHOT_DEBOUNCE_MS = 1000;
@@ -1784,6 +1784,14 @@ function installTerminalDragSelection(termEl, term, session) {
     const oscLink = urlId && term?._core?._oscLinkService?.getLinkData(urlId)?.uri;
     if (oscLink) return oscLink;
 
+    const restoredLinks = term.__passideckSnapshotLinks;
+    const restoredRow = lineIndex - (restoredLinks?.baseY || 0);
+    const restoredLink = restoredLinks?.links?.find(link =>
+      link.row === restoredRow && point.col >= link.startCol && point.col < link.endCol &&
+      line?.translateToString(false, link.startCol, link.endCol) === link.text
+    );
+    if (restoredLink) return restoredLink.url;
+
     let firstLineIndex = lineIndex;
     while (firstLineIndex > 0 && buffer.getLine(firstLineIndex)?.isWrapped) firstLineIndex -= 1;
     let lastLineIndex = lineIndex;
@@ -2115,6 +2123,43 @@ function terminalSnapshot(entry) {
   return text;
 }
 
+function terminalSnapshotLinks(entry) {
+  const term = entry?.term;
+  const buffer = term?.buffer?.active;
+  if (!term || !buffer) return [];
+  const links = [];
+  const viewportY = buffer.viewportY || 0;
+  const rows = Math.max(1, Math.min(term.rows || 30, buffer.length - viewportY));
+  for (let row = 0; row < rows && links.length < 256; row += 1) {
+    const line = buffer.getLine(viewportY + row);
+    if (!line) continue;
+    let startCol = -1;
+    let urlId = 0;
+    let url = '';
+    const flush = endCol => {
+      if (startCol < 0 || !url) return;
+      const text = line.translateToString(false, startCol, endCol);
+      if (text) links.push({ row, startCol, endCol, text, url });
+      startCol = -1;
+      urlId = 0;
+      url = '';
+    };
+    for (let col = 0; col < term.cols; col += 1) {
+      const nextId = Number(line.getCell(col)?.extended?.urlId) || 0;
+      const nextUrl = nextId ? terminalLinkUrl(term?._core?._oscLinkService?.getLinkData(nextId)?.uri) : '';
+      if (startCol >= 0 && nextId === urlId && nextUrl === url) continue;
+      flush(col);
+      if (nextUrl && nextUrl.length <= 8192) {
+        startCol = col;
+        urlId = nextId;
+        url = nextUrl;
+      }
+    }
+    flush(term.cols);
+  }
+  return links;
+}
+
 function hasTerminalSnapshot(id) {
   try { return Boolean(localStorage.getItem(snapshotKey(id))); } catch { return false; }
 }
@@ -2123,6 +2168,7 @@ function saveTerminalSnapshot(id) {
   const entry = state.sessions.get(id);
   if (!entry?.term || entry.outputWriteInFlight) return;
   let text = terminalSnapshot(entry);
+  const links = terminalSnapshotLinks(entry);
   const pendingOutput = String(entry.outputBuffer || '');
   if (!text && !pendingOutput) return;
   // localStorage quotas vary by browser/device. Keep the big snapshot when possible;
@@ -2130,6 +2176,7 @@ function saveTerminalSnapshot(id) {
   while (true) {
     try {
       const snapshot = { id, text, savedAt: Date.now() };
+      if (links.length) snapshot.links = links;
       if (pendingOutput) snapshot.pendingOutput = pendingOutput;
       localStorage.setItem(snapshotKey(id), JSON.stringify(snapshot));
       return;
@@ -2155,7 +2202,22 @@ function restoreTerminalSnapshot(id, term) {
     const pendingOutput = String(snapshot.pendingOutput || '');
     if (!text && !pendingOutput) return false;
     try { term.reset(); } catch {}
+    term.__passideckSnapshotLinks = null;
+    const links = Array.isArray(snapshot.links) ? snapshot.links.slice(0, 256).flatMap(item => {
+      const row = Number(item?.row);
+      const startCol = Number(item?.startCol);
+      const endCol = Number(item?.endCol);
+      const text = String(item?.text || '');
+      const url = terminalLinkUrl(item?.url);
+      return Number.isInteger(row) && row >= 0 && row < term.rows &&
+        Number.isInteger(startCol) && startCol >= 0 && startCol < term.cols &&
+        Number.isInteger(endCol) && endCol > startCol && endCol <= term.cols &&
+        text && text.length <= term.cols * 2 && url && url.length <= 8192
+        ? [{ row, startCol, endCol, text, url }]
+        : [];
+    }) : [];
     const replayPendingOutput = () => {
+      if (links.length) term.__passideckSnapshotLinks = { baseY: term.buffer.active.viewportY || 0, links };
       if (pendingOutput) writeTerminalOutput(term, pendingOutput, null, false);
     };
     if (text) term.write(text, replayPendingOutput);

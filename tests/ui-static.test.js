@@ -269,7 +269,8 @@ assert.ok(
   app.includes('handleTerminalLink(event, link)'),
   'Hermes TUI selection must support mouse-only browser/desktop input and activate terminal links from the trusted pointer event'
 );
-assert.ok(html.includes('app.js?v=20260726-terminal-link-open-v3') && html.includes('style.css?v=20260726-terminal-link-open-v3'), 'client cache keys must activate TUI mouse selection and link clicks');
+assert.ok(html.includes('app.js?v=20260726-terminal-link-snapshot-v4') && html.includes('style.css?v=20260726-terminal-link-snapshot-v4'), 'client cache keys must activate TUI mouse selection and link clicks');
+assert.ok(app.includes("const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v2:'"), 'legacy snapshots without OSC 8 targets must be invalidated');
 
 assert.ok(html.includes('id="uploadFileBtn"') && html.includes('id="clipboardImageBtn"') && html.includes('id="fileInput"'), 'upload, clipboard image, and file picker controls must stay available');
 assert.ok(app.includes("document.addEventListener('contextmenu', handleTerminalContextMenu, true)") && app.includes('term.clearSelection()'), 'right-click copy must clear terminal selection in browser and desktop renderers');

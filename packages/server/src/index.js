@@ -856,6 +856,11 @@ function tmuxHas(name) {
 
 function tmuxSetDefaults(name = '') {
   try { execFileSync(TMUX_CMD, tmuxArgs(['set-option', '-g', 'status', 'off']), { stdio: 'ignore' }); } catch {}
+  try {
+    const features = execFileSync(TMUX_CMD, tmuxArgs(['show-options', '-gv', 'terminal-features']), { encoding: 'utf8' });
+    const hasHyperlinks = features.split(/\r?\n/).some(line => line.startsWith('xterm*:') && line.split(':').includes('hyperlinks'));
+    if (!hasHyperlinks) execFileSync(TMUX_CMD, tmuxArgs(['set-option', '-as', 'terminal-features', ',xterm*:hyperlinks']), { stdio: 'ignore' });
+  } catch {}
   if (name) {
     try { execFileSync(TMUX_CMD, tmuxArgs(['set-option', '-t', name, 'status', 'off']), { stdio: 'ignore' }); } catch {}
   }
