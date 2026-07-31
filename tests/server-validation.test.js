@@ -19,6 +19,14 @@ const opened = ws => new Promise((resolve, reject) => {
   ws.once('error', reject);
 });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const waitFor = async (predicate, message, timeoutMs = 1000) => {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await delay(10);
+  }
+  assert.fail(message);
+};
 
 (async () => {
   try {
@@ -75,7 +83,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.strictEqual(selectActiveCodexAccount([
       { index: 1, active: true, ok: true, primary: null, secondary: { usedPercent: 100 } },
       { index: 2, active: false, ok: true, primary: null, secondary: { usedPercent: 43 } }
-    ]).index, 2, 'a quota-exhausted credential must not remain active when another account has capacity');
+    ]).index, 1, 'the limit display must mirror Hermes pool state instead of inventing a second account-selection policy');
     saveHermesCodexAuth(pooledAuths[0], { access_token: 'finch-refreshed', refresh_token: 'finch-refresh-2' });
     const refreshedPool = JSON.parse(fs.readFileSync(hermesAuthPath, 'utf8'));
     assert.strictEqual(refreshedPool.credential_pool['openai-codex'][0].access_token, 'finch-refreshed', 'refresh must update the matching pool account');
@@ -161,6 +169,10 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     const persistentPaneEnv = fs.readFileSync(`/proc/${persistentPanePid}/environ`, 'utf8').split('\0');
     assert.ok(persistentPaneEnv.includes('PROMPT_TOOLKIT_NO_CPR=1'), 'PassiDeck panes must disable prompt_toolkit cursor position reports');
     assert.ok(persistentPaneEnv.includes('PROMPT_TOOLKIT_BELL=false'), 'PassiDeck panes must suppress prompt_toolkit feedback BELs without suppressing Hermes completion BELs');
+    assert.ok(
+      persistentPaneEnv.includes(`HERMES_TUI_SIDECAR_URL=ws://127.0.0.1:8791/ws?hermesEvents=${persistent.id}`),
+      'new panes must publish native Hermes events back to their own PassiDeck session'
+    );
 
     const redrawSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?session=${persistent.id}`);
     let redrawOutput = '';
@@ -196,6 +208,10 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     assert.strictEqual(app.wss.options.maxPayload, 1024 * 1024, 'WebSocket messages must have the same input ceiling');
 
     const first = new WebSocket(`ws://127.0.0.1:${port}/ws?session=validation`);
+    const firstMessages = [];
+    first.on('message', raw => {
+      try { firstMessages.push(JSON.parse(raw.toString())); } catch {}
+    });
     await opened(first);
     const second = new WebSocket(`ws://127.0.0.1:${port}/ws?session=validation`);
     await opened(second);
@@ -205,6 +221,55 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
     second.send(JSON.stringify({ type: 'input', data: 'second-client' }));
     await delay(20);
     assert.deepStrictEqual(writes, ['first-client', 'second-client'], 'all connected browsers must retain terminal input control');
+
+    const hermesPublisher = new WebSocket(`ws://127.0.0.1:${port}/ws?hermesEvents=validation`);
+    await opened(hermesPublisher);
+    await waitFor(
+      () => firstMessages.some(message => message.type === 'hermes-events' && message.connected === true),
+      'the native Hermes event publisher must mark the matching pane connected'
+    );
+    hermesPublisher.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: { type: 'message.start', session_id: 'live-1' } }));
+    hermesPublisher.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: {
+      type: 'session.info',
+      session_id: 'live-1',
+      payload: { running: true, title: 'Native Hermes Title', stored_session_id: 'stored-1', provider: 'secret-provider-detail' }
+    } }));
+    hermesPublisher.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: {
+      type: 'tool.start',
+      session_id: 'live-1',
+      payload: { tool_id: 'tool-1', args_text: 'must not reach browsers' }
+    } }));
+    await waitFor(
+      () => firstMessages.some(message => message.type === 'hermes-event' && message.event?.type === 'session.info'),
+      'native Hermes lifecycle events must reach the matching pane'
+    );
+    const nativeInfo = firstMessages.find(message => message.type === 'hermes-event' && message.event?.type === 'session.info');
+    assert.deepStrictEqual(nativeInfo.event.payload, {
+      running: true,
+      title: 'Native Hermes Title',
+      stored_session_id: 'stored-1'
+    }, 'PassiDeck must forward only the native Hermes metadata it actually consumes');
+    await waitFor(
+      () => session.meta.title === 'Native Hermes Title' && session.meta.hermesSessionId === 'stored-1',
+      'native Hermes title metadata must update the pane without waiting for database polling'
+    );
+    assert.strictEqual(session.meta.titleSource, 'hermes-event');
+    session.meta.title = 'Dynamic Retitle Wins';
+    session.meta.titleSource = 'passideck-retitle';
+    session.meta.hermesSessionId = 'stored-1';
+    hermesPublisher.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: {
+      type: 'session.title',
+      session_id: 'live-1',
+      payload: { title: 'Late Native Title', session_id: 'stored-1' }
+    } }));
+    await delay(20);
+    assert.strictEqual(session.meta.title, 'Dynamic Retitle Wins', 'native Hermes metadata must not replace the refined plugin title for the same session');
+    assert.ok(!firstMessages.some(message => message.type === 'hermes-event' && message.event?.type === 'tool.start'), 'unused tool payloads must not leak through the pane bridge');
+    hermesPublisher.close();
+    await waitFor(
+      () => firstMessages.some(message => message.type === 'hermes-events' && message.connected === false),
+      'the pane must fall back when its last Hermes event publisher disconnects'
+    );
 
     const initialUi = await fetch(`${base}/api/ui-state`).then(res => res.json());
     assert.strictEqual(initialUi.performanceMode, false, 'new installs must default to Energy saver');

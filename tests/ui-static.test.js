@@ -139,6 +139,9 @@ assert.ok(app.includes('term.onBell?.(() => notifyResponseComplete(id));'), 'nat
 assert.ok(
   app.includes('function setSessionWorking(id, working)') &&
   app.includes('function syncSessionWorkingFromTerminal(id, entry)') &&
+  app.includes('function applyHermesEvent(id, message)') &&
+  app.includes('if (entry.hermesEventsConnected) return;') &&
+  app.includes("if (msg.type === 'hermes-event' || msg.type === 'hermes-events') applyHermesEvent(id, msg);") &&
   app.includes("isHermesTuiEntry(entry)") &&
   app.includes("line.translateToString(false).includes('Ctrl+C to interrupt')") &&
   app.includes('syncSessionWorkingFromTerminal(id, entry);') &&
@@ -147,7 +150,7 @@ assert.ok(
   !app.includes("isHermesEntry(entry) && clean.includes('\\r')") &&
   style.includes('.term-panel.working[data-connection-status="live"] .connection-dot') &&
   style.includes('@keyframes session-working-spin'),
-  'the working spinner must mirror Hermes TUI busy state from the rendered terminal instead of inferring lifecycle from input or timers'
+  'the working spinner must prefer native Hermes lifecycle events while retaining rendered ui.busy as the disconnect/restart fallback'
 );
 assert.ok(app.includes("entry.outputBuffer = '\\x1bc\\r\\n[PassiDeck: output backlog reset]\\r\\n';"), 'terminal output backpressure must bound overload with a parser-safe reset marker');
 const outputFlushBlock = app.slice(app.indexOf('function flushTerminalOutput'), app.indexOf('function queueTerminalOutput'));
@@ -282,7 +285,7 @@ assert.ok(
   app.includes('handleTerminalLink(event, link)'),
   'Hermes TUI selection must support mouse-only browser/desktop input and activate terminal links from the trusted pointer event'
 );
-assert.ok(html.includes('app.js?v=20260731-working-indicator-v3') && html.includes('style.css?v=20260731-working-indicator-v3'), 'client cache keys must activate Hermes-native working-state mirroring');
+assert.ok(html.includes('app.js?v=20260801-hermes-events-v1') && html.includes('style.css?v=20260801-hermes-events-v1'), 'client cache keys must activate native Hermes lifecycle events with legacy fallbacks');
 assert.ok(app.includes("const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v2:'"), 'legacy snapshots without OSC 8 targets must be invalidated');
 assert.ok(app.includes('cols: entry.term.cols') && app.includes('Number.isInteger(snapshot.cols) && snapshot.cols === term.cols'), 'snapshot OSC 8 targets must fail closed after terminal column reflow');
 assert.ok(app.includes('const HERMES_TUI_WHEEL_MULTIPLIER = 3') && app.includes('clean.repeat(HERMES_TUI_WHEEL_MULTIPLIER)'), 'Hermes TUI wheel input must be accelerated at the PTY input boundary');

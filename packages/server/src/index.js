@@ -598,12 +598,7 @@ async function readCodexLimits() {
 
 function selectActiveCodexAccount(accounts) {
   const list = Array.isArray(accounts) ? accounts : [];
-  const withCapacity = list.find(account => {
-    if (!account?.ok) return false;
-    const windows = [account.primary, account.secondary].filter(Boolean);
-    return windows.length > 0 && windows.every(window => Number(window.usedPercent) < 100);
-  });
-  return withCapacity || list.find(account => account?.active) || list[0] || null;
+  return list.find(account => account?.active) || list[0] || null;
 }
 
 async function readCodexLimitsForAuth(auth) {
@@ -717,13 +712,14 @@ function isTitleBridgeAddress(address, config = {}) {
   return Boolean(host && host !== '0.0.0.0' && host !== '::' && remote === host);
 }
 
-function passideckTitleEnv(config = {}) {
+function passideckTitleEnv(config = {}, sessionId = '') {
   const port = Number(config.port) || Number(process.env.PASSIDECK_PORT) || 8791;
   const host = titleBridgeHost(config);
   const urlHost = host.includes(':') ? `[${host}]` : host;
   return [
     `PASSIDECK_TITLE_ENDPOINT=http://${urlHost}:${port}/internal/session-title`,
-    `PASSIDECK_TITLE_GEN_LLM=${normalizeTitleGenLlm(config.titleGenLlm)}`
+    `PASSIDECK_TITLE_GEN_LLM=${normalizeTitleGenLlm(config.titleGenLlm)}`,
+    ...(sessionId ? [`HERMES_TUI_SIDECAR_URL=ws://${urlHost}:${port}/ws?hermesEvents=${encodeURIComponent(sessionId)}`] : [])
   ];
 }
 
@@ -849,6 +845,37 @@ function syncHermesTitles(sessions, hermesDb, resolveActiveSessionId = activeHer
   return changed;
 }
 
+function sanitizeHermesEvent(frame) {
+  const event = frame?.method === 'event' ? frame.params : frame;
+  const type = String(event?.type || '');
+  const sessionId = String(event?.session_id || '').slice(0, 160);
+  if (type === 'message.start' || type === 'message.complete') return { type, session_id: sessionId };
+  if (type === 'session.info') {
+    const payload = event.payload && typeof event.payload === 'object' ? event.payload : {};
+    return {
+      type,
+      session_id: sessionId,
+      payload: {
+        ...(typeof payload.running === 'boolean' ? { running: payload.running } : {}),
+        ...(payload.title ? { title: sanitizeDynamicTitle(payload.title) } : {}),
+        ...(payload.stored_session_id ? { stored_session_id: String(payload.stored_session_id).slice(0, 160) } : {})
+      }
+    };
+  }
+  if (type === 'session.title') {
+    const payload = event.payload && typeof event.payload === 'object' ? event.payload : {};
+    return {
+      type,
+      session_id: sessionId,
+      payload: {
+        ...(payload.title ? { title: sanitizeDynamicTitle(payload.title) } : {}),
+        ...(payload.session_id ? { stored_session_id: String(payload.session_id).slice(0, 160) } : {})
+      }
+    };
+  }
+  return null;
+}
+
 function tmuxHas(name) {
   try { execFileSync(TMUX_CMD, tmuxArgs(['has-session', '-t', name]), { stdio: 'ignore' }); return true; }
   catch { return false; }
@@ -868,7 +895,7 @@ function tmuxSetDefaults(name = '') {
 
 function tmuxNew(name, cwd, launch, sessionId, config = {}) {
   if (tmuxHas(name)) { tmuxSetDefaults(name); return; }
-  execFileSync(TMUX_CMD, tmuxArgs(['new-session', '-d', '-s', name, '-c', cwd, 'env', `PASSIDECK_SESSION=${sessionId}`, `HERMES_SESSION_SOURCE=${hermesSource(sessionId)}`, ...passideckTitleEnv(config), 'PROMPT_TOOLKIT_NO_CPR=1', 'PROMPT_TOOLKIT_BELL=false', launch.file, ...launch.args]), { stdio: 'ignore' });
+  execFileSync(TMUX_CMD, tmuxArgs(['new-session', '-d', '-s', name, '-c', cwd, 'env', `PASSIDECK_SESSION=${sessionId}`, `HERMES_SESSION_SOURCE=${hermesSource(sessionId)}`, ...passideckTitleEnv(config, sessionId), 'PROMPT_TOOLKIT_NO_CPR=1', 'PROMPT_TOOLKIT_BELL=false', launch.file, ...launch.args]), { stdio: 'ignore' });
   tmuxSetDefaults(name);
 }
 
@@ -1132,11 +1159,49 @@ function createServer(config = loadConfig()) {
 
   wss.on('connection', (ws, req) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
+    const publisherSessionId = url.searchParams.get('hermesEvents');
+    if (publisherSessionId !== null) {
+      if (!isTitleBridgeAddress(req.socket?.remoteAddress, config)) return ws.close(4003, 'Local host only');
+      const session = sessions.get(publisherSessionId);
+      if (!session) return ws.close(4001, 'Session not found');
+      if (!session.hermesEventPublishers) session.hermesEventPublishers = new Set();
+      session.hermesEventPublishers.add(ws);
+      session.broadcast({ type: 'hermes-events', connected: true, running: session.hermesRunning ?? null });
+      ws.on('message', raw => {
+        let frame;
+        try { frame = JSON.parse(raw.toString()); } catch { return; }
+        const event = sanitizeHermesEvent(frame);
+        if (!event) return;
+        if (event.type === 'message.start') session.hermesRunning = true;
+        if (event.type === 'message.complete') session.hermesRunning = false;
+        if (event.type === 'session.info' && typeof event.payload?.running === 'boolean') session.hermesRunning = event.payload.running;
+        const title = String(event.payload?.title || '').trim();
+        const storedSessionId = String(event.payload?.stored_session_id || '').trim();
+        if (title && storedSessionId && !(
+          session.meta.titleSource === 'passideck-retitle' && session.meta.hermesSessionId === storedSessionId
+        )) {
+          session.meta.title = title;
+          session.meta.titleSource = 'hermes-event';
+          session.meta.hermesSessionId = storedSessionId;
+          session.broadcast({ type: 'meta', session: session.toJSON() });
+        }
+        session.broadcast({ type: 'hermes-event', event });
+      });
+      ws.on('close', () => {
+        session.hermesEventPublishers.delete(ws);
+        if (!session.hermesEventPublishers.size) {
+          session.hermesRunning = null;
+          session.broadcast({ type: 'hermes-events', connected: false });
+        }
+      });
+      return;
+    }
     if (!websocketAllowed(req, url)) return ws.close(4003, 'Unauthorized');
     const session = sessions.get(url.searchParams.get('session'));
     if (!session) return ws.close(4001, 'Session not found');
     session.clients.add(ws);
     ws.send(JSON.stringify({ type: 'meta', session: session.toJSON() }));
+    if (session.hermesEventPublishers?.size) ws.send(JSON.stringify({ type: 'hermes-events', connected: true, running: session.hermesRunning ?? null }));
     ws.send(JSON.stringify({ type: 'replay', data: '\r\n[PassiDeck reconnect: output replay disabled; live session still running]\r\n' }));
 
     ws.on('message', (raw) => {
