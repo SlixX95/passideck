@@ -378,6 +378,28 @@ Keep the complete PassiDeck audit and rollout objective.
         self.assertIn("Please fix the failing media-path assertion", title_request[0]["text"])
         self.assertEqual(title_request[1], {"type": "image_url", "image_url": {"url": image_url}})
 
+    def test_model_title_normalizes_passideck_brand(self):
+        plugin = load_plugin()
+
+        for title in (
+            "Passideck Titelgenerierung prüfen",
+            "Pasideck Titelgenerierung prüfen",
+            "Passdeck Titelgenerierung prüfen",
+        ):
+            self.assertEqual(
+                plugin._sanitize_model_title(title),
+                "PassiDeck Titelgenerierung prüfen",
+            )
+
+    def test_model_title_removes_punctuation_after_length_limit(self):
+        plugin = load_plugin()
+
+        title = plugin._sanitize_model_title(
+            "Linksgroupie/Celebforum-Scrape: Prüfen, Extrahieren, Validieren, Archivieren, Danach"
+        )
+
+        self.assertFalse(title.endswith(","), title)
+
     def test_model_call_uses_hermes_title_generation_aux_task(self):
         plugin = load_plugin()
         recorded = {}

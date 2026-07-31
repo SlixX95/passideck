@@ -162,11 +162,11 @@ def _sanitize_model_title(content: str) -> str:
         content = re.sub(r"<think\b[^>]*>.*?</think\s*>", "", content or "", flags=re.I | re.S)
     title = _clean_text(content).splitlines()[0].strip() if content else ""
     title = re.sub(r"^title\s*:\s*", "", title, flags=re.I).strip()
+    title = re.sub(r"\b(?:passi?deck|pasideck)\b", "PassiDeck", title, flags=re.I)
     title = title.strip("\"'`")
-    title = title.rstrip(".,:;!?").strip()
     if len(title) > _TITLE_LIMIT:
         title = title[:_TITLE_LIMIT].rsplit(" ", 1)[0] or title[:_TITLE_LIMIT]
-    return title
+    return title.rstrip(".,:;!?").strip()
 
 
 def _call_title_model(context: str, images: tuple[dict[str, Any], ...] = ()) -> str:
