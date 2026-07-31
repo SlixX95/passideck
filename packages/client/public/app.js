@@ -278,14 +278,31 @@ function setConnectionStatus(id, status) {
   const el = entry?.el || document.getElementById(`panel-${id}`);
   if (!el) return;
   el.dataset.connectionStatus = status;
+  if (entry && status !== 'live') entry.working = false;
+  updateSessionIndicator(id);
+  if (state.activeId === id) renderBackendLatency();
+}
+
+function updateSessionIndicator(id) {
+  const entry = state.sessions.get(id);
+  const el = entry?.el || document.getElementById(`panel-${id}`);
+  if (!el) return;
   const dot = el.querySelector('.connection-dot');
   if (dot) {
     const labels = { live: 'Connected', reconnecting: 'Reconnecting', offline: 'Offline' };
-    const label = labels[status] || status;
+    const working = Boolean(entry?.working && el.dataset.connectionStatus === 'live');
+    const label = working ? 'Working' : labels[el.dataset.connectionStatus] || el.dataset.connectionStatus;
+    el.classList.toggle('working', working);
     setTooltip(dot, label);
     dot.setAttribute('aria-label', label);
   }
-  if (state.activeId === id) renderBackendLatency();
+}
+
+function setSessionWorking(id, working) {
+  const entry = state.sessions.get(id);
+  if (!entry) return;
+  entry.working = Boolean(working);
+  updateSessionIndicator(id);
 }
 
 function renderBackendLatency() {
@@ -1460,6 +1477,7 @@ function pulsePaneTitlebar(id) {
 }
 
 function notifyResponseComplete(id) {
+  setSessionWorking(id, false);
   if (terminalInputIsFocused(id)) return;
   pulsePaneTitlebar(id);
   if (shouldPlayResponseSound(id)) playBell(state.responseSoundTone, state.responseSoundVolume);
@@ -3116,11 +3134,14 @@ function createPanel(session, opts = {}) {
     const entry = state.sessions.get(id);
     let clean = sanitizeTerminalInput(data);
     if (isHermesTuiEntry(entry) && /^(?:\x1b\[<6[45];\d+;\d+M)+$/.test(clean)) clean = clean.repeat(HERMES_TUI_WHEEL_MULTIPLIER);
-    if (clean && entry?.ws?.readyState === WebSocket.OPEN) entry.ws.send(JSON.stringify({ type: 'input', data: clean }));
+    if (clean && entry?.ws?.readyState === WebSocket.OPEN) {
+      if (isHermesEntry(entry) && clean.includes('\r')) setSessionWorking(id, true);
+      entry.ws.send(JSON.stringify({ type: 'input', data: clean }));
+    }
   });
 
   const hasSnapshot = hasTerminalSnapshot(id);
-  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, arrangeCleanup: dismissArrange, restored: hasSnapshot, redrawPending: true, snapshotTimer: null, outputBuffer: '', outputFlushTimer: null, outputWriteInFlight: false, outputFrameHandle: null, outputCancelled: false, titleSource: '', lastSentCols: 0, lastSentRows: 0 });
+  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, arrangeCleanup: dismissArrange, restored: hasSnapshot, redrawPending: true, snapshotTimer: null, outputBuffer: '', outputFlushTimer: null, outputWriteInFlight: false, outputFrameHandle: null, outputCancelled: false, titleSource: '', working: false, lastSentCols: 0, lastSentRows: 0 });
   term.onWriteParsed?.(() => refreshTitleFromTerminal(id));
   term.onBell?.(() => notifyResponseComplete(id));
 
@@ -3753,9 +3774,14 @@ function readFileAsDataUrl(file) {
   });
 }
 
+function isHermesEntry(entry) {
+  const meta = entry?.session?.meta || {};
+  return /\bhermes\b/i.test(String(meta.command || meta.label || ''));
+}
+
 function isHermesTuiEntry(entry) {
   const meta = entry?.session?.meta || {};
-  return /\bhermes\b[^\n]*\s--tui\b/i.test(String(meta.command || meta.label || ''));
+  return isHermesEntry(entry) && /\s--tui\b/i.test(String(meta.command || meta.label || ''));
 }
 
 function uploadInsertion(upload, entry) {

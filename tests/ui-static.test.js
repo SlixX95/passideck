@@ -136,6 +136,15 @@ for (const name of ['desktop-response-pulse', 'switcher-response-pulse', 'pane-r
   assert.ok(!/\b(?:filter|background|border-color|box-shadow)\s*:/.test(block), `${name} must not animate repaint-heavy paint properties`);
 }
 assert.ok(app.includes('term.onBell?.(() => notifyResponseComplete(id));'), 'native Hermes terminal completion BEL must drive response attention');
+assert.ok(
+  app.includes('function setSessionWorking(id, working)') &&
+  app.includes("isHermesEntry(entry) && clean.includes('\\r')") &&
+  app.includes('setSessionWorking(id, true)') &&
+  app.includes('setSessionWorking(id, false)') &&
+  style.includes('.term-panel.working[data-connection-status="live"] .connection-dot') &&
+  style.includes('@keyframes session-working-spin'),
+  'a submitted Hermes prompt must turn the existing connection dot into a working spinner until the completion BEL'
+);
 assert.ok(app.includes("entry.outputBuffer = '\\x1bc\\r\\n[PassiDeck: output backlog reset]\\r\\n';"), 'terminal output backpressure must bound overload with a parser-safe reset marker');
 const outputFlushBlock = app.slice(app.indexOf('function flushTerminalOutput'), app.indexOf('function queueTerminalOutput'));
 assert.ok(!outputFlushBlock.includes('saveTerminalSnapshot('), 'terminal output flushes must not synchronously serialize snapshots on the hot path');
@@ -269,7 +278,7 @@ assert.ok(
   app.includes('handleTerminalLink(event, link)'),
   'Hermes TUI selection must support mouse-only browser/desktop input and activate terminal links from the trusted pointer event'
 );
-assert.ok(html.includes('app.js?v=20260726-tui-scroll-redraw-v6') && html.includes('style.css?v=20260726-tui-scroll-redraw-v6'), 'client cache keys must activate accelerated TUI scrolling and automatic terminal redraw');
+assert.ok(html.includes('app.js?v=20260731-working-indicator-v1') && html.includes('style.css?v=20260731-working-indicator-v1'), 'client cache keys must activate the per-session working indicator');
 assert.ok(app.includes("const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v2:'"), 'legacy snapshots without OSC 8 targets must be invalidated');
 assert.ok(app.includes('cols: entry.term.cols') && app.includes('Number.isInteger(snapshot.cols) && snapshot.cols === term.cols'), 'snapshot OSC 8 targets must fail closed after terminal column reflow');
 assert.ok(app.includes('const HERMES_TUI_WHEEL_MULTIPLIER = 3') && app.includes('clean.repeat(HERMES_TUI_WHEEL_MULTIPLIER)'), 'Hermes TUI wheel input must be accelerated at the PTY input boundary');

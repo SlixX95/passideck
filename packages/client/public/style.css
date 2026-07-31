@@ -584,6 +584,15 @@ body.notify-blinking .term-header.response-pulse { animation: pane-response-puls
 .term-panel[data-connection-status="live"] .connection-dot { background: #00d26a; box-shadow: 0 0 8px #00d26a; }
 .term-panel[data-connection-status="reconnecting"] .connection-dot { background: #ffb020; box-shadow: 0 0 8px #ffb020; }
 .term-panel[data-connection-status="offline"] .connection-dot { background: #ff453a; box-shadow: 0 0 8px #ff453a; }
+@keyframes session-working-spin { to { transform: rotate(360deg); } }
+.term-panel.working[data-connection-status="live"] .connection-dot {
+  box-sizing: border-box;
+  background: transparent;
+  border: 2px solid color-mix(in srgb, var(--tg-accent) 32%, transparent);
+  border-top-color: var(--tg-accent);
+  box-shadow: 0 0 7px color-mix(in srgb, var(--tg-accent) 48%, transparent);
+  animation: session-working-spin .9s linear infinite;
+}
 .term-title {
   flex: 0 1 auto;
   font-weight: 600;
