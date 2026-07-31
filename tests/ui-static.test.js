@@ -141,9 +141,13 @@ assert.ok(
   app.includes("isHermesEntry(entry) && clean.includes('\\r')") &&
   app.includes('setSessionWorking(id, true)') &&
   app.includes('setSessionWorking(id, false)') &&
+  app.includes('const SESSION_WORKING_IDLE_MS = 1500;') &&
+  app.includes('entry.workingIdleTimer = setTimeout(() => setSessionWorking(id, false), SESSION_WORKING_IDLE_MS)') &&
+  app.includes("if (clean === '\\x1b' || clean.includes('\\x03')) setSessionWorking(id, false)") &&
+  app.includes('clearTimeout(entry.workingIdleTimer)') &&
   style.includes('.term-panel.working[data-connection-status="live"] .connection-dot') &&
   style.includes('@keyframes session-working-spin'),
-  'a submitted Hermes prompt must turn the existing connection dot into a working spinner until the completion BEL'
+  'a submitted Hermes prompt must show a working spinner and clear it on BEL, visible output idle, cancellation, disconnect, or pane disposal'
 );
 assert.ok(app.includes("entry.outputBuffer = '\\x1bc\\r\\n[PassiDeck: output backlog reset]\\r\\n';"), 'terminal output backpressure must bound overload with a parser-safe reset marker');
 const outputFlushBlock = app.slice(app.indexOf('function flushTerminalOutput'), app.indexOf('function queueTerminalOutput'));
@@ -278,7 +282,7 @@ assert.ok(
   app.includes('handleTerminalLink(event, link)'),
   'Hermes TUI selection must support mouse-only browser/desktop input and activate terminal links from the trusted pointer event'
 );
-assert.ok(html.includes('app.js?v=20260731-working-indicator-v1') && html.includes('style.css?v=20260731-working-indicator-v1'), 'client cache keys must activate the per-session working indicator');
+assert.ok(html.includes('app.js?v=20260731-working-indicator-v2') && html.includes('style.css?v=20260731-working-indicator-v2'), 'client cache keys must activate working-indicator lifecycle cleanup');
 assert.ok(app.includes("const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v2:'"), 'legacy snapshots without OSC 8 targets must be invalidated');
 assert.ok(app.includes('cols: entry.term.cols') && app.includes('Number.isInteger(snapshot.cols) && snapshot.cols === term.cols'), 'snapshot OSC 8 targets must fail closed after terminal column reflow');
 assert.ok(app.includes('const HERMES_TUI_WHEEL_MULTIPLIER = 3') && app.includes('clean.repeat(HERMES_TUI_WHEEL_MULTIPLIER)'), 'Hermes TUI wheel input must be accelerated at the PTY input boundary');
