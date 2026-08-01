@@ -208,10 +208,8 @@ assert.ok(
   shellHtml.includes("content: '🔔'") &&
   shellHtml.includes('@keyframes connection-dot-out') &&
   shellHtml.includes('@keyframes connection-bell-in') &&
-  shellHtml.includes('.backend-tab.response-blinking .connectionStatus.attention::before') &&
-  shellHtml.includes('.backend-tab.response-blinking .connectionStatus.attention::after') &&
-  !shellHtml.includes('@media (prefers-reduced-motion: reduce)'),
-  'shell tabs must morph the connection dot into a persistent accessible response bell under the explicit Notify blinking setting'
+  shellHtml.includes('@media (prefers-reduced-motion: reduce)'),
+  'shell tabs must morph the connection dot into a persistent accessible response bell'
 );
 assert.ok(
   main.includes("ipcMain.on('passideck:clear-response-attention'") &&
