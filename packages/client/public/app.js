@@ -3500,6 +3500,19 @@ function selectDesktop(id) {
   updateEmpty();
   renderSwitcher();
   scheduleTerminalFit();
+  requestAnimationFrame(() => {
+    if (state.activeDesktopId !== id) return;
+    for (const paneId of desktopPaneIds(id)) {
+      if (state.minimized.has(paneId)) continue;
+      const entry = state.sessions.get(paneId);
+      if (!entry) continue;
+      try {
+        fitEntry(paneId, entry, { force: true, allowHeight: true, scrollBottom: true });
+        entry.term.refresh(0, Math.max(0, entry.term.rows - 1));
+      } catch {}
+      requestTerminalRedraw(entry);
+    }
+  });
 }
 
 function createDesktop() {

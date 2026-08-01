@@ -834,6 +834,52 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       assert.ok(Math.abs(movedPane.rect[key] - movedPane.expected[key]) < 2, `moving into an empty desktop must use its first free slot (${key}): ${JSON.stringify(movedPane)}`);
     }
     assert.strictEqual(movedPane.frontmost, true, `a moved pane must enter the target desktop in front: ${JSON.stringify(movedPane)}`);
+    const restoredDesktopSwitch = await evalExpr(cdp, sid, `(async () => {
+      const target = '${desktopCreation.active}';
+      const paneId = '${madeSessions[0]}';
+      const entry = state.sessions.get(paneId);
+      const originalSend = entry.ws.send;
+      const originalRefresh = entry.term.refresh.bind(entry.term);
+      const originalRestored = entry.restored;
+      const messages = [];
+      let refreshes = 0;
+      entry.restored = true;
+      entry.ws.send = function(raw) {
+        const message = JSON.parse(raw);
+        if (message.type === 'resize' || message.type === 'redraw') messages.push(message.type);
+        return originalSend.call(this, raw);
+      };
+      entry.term.refresh = (...args) => { refreshes += 1; return originalRefresh(...args); };
+      try {
+        selectDesktop(target);
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const grid = document.getElementById('termGrid').getBoundingClientRect();
+        const panel = entry.el.getBoundingClientRect();
+        return {
+          active: state.activeDesktopId === target,
+          visible: !entry.el.classList.contains('layout-hidden'),
+          inside: panel.left >= grid.left - 1 && panel.top >= grid.top - 1 && panel.right <= grid.right + 1 && panel.bottom <= grid.bottom + 1,
+          refreshes,
+          resized: messages.includes('resize'),
+          redrawn: messages.includes('redraw')
+        };
+      } finally {
+        entry.ws.send = originalSend;
+        entry.term.refresh = originalRefresh;
+        entry.restored = originalRestored;
+        if (state.activeDesktopId !== 'desktop-1') selectDesktop('desktop-1');
+      }
+    })()`);
+    assert.deepStrictEqual({
+      active: restoredDesktopSwitch.active,
+      visible: restoredDesktopSwitch.visible,
+      inside: restoredDesktopSwitch.inside,
+      resized: restoredDesktopSwitch.resized,
+      redrawn: restoredDesktopSwitch.redrawn
+    }, {
+      active: true, visible: true, inside: true, resized: true, redrawn: true
+    }, `switching to a desktop hidden during reload must refit and redraw its restored panes: ${JSON.stringify(restoredDesktopSwitch)}`);
+    assert.ok(restoredDesktopSwitch.refreshes >= 1, `switching to a desktop hidden during reload must repaint its xterm panes: ${JSON.stringify(restoredDesktopSwitch)}`);
     await waitEval(cdp, sid, `state.saveTimer === null && state.panePrefs.paneDesktop['${madeSessions[0]}'] === '${desktopCreation.active}'`);
     await waitEval(cdp, peerSid, `state.panePrefs.paneDesktop['${madeSessions[0]}'] === '${desktopCreation.active}'`);
 

@@ -285,7 +285,7 @@ assert.ok(
   app.includes('handleTerminalLink(event, link)'),
   'Hermes TUI selection must support mouse-only browser/desktop input and activate terminal links from the trusted pointer event'
 );
-assert.ok(html.includes('app.js?v=20260801-hermes-wheel-v4') && html.includes('style.css?v=20260801-hermes-wheel-v4'), 'client cache keys must activate normal Hermes scrollback recovery from stale alternate-buffer state');
+assert.ok(html.includes('app.js?v=20260801-desktop-reload-v1') && html.includes('style.css?v=20260801-desktop-reload-v1'), 'client cache keys must activate restored desktop repaint and redraw');
 assert.ok(app.includes("const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v2:'"), 'legacy snapshots without OSC 8 targets must be invalidated');
 assert.ok(app.includes('cols: entry.term.cols') && app.includes('Number.isInteger(snapshot.cols) && snapshot.cols === term.cols'), 'snapshot OSC 8 targets must fail closed after terminal column reflow');
 assert.ok(app.includes('const HERMES_TUI_WHEEL_MULTIPLIER = 3') && app.includes('clean.repeat(HERMES_TUI_WHEEL_MULTIPLIER)'), 'Hermes TUI wheel input must be accelerated at the PTY input boundary');
