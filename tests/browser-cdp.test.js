@@ -2349,6 +2349,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const calls = [];
       const entries = [...state.sessions.values()];
       const originalActiveId = state.activeId;
+      const originalNotifyBlinking = state.notifyBlinking;
       const originalDesktopDescriptor = Object.getOwnPropertyDescriptor(window, 'passideckDesktop');
       Object.defineProperty(window, 'passideckDesktop', {
         configurable: true,
@@ -2359,6 +2360,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         }
       });
       setResponseSoundMode('off');
+      setNotifyBlinking(true, { persist: false });
       document.activeElement?.blur?.();
       notifyResponseComplete(entries[0].session.id);
       notifyResponseComplete(entries[1].session.id);
@@ -2368,6 +2370,16 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const immediateTab = switcher.classList.contains('response-pulse');
       const headerStyle = getComputedStyle(header);
       const tabStyle = getComputedStyle(switcher);
+      const indicator = entries[0].el.querySelector('.connection-dot');
+      const indicatorBefore = getComputedStyle(indicator, '::before');
+      const indicatorAfter = getComputedStyle(indicator, '::after');
+      const indicatorState = {
+        indicatorMarked: entries[0].el.classList.contains('response-attention'),
+        indicatorLabel: indicator.getAttribute('aria-label'),
+        indicatorDotAnimation: indicatorBefore.animationName,
+        indicatorBellAnimation: indicatorAfter.animationName,
+        indicatorBellContent: indicatorAfter.content
+      };
       const tabIterations = tabStyle.animationIterationCount;
       const headerDuration = headerStyle.animationDuration;
       const tabDuration = tabStyle.animationDuration;
@@ -2375,6 +2387,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       await new Promise(resolve => setTimeout(resolve, 1700));
       const persistent = header.classList.contains('response-pulse');
       const persistentTab = switcher.classList.contains('response-pulse');
+      const persistentBell = getComputedStyle(indicator, '::after').opacity;
       entries[0].el.querySelector('.terminal').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
       const desktopHeldForOtherPane = !calls.includes('clear');
       const otherBeforeSwitcherClick = entries[1].responseAttention;
@@ -2389,14 +2402,19 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         headerDuration,
         tabDuration,
         badgeContent,
+        ...indicatorState,
+        persistentBell,
         persistent,
         persistentTab,
         cleared: !header.classList.contains('response-pulse'),
         clearedTab: !document.querySelector('[data-switcher-pane-id="' + entries[0].session.id + '"]').classList.contains('response-pulse'),
+        indicatorCleared: !entries[0].el.classList.contains('response-attention'),
+        indicatorLabelCleared: indicator.getAttribute('aria-label'),
         desktopHeldForOtherPane,
         otherBeforeSwitcherClick,
         otherClearedBySwitcher
       };
+      setNotifyBlinking(originalNotifyBlinking, { persist: false });
       if (originalDesktopDescriptor) Object.defineProperty(window, 'passideckDesktop', originalDesktopDescriptor);
       else delete window.passideckDesktop;
       return result;
@@ -2409,10 +2427,18 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       headerDuration: '1.6s',
       tabDuration: '0s',
       badgeContent: 'none',
+      indicatorMarked: true,
+      indicatorLabel: 'New response',
+      indicatorDotAnimation: 'session-response-dot-out',
+      indicatorBellAnimation: 'session-response-bell-in',
+      indicatorBellContent: '"🔔"',
+      persistentBell: '1',
       persistent: true,
       persistentTab: true,
       cleared: true,
       clearedTab: true,
+      indicatorCleared: true,
+      indicatorLabelCleared: 'Connected',
       desktopHeldForOtherPane: true,
       otherBeforeSwitcherClick: true,
       otherClearedBySwitcher: true

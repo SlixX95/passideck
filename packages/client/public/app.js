@@ -291,8 +291,10 @@ function updateSessionIndicator(id) {
   if (dot) {
     const labels = { live: 'Connected', reconnecting: 'Reconnecting', offline: 'Offline' };
     const working = Boolean(entry?.working && el.dataset.connectionStatus === 'live');
-    const label = working ? 'Working' : labels[el.dataset.connectionStatus] || el.dataset.connectionStatus;
+    const attention = Boolean(entry?.responseAttention);
+    const label = attention ? 'New response' : working ? 'Working' : labels[el.dataset.connectionStatus] || el.dataset.connectionStatus;
     el.classList.toggle('working', working);
+    el.classList.toggle('response-attention', attention);
     setTooltip(dot, label);
     dot.setAttribute('aria-label', label);
   }
@@ -1472,6 +1474,7 @@ function terminalInputIsFocused(id, hasDocumentFocus = document.hasFocus(), hidd
 
 function updateResponseAttentionUi(id) {
   const entry = state.sessions.get(id);
+  updateSessionIndicator(id);
   const button = document.querySelector(`[data-switcher-pane-id="${CSS.escape(id)}"]`);
   const markAria = (el, marked) => {
     if (!el) return;
