@@ -200,9 +200,16 @@ assert.deepStrictEqual(nativeAttentionCleanupProbe('win32').flashCalls, [false],
 assert.deepStrictEqual(nativeAttentionCleanupProbe('win32', true).flashCalls, [], 'closed Windows cleanup must not call flashFrame on a destroyed BrowserWindow');
 assert.ok(
   shellJs.includes("backend.attention ? ' attention response-pulse' : ''") &&
-  shellJs.includes("badge.className = 'response-badge'") &&
-  shellJs.includes('new response'),
-  'shell tabs must expose a visible and accessible response beacon'
+  shellJs.includes("backend.attention ? ' attention' : ''") &&
+  !shellJs.includes("badge.className = 'response-badge'") &&
+  shellJs.includes('new response') &&
+  shellHtml.includes('.connectionStatus.attention::before') &&
+  shellHtml.includes('.connectionStatus.attention::after') &&
+  shellHtml.includes("content: '🔔'") &&
+  shellHtml.includes('@keyframes connection-dot-out') &&
+  shellHtml.includes('@keyframes connection-bell-in') &&
+  shellHtml.includes('@media (prefers-reduced-motion: reduce)'),
+  'shell tabs must morph the connection dot into a persistent accessible response bell'
 );
 assert.ok(
   main.includes("ipcMain.on('passideck:clear-response-attention'") &&
