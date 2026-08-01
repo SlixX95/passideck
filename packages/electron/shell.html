@@ -26,14 +26,12 @@
     .connectionStatus.loading { --status-color: #d5aa52; }
     .connectionStatus.online { --status-color: #56d68b; }
     .connectionStatus::before { content: ''; position: absolute; inset: 2.5px; border-radius: 50%; background: var(--status-color); box-shadow: 0 0 6px var(--status-color); }
-    .connectionStatus.attention::before { background: conic-gradient(transparent 0 25%, var(--status-color) 25%); animation: connection-dot-out 420ms ease-in forwards; }
-    .connectionStatus.attention::after { content: '🔔'; position: absolute; inset: 0; display: grid; place-items: center; font-size: 11px; line-height: 1; opacity: 0; animation: connection-bell-in 300ms 150ms ease-out forwards; }
-    @keyframes connection-dot-out { to { opacity: 0; transform: rotate(240deg) scale(.35); } }
+    .connectionStatus.attention::before { opacity: 0; background: conic-gradient(transparent 0 25%, var(--status-color) 25%); }
+    .connectionStatus.attention::after { content: '🔔'; position: absolute; inset: 0; display: grid; place-items: center; font-size: 11px; line-height: 1; opacity: 1; }
+    .backend-tab.response-blinking .connectionStatus.attention::before { animation: connection-dot-out 420ms ease-in forwards; }
+    .backend-tab.response-blinking .connectionStatus.attention::after { animation: connection-bell-in 300ms 150ms ease-out both; }
+    @keyframes connection-dot-out { from { opacity: 1; transform: rotate(0) scale(1); } to { opacity: 0; transform: rotate(240deg) scale(.35); } }
     @keyframes connection-bell-in { from { opacity: 0; transform: rotate(-160deg) scale(.45); } to { opacity: 1; transform: rotate(0) scale(1); } }
-    @media (prefers-reduced-motion: reduce) {
-      .connectionStatus.attention::before { animation: none; opacity: 0; }
-      .connectionStatus.attention::after { animation: none; opacity: 1; transform: none; }
-    }
     .backend-edit { margin-left: auto; color: inherit; opacity: 0; visibility: hidden; transition: opacity 80ms linear, visibility 0s linear 80ms; }
     .backend-tab:hover .backend-edit { opacity: 1; visibility: visible; transition-delay: 300ms; }
     .backend-tab:focus-visible .backend-edit { opacity: 1; visibility: visible; transition-delay: 0s; }
