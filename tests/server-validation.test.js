@@ -269,6 +269,35 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
       'the pane must fall back when its last Hermes event publisher disconnects'
     );
 
+    const workingEventCount = () => firstMessages.filter(message => message.type === 'hermes-event' && message.event?.type === 'message.start').length;
+    const workingStart = await fetch(`${base}/internal/session-working`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'validation', working: true, turnId: 'turn-new' })
+    });
+    assert.strictEqual(workingStart.status, 200);
+    await waitFor(() => workingEventCount() >= 1, 'a current Hermes turn must mark the pane working');
+    const countAfterStart = workingEventCount();
+    const staleWorkingEnd = await fetch(`${base}/internal/session-working`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'validation', working: false, turnId: 'turn-old' })
+    });
+    assert.strictEqual(staleWorkingEnd.status, 202, 'a late completion from an older turn must be accepted as stale without clearing the current turn');
+    assert.deepStrictEqual(await staleWorkingEnd.json(), { ok: true, stale: true, working: true, turnId: 'turn-new' });
+    await delay(20);
+    assert.strictEqual(workingEventCount(), countAfterStart, 'a stale completion must not broadcast a false working event');
+    const workingEnd = await fetch(`${base}/internal/session-working`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'validation', working: false, turnId: 'turn-new' })
+    });
+    assert.strictEqual(workingEnd.status, 200);
+    await waitFor(
+      () => firstMessages.some(message => message.type === 'hermes-event' && message.event?.type === 'message.complete'),
+      'the matching current-turn completion must clear the pane'
+    );
+
     const initialUi = await fetch(`${base}/api/ui-state`).then(res => res.json());
     assert.strictEqual(initialUi.performanceMode, false, 'new installs must default to Energy saver');
     const legacyResponse = await fetch(`${base}/api/ui-state`, {

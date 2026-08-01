@@ -1079,11 +1079,20 @@ function createServer(config = loadConfig()) {
     if (!isTitleBridgeAddress(req.socket?.remoteAddress, config)) return res.status(403).json({ error: 'Local host only' });
     const sessionId = String(req.body?.sessionId || '').trim();
     if (!sessionId || typeof req.body?.working !== 'boolean') return res.status(400).json({ error: 'sessionId and boolean working are required' });
+    const turnId = String(req.body?.turnId || '').trim();
+    if (turnId && !/^[A-Za-z0-9_.:-]{1,160}$/.test(turnId)) return res.status(400).json({ error: 'Invalid turn id' });
+    if (req.body?.reset !== undefined && typeof req.body.reset !== 'boolean') return res.status(400).json({ error: 'Invalid reset flag' });
     const session = sessions.get(sessionId);
     if (!session) return res.status(404).json({ error: 'Session not found' });
+    if (req.body.reset && req.body.working !== false) return res.status(400).json({ error: 'Reset must clear working state' });
+    const currentTurnId = String(session.hermesWorkingTurnId || '');
+    if (!req.body.working && !req.body.reset && currentTurnId && turnId !== currentTurnId) {
+      return res.status(202).json({ ok: true, stale: true, working: true, turnId: currentTurnId });
+    }
     session.hermesRunning = req.body.working;
+    session.hermesWorkingTurnId = req.body.working && !req.body.reset ? (turnId || null) : null;
     session.broadcast({ type: 'hermes-event', event: hermesWorkingEvent(session.hermesRunning) });
-    res.json({ ok: true, working: session.hermesRunning });
+    res.json({ ok: true, working: session.hermesRunning, turnId: session.hermesWorkingTurnId });
   });
   app.use('/internal/session-working', (err, _req, res, next) => {
     if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'Request too large' });
@@ -1227,9 +1236,18 @@ function createServer(config = loadConfig()) {
         try { frame = JSON.parse(raw.toString()); } catch { return; }
         const event = sanitizeHermesEvent(frame);
         if (!event) return;
-        if (event.type === 'message.start') session.hermesRunning = true;
-        if (event.type === 'message.complete') session.hermesRunning = false;
-        if (event.type === 'session.info' && typeof event.payload?.running === 'boolean') session.hermesRunning = event.payload.running;
+        if (event.type === 'message.start') {
+          session.hermesRunning = true;
+          session.hermesWorkingTurnId = null;
+        }
+        if (event.type === 'message.complete') {
+          session.hermesRunning = false;
+          session.hermesWorkingTurnId = null;
+        }
+        if (event.type === 'session.info' && typeof event.payload?.running === 'boolean') {
+          session.hermesRunning = event.payload.running;
+          session.hermesWorkingTurnId = null;
+        }
         const title = String(event.payload?.title || '').trim();
         const storedSessionId = String(event.payload?.stored_session_id || '').trim();
         if (title && storedSessionId && !(
@@ -1246,6 +1264,7 @@ function createServer(config = loadConfig()) {
         session.hermesEventPublishers.delete(ws);
         if (!session.hermesEventPublishers.size) {
           session.hermesRunning = null;
+          session.hermesWorkingTurnId = null;
           session.broadcast({ type: 'hermes-events', connected: false });
         }
       });

@@ -7,6 +7,8 @@ class Session {
     this.pty = null;
     this.pid = null;
     this.clients = new Set();
+    this.hermesRunning = null;
+    this.hermesWorkingTurnId = null;
     this.meta = {
       label: options.label || options.command || 'Terminal',
       command: options.command || '',

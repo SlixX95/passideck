@@ -243,11 +243,16 @@ def _title_mode_for_session(pane_id: str, hermes_session_id: str) -> bool:
     return enabled
 
 
-def _post_working(pane_id: str, working: bool) -> bool:
+def _post_working(pane_id: str, working: bool, turn_id: str = "", reset: bool = False) -> bool:
     if not pane_id or os.environ.get("HERMES_TUI_SIDECAR_URL"):
         return False
     endpoint = os.environ.get("PASSIDECK_WORKING_ENDPOINT", _DEFAULT_WORKING_ENDPOINT).strip() or _DEFAULT_WORKING_ENDPOINT
-    body = json.dumps({"sessionId": pane_id, "working": bool(working)}).encode("utf-8")
+    payload = {"sessionId": pane_id, "working": bool(working)}
+    if turn_id:
+        payload["turnId"] = _clean_text(turn_id)[:160]
+    if reset:
+        payload["reset"] = True
+    body = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         endpoint,
         data=body,
@@ -335,7 +340,7 @@ def on_pre_llm_call(**kwargs: Any) -> None:
         return None
 
     pane_id = os.environ.get("PASSIDECK_SESSION", "").strip()
-    _post_working(pane_id, True)
+    _post_working(pane_id, True, _clean_text(kwargs.get("turn_id", ""))[:160])
     raw_user_message = kwargs.get("user_message", "")
     images = _image_parts(raw_user_message)
     user_message = _message_text({"content": raw_user_message})
@@ -374,21 +379,29 @@ def on_pre_llm_call(**kwargs: Any) -> None:
 def on_post_llm_call(**kwargs: Any) -> None:
     if _is_delegated_child():
         return None
-    _post_working(os.environ.get("PASSIDECK_SESSION", "").strip(), False)
+    _post_working(
+        os.environ.get("PASSIDECK_SESSION", "").strip(),
+        False,
+        _clean_text(kwargs.get("turn_id", ""))[:160],
+    )
     return None
 
 
 def on_session_end(**kwargs: Any) -> None:
     if _is_delegated_child():
         return None
-    _post_working(os.environ.get("PASSIDECK_SESSION", "").strip(), False)
+    _post_working(
+        os.environ.get("PASSIDECK_SESSION", "").strip(),
+        False,
+        _clean_text(kwargs.get("turn_id", ""))[:160],
+    )
     return None
 
 
 def on_session_finalize(**kwargs: Any) -> None:
     if _is_delegated_child():
         return None
-    _post_working(os.environ.get("PASSIDECK_SESSION", "").strip(), False)
+    _post_working(os.environ.get("PASSIDECK_SESSION", "").strip(), False, reset=True)
     return None
 
 
@@ -397,7 +410,7 @@ def on_session_reset(**kwargs: Any) -> None:
         return None
 
     pane_id = os.environ.get("PASSIDECK_SESSION", "").strip()
-    _post_working(pane_id, False)
+    _post_working(pane_id, False, reset=True)
     hermes_session_id = _clean_text(kwargs.get("session_id", ""))[:160]
     if not pane_id or not hermes_session_id:
         return None
