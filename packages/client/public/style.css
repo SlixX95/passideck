@@ -597,10 +597,7 @@ body.notify-blinking .term-header.response-pulse { animation: pane-response-puls
   from { opacity: 1; transform: rotate(0) scale(1); }
   to { opacity: 0; transform: rotate(240deg) scale(.35); }
 }
-@keyframes session-response-bell-in {
-  from { transform: translate(-50%, -50%) rotate(-160deg); }
-  to { transform: translate(-50%, -50%) rotate(0) scale(1); }
-}
+@keyframes session-response-bell-show { from { opacity: 0; } to { opacity: 1; } }
 .term-panel.response-attention .connection-dot {
   position: relative;
   box-sizing: border-box;
@@ -632,7 +629,7 @@ body.notify-blinking .term-header.response-pulse { animation: pane-response-puls
   z-index: 1;
 }
 body.notify-blinking .term-panel.response-attention .connection-dot::before { animation: session-response-dot-out 420ms ease-in both; }
-body.notify-blinking .term-panel.response-attention .connection-dot::after { animation: session-response-bell-in 300ms 150ms ease-out both; }
+body.notify-blinking .term-panel.response-attention .connection-dot::after { animation: session-response-bell-show 1ms 419ms linear both; }
 .term-title {
   flex: 0 1 auto;
   font-weight: 600;

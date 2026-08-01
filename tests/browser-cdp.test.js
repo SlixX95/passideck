@@ -2430,7 +2430,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       indicatorMarked: true,
       indicatorLabel: 'New response',
       indicatorDotAnimation: 'session-response-dot-out',
-      indicatorBellAnimation: 'session-response-bell-in',
+      indicatorBellAnimation: 'session-response-bell-show',
       indicatorBellContent: '"🔔"',
       persistentBell: '1',
       persistent: true,
