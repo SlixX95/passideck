@@ -40,7 +40,7 @@ const dbModule = require('../packages/server/src/database');
       ],
       'the npm artifact must ship exactly the companion plugin sources'
     );
-    assert.ok(pluginManifest.includes('name: passideck-retitle') && pluginManifest.includes('  - pre_llm_call') && pluginManifest.includes('  - on_session_reset'), 'the shipped Hermes manifest must declare the user-turn and session-reset hooks');
+    assert.ok(pluginManifest.includes('name: passideck-retitle') && pluginManifest.includes('  - pre_llm_call') && pluginManifest.includes('  - post_llm_call') && pluginManifest.includes('  - on_session_end') && pluginManifest.includes('  - on_session_finalize') && pluginManifest.includes('  - on_session_reset'), 'the shipped Hermes manifest must declare the working-state and title lifecycle hooks');
     assert.ok(installer.includes('HERMES_HOME_DIR="$(dirname "$(hermes config path)")"'), 'the installer must target the active Hermes home');
     assert.ok(installer.includes('install -m 0644 "$ROOT/plugins/passideck-retitle/$file" "$PLUGIN_DIR/.$file.tmp"'), 'the installer must deploy its bundled title integration without requiring a Git checkout');
     assert.ok(installer.includes('hermes plugins enable passideck-retitle'), 'the PassiDeck installer must enable its Hermes title integration automatically');
@@ -80,6 +80,36 @@ const dbModule = require('../packages/server/src/database');
       ],
       'a server bound only to a local interface must point the plugin at that reachable address'
     );
+    assert.deepStrictEqual(
+      passideckTitleEnv({ port: 9911, titleGenLlm: 'host_aux_title' }, 'pane-1', 'hermes'),
+      [
+        'PASSIDECK_TITLE_ENDPOINT=http://127.0.0.1:9911/internal/session-title',
+        'PASSIDECK_TITLE_GEN_LLM=host_aux_title',
+        'PASSIDECK_TITLE_SETTINGS_ENDPOINT=http://127.0.0.1:9911/internal/session-title/settings',
+        'PASSIDECK_WORKING_ENDPOINT=http://127.0.0.1:9911/internal/session-working'
+      ],
+      'normal Hermes CLI panes must receive the working bridge without the TUI-only publisher'
+    );
+    assert.deepStrictEqual(
+      passideckTitleEnv({ port: 9911, titleGenLlm: 'host_aux_title' }, 'pane-1', 'hermes --tui'),
+      [
+        'PASSIDECK_TITLE_ENDPOINT=http://127.0.0.1:9911/internal/session-title',
+        'PASSIDECK_TITLE_GEN_LLM=host_aux_title',
+        'PASSIDECK_TITLE_SETTINGS_ENDPOINT=http://127.0.0.1:9911/internal/session-title/settings',
+        'PASSIDECK_WORKING_ENDPOINT=http://127.0.0.1:9911/internal/session-working',
+        'HERMES_TUI_SIDECAR_URL=ws://127.0.0.1:9911/ws?hermesEvents=pane-1'
+      ],
+      'TUI panes must retain their native publisher alongside the working bridge'
+    );
+    assert.deepStrictEqual(
+      passideckTitleEnv({ port: 9911, titleGenLlm: 'host_aux_title' }, 'pane-1', '/bin/bash'),
+      [
+        'PASSIDECK_TITLE_ENDPOINT=http://127.0.0.1:9911/internal/session-title',
+        'PASSIDECK_TITLE_GEN_LLM=host_aux_title',
+        'PASSIDECK_TITLE_SETTINGS_ENDPOINT=http://127.0.0.1:9911/internal/session-title/settings'
+      ],
+      'ordinary shell panes must not inherit Hermes lifecycle bridges'
+    );
     assert.strictEqual(isTitleBridgeAddress('::ffff:100.74.164.4', tailscaleConfig), true, 'the bound local interface must be accepted as a same-host bridge');
     assert.strictEqual(isTitleBridgeAddress('100.74.164.5', tailscaleConfig), false, 'other Tailscale peers must remain rejected');
 
@@ -98,6 +128,21 @@ const dbModule = require('../packages/server/src/database');
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
+    const postWorking = body => fetch(`${base}/internal/session-working`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const workingStartResponse = await postWorking({ sessionId: 'retitle-pane', working: true });
+    assert.strictEqual(workingStartResponse.status, 200);
+    assert.strictEqual(session.hermesRunning, true, 'the CLI lifecycle bridge must mark a pane as working');
+    assert.ok(broadcasts.some(event => event.type === 'hermes-event' && event.event?.type === 'message.start'), 'the CLI working start must reach connected clients');
+    const workingCompleteResponse = await postWorking({ sessionId: 'retitle-pane', working: false });
+    assert.strictEqual(workingCompleteResponse.status, 200);
+    assert.strictEqual(session.hermesRunning, false, 'the CLI lifecycle bridge must clear the working state');
+    assert.ok(broadcasts.some(event => event.type === 'hermes-event' && event.event?.type === 'message.complete'), 'the CLI working completion must reach connected clients');
+    assert.strictEqual((await postWorking({ sessionId: 'retitle-pane', working: 'yes' })).status, 400);
+    assert.strictEqual((await postWorking({ sessionId: 'missing', working: true })).status, 404);
     const provisionalResponse = await postTitle({
       sessionId: 'retitle-pane',
       hermesSessionId: 'hermes-1',

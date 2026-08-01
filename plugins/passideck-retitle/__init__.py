@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 _MODE = "host_aux_title"
 _DEFAULT_ENDPOINT = "http://127.0.0.1:8791/internal/session-title"
 _DEFAULT_SETTINGS_ENDPOINT = "http://127.0.0.1:8791/internal/session-title/settings"
+_DEFAULT_WORKING_ENDPOINT = "http://127.0.0.1:8791/internal/session-working"
 _TITLE_LIMIT = 80
 _CONTEXT_LIMIT = 3000
 _INSTANCE_EPOCH = time.time_ns()
@@ -217,6 +218,10 @@ def _fallback_title_mode() -> bool:
 
 
 def _title_mode_for_session(pane_id: str, hermes_session_id: str) -> bool:
+    if os.environ.get("PASSIDECK_TITLE_GEN_LLM", "").strip().lower() == "off":
+        with _lock:
+            _session_modes[pane_id] = (hermes_session_id, False)
+        return False
     with _lock:
         cached = _session_modes.get(pane_id)
         if cached and cached[0] == hermes_session_id:
@@ -236,6 +241,25 @@ def _title_mode_for_session(pane_id: str, hermes_session_id: str) -> bool:
     with _lock:
         _session_modes[pane_id] = (hermes_session_id, enabled)
     return enabled
+
+
+def _post_working(pane_id: str, working: bool) -> bool:
+    if not pane_id or os.environ.get("HERMES_TUI_SIDECAR_URL"):
+        return False
+    endpoint = os.environ.get("PASSIDECK_WORKING_ENDPOINT", _DEFAULT_WORKING_ENDPOINT).strip() or _DEFAULT_WORKING_ENDPOINT
+    body = json.dumps({"sessionId": pane_id, "working": bool(working)}).encode("utf-8")
+    request = urllib.request.Request(
+        endpoint,
+        data=body,
+        headers={"Content-Type": "application/json", "User-Agent": "passideck-retitle/1"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=0.25) as response:
+            return 200 <= int(response.status) < 300
+    except Exception as exc:
+        logger.debug("PassiDeck working bridge unavailable: %s", exc)
+        return False
 
 
 def _persist_hermes_title(hermes_session_id: str, title: str) -> bool:
@@ -311,6 +335,7 @@ def on_pre_llm_call(**kwargs: Any) -> None:
         return None
 
     pane_id = os.environ.get("PASSIDECK_SESSION", "").strip()
+    _post_working(pane_id, True)
     raw_user_message = kwargs.get("user_message", "")
     images = _image_parts(raw_user_message)
     user_message = _message_text({"content": raw_user_message})
@@ -346,11 +371,33 @@ def on_pre_llm_call(**kwargs: Any) -> None:
     return None
 
 
+def on_post_llm_call(**kwargs: Any) -> None:
+    if _is_delegated_child():
+        return None
+    _post_working(os.environ.get("PASSIDECK_SESSION", "").strip(), False)
+    return None
+
+
+def on_session_end(**kwargs: Any) -> None:
+    if _is_delegated_child():
+        return None
+    _post_working(os.environ.get("PASSIDECK_SESSION", "").strip(), False)
+    return None
+
+
+def on_session_finalize(**kwargs: Any) -> None:
+    if _is_delegated_child():
+        return None
+    _post_working(os.environ.get("PASSIDECK_SESSION", "").strip(), False)
+    return None
+
+
 def on_session_reset(**kwargs: Any) -> None:
     if _is_delegated_child():
         return None
 
     pane_id = os.environ.get("PASSIDECK_SESSION", "").strip()
+    _post_working(pane_id, False)
     hermes_session_id = _clean_text(kwargs.get("session_id", ""))[:160]
     if not pane_id or not hermes_session_id:
         return None
@@ -369,4 +416,7 @@ def on_session_reset(**kwargs: Any) -> None:
 
 def register(ctx: Any) -> None:
     ctx.register_hook("pre_llm_call", on_pre_llm_call)
+    ctx.register_hook("post_llm_call", on_post_llm_call)
+    ctx.register_hook("on_session_end", on_session_end)
+    ctx.register_hook("on_session_finalize", on_session_finalize)
     ctx.register_hook("on_session_reset", on_session_reset)

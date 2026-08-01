@@ -169,10 +169,8 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     const persistentPaneEnv = fs.readFileSync(`/proc/${persistentPanePid}/environ`, 'utf8').split('\0');
     assert.ok(persistentPaneEnv.includes('PROMPT_TOOLKIT_NO_CPR=1'), 'PassiDeck panes must disable prompt_toolkit cursor position reports');
     assert.ok(persistentPaneEnv.includes('PROMPT_TOOLKIT_BELL=false'), 'PassiDeck panes must suppress prompt_toolkit feedback BELs without suppressing Hermes completion BELs');
-    assert.ok(
-      persistentPaneEnv.includes(`HERMES_TUI_SIDECAR_URL=ws://127.0.0.1:8791/ws?hermesEvents=${persistent.id}`),
-      'new panes must publish native Hermes events back to their own PassiDeck session'
-    );
+    assert.ok(!persistentPaneEnv.some(value => value.startsWith('PASSIDECK_WORKING_ENDPOINT=')), 'non-Hermes shell panes must not receive the Hermes working-state bridge');
+    assert.ok(!persistentPaneEnv.some(value => value.startsWith('HERMES_TUI_SIDECAR_URL=')), 'non-Hermes shell panes must not receive the TUI event publisher');
 
     const redrawSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?session=${persistent.id}`);
     let redrawOutput = '';

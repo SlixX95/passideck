@@ -18,6 +18,8 @@ def load_plugin():
     spec.loader.exec_module(module)
     module._real_persist_hermes_title = module._persist_hermes_title
     module._persist_hermes_title = lambda *_args: True
+    setattr(module, "_real_post_working", module._post_working)
+    setattr(module, "_post_working", lambda *_args: True)
     return module
 
 
@@ -536,6 +538,19 @@ Keep the complete PassiDeck audit and rollout objective.
         with patch.dict(os.environ, {"PASSIDECK_SESSION": "pane-1", "PASSIDECK_TITLE_GEN_LLM": "off"}):
             plugin.on_pre_llm_call(session_id="h", user_message="hello", conversation_history=[], is_first_turn=True)
 
+    def test_cli_lifecycle_reports_working_until_completion(self):
+        plugin = load_plugin()
+        setattr(plugin, "_title_mode_for_session", lambda *_args: False)
+        events = []
+        setattr(plugin, "_post_working", lambda pane_id, working: events.append((pane_id, working)) or True)
+        plugin.on_pre_llm_call(session_id="h", user_message="hello", conversation_history=[], is_first_turn=False)
+        plugin.on_post_llm_call(session_id="h")
+        plugin.on_session_end(session_id="h")
+        self.assertEqual(events, [("pane-1", True), ("pane-1", False), ("pane-1", False)])
+        with patch.dict(os.environ, {"HERMES_TUI_SIDECAR_URL": "ws://127.0.0.1:8791/ws"}):
+            self.assertFalse(plugin._real_post_working("pane-1", True), "TUI sessions must remain on their native event publisher")
+        self.assertEqual(len(events), 3)
+
     def test_registers_required_title_hooks(self):
         plugin = load_plugin()
         hooks = []
@@ -543,6 +558,9 @@ Keep the complete PassiDeck audit and rollout objective.
         plugin.register(ctx)
         self.assertEqual(hooks, [
             ("pre_llm_call", plugin.on_pre_llm_call),
+            ("post_llm_call", plugin.on_post_llm_call),
+            ("on_session_end", plugin.on_session_end),
+            ("on_session_finalize", plugin.on_session_finalize),
             ("on_session_reset", plugin.on_session_reset),
         ])
 

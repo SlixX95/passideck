@@ -712,15 +712,19 @@ function isTitleBridgeAddress(address, config = {}) {
   return Boolean(host && host !== '0.0.0.0' && host !== '::' && remote === host);
 }
 
-function passideckTitleEnv(config = {}, sessionId = '') {
+function passideckTitleEnv(config = {}, sessionId = '', command = '') {
   const port = Number(config.port) || Number(process.env.PASSIDECK_PORT) || 8791;
   const host = titleBridgeHost(config);
   const urlHost = host.includes(':') ? `[${host}]` : host;
+  const commandText = String(command || '');
+  const isHermes = /\bhermes\b/i.test(commandText);
+  const isTui = isHermes && /\s--tui\b/i.test(commandText);
   return [
     `PASSIDECK_TITLE_ENDPOINT=http://${urlHost}:${port}/internal/session-title`,
     `PASSIDECK_TITLE_GEN_LLM=${normalizeTitleGenLlm(config.titleGenLlm)}`,
     `PASSIDECK_TITLE_SETTINGS_ENDPOINT=http://${urlHost}:${port}/internal/session-title/settings`,
-    ...(sessionId ? [`HERMES_TUI_SIDECAR_URL=ws://${urlHost}:${port}/ws?hermesEvents=${encodeURIComponent(sessionId)}`] : [])
+    ...(sessionId && isHermes ? [`PASSIDECK_WORKING_ENDPOINT=http://${urlHost}:${port}/internal/session-working`] : []),
+    ...(sessionId && isTui ? [`HERMES_TUI_SIDECAR_URL=ws://${urlHost}:${port}/ws?hermesEvents=${encodeURIComponent(sessionId)}`] : [])
   ];
 }
 
@@ -885,6 +889,15 @@ function sanitizeHermesEvent(frame) {
   return null;
 }
 
+function hermesWorkingEvent(running) {
+  const value = Boolean(running);
+  return {
+    type: value ? 'message.start' : 'message.complete',
+    session_id: '',
+    payload: { running: value }
+  };
+}
+
 function tmuxHas(name) {
   try { execFileSync(TMUX_CMD, tmuxArgs(['has-session', '-t', name]), { stdio: 'ignore' }); return true; }
   catch { return false; }
@@ -902,9 +915,14 @@ function tmuxSetDefaults(name = '') {
   }
 }
 
-function tmuxNew(name, cwd, launch, sessionId, config = {}) {
+function tmuxNew(name, cwd, launch, sessionId, config = {}, command = '') {
   if (tmuxHas(name)) { tmuxSetDefaults(name); return; }
-  execFileSync(TMUX_CMD, tmuxArgs(['new-session', '-d', '-s', name, '-c', cwd, 'env', `PASSIDECK_SESSION=${sessionId}`, `HERMES_SESSION_SOURCE=${hermesSource(sessionId)}`, ...passideckTitleEnv(config, sessionId), 'PROMPT_TOOLKIT_NO_CPR=1', 'PROMPT_TOOLKIT_BELL=false', launch.file, ...launch.args]), { stdio: 'ignore' });
+  const bridgeEnv = passideckTitleEnv(config, sessionId, command);
+  const inheritedEnvCleanup = [
+    ...(bridgeEnv.some(value => value.startsWith('PASSIDECK_WORKING_ENDPOINT=')) ? [] : ['-u', 'PASSIDECK_WORKING_ENDPOINT']),
+    ...(bridgeEnv.some(value => value.startsWith('HERMES_TUI_SIDECAR_URL=')) ? [] : ['-u', 'HERMES_TUI_SIDECAR_URL'])
+  ];
+  execFileSync(TMUX_CMD, tmuxArgs(['new-session', '-d', '-s', name, '-c', cwd, 'env', ...inheritedEnvCleanup, `PASSIDECK_SESSION=${sessionId}`, `HERMES_SESSION_SOURCE=${hermesSource(sessionId)}`, ...bridgeEnv, 'PROMPT_TOOLKIT_NO_CPR=1', 'PROMPT_TOOLKIT_BELL=false', launch.file, ...launch.args]), { stdio: 'ignore' });
   tmuxSetDefaults(name);
 }
 
@@ -1057,6 +1075,20 @@ function createServer(config = loadConfig()) {
     if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'Request too large' });
     return next(err);
   });
+  app.post('/internal/session-working', express.json({ limit: '2kb' }), (req, res) => {
+    if (!isTitleBridgeAddress(req.socket?.remoteAddress, config)) return res.status(403).json({ error: 'Local host only' });
+    const sessionId = String(req.body?.sessionId || '').trim();
+    if (!sessionId || typeof req.body?.working !== 'boolean') return res.status(400).json({ error: 'sessionId and boolean working are required' });
+    const session = sessions.get(sessionId);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    session.hermesRunning = req.body.working;
+    session.broadcast({ type: 'hermes-event', event: hermesWorkingEvent(session.hermesRunning) });
+    res.json({ ok: true, working: session.hermesRunning });
+  });
+  app.use('/internal/session-working', (err, _req, res, next) => {
+    if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'Request too large' });
+    return next(err);
+  });
   app.use(express.json({ limit: UPLOAD_JSON_LIMIT }));
   app.use('/api', requestGuard);
   app.use('/uploads', express.static(uploadsRoot(), { setHeaders: setUploadHeaders }));
@@ -1137,7 +1169,7 @@ function createServer(config = loadConfig()) {
 
     try {
       const name = tmuxName(session.id);
-      tmuxNew(name, resolvedCwd, launch, session.id, config);
+      tmuxNew(name, resolvedCwd, launch, session.id, config, command || config.shell || '/bin/bash');
       attachTmux(session);
       if (db && dbModule) dbModule.upsertSession(db, session);
       if (launch.initialInput) setTimeout(() => session.pty?.write(launch.initialInput), 250);
@@ -1225,6 +1257,7 @@ function createServer(config = loadConfig()) {
     session.clients.add(ws);
     ws.send(JSON.stringify({ type: 'meta', session: session.toJSON() }));
     if (session.hermesEventPublishers?.size) ws.send(JSON.stringify({ type: 'hermes-events', connected: true, running: session.hermesRunning ?? null }));
+    else if (typeof session.hermesRunning === 'boolean') ws.send(JSON.stringify({ type: 'hermes-event', event: hermesWorkingEvent(session.hermesRunning) }));
     ws.send(JSON.stringify({ type: 'replay', data: '\r\n[PassiDeck reconnect: output replay disabled; live session still running]\r\n' }));
 
     ws.on('message', (raw) => {

@@ -310,7 +310,8 @@ function setSessionWorking(id, working) {
 
 function applyHermesEvent(id, message) {
   const entry = state.sessions.get(id);
-  if (!entry || !isHermesTuiEntry(entry)) return;
+  if (!entry || !isHermesEntry(entry)) return;
+  if (message.type === 'hermes-events' && !isHermesTuiEntry(entry)) return;
   if (message.type === 'hermes-events') {
     entry.hermesEventsConnected = Boolean(message.connected);
     if (typeof message.running === 'boolean') setSessionWorking(id, message.running);
@@ -318,7 +319,7 @@ function applyHermesEvent(id, message) {
     return;
   }
   const event = message.event || {};
-  entry.hermesEventsConnected = true;
+  if (isHermesTuiEntry(entry)) entry.hermesEventsConnected = true;
   if (event.type === 'message.start') setSessionWorking(id, true);
   if (event.type === 'message.complete') setSessionWorking(id, false);
   if (event.type === 'session.info' && typeof event.payload?.running === 'boolean') setSessionWorking(id, event.payload.running);
