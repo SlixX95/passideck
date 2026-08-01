@@ -2268,7 +2268,7 @@ function scheduleTerminalSnapshot(id) {
   entry.snapshotTimer = setTimeout(() => saveTerminalSnapshot(id), TERM_SNAPSHOT_DEBOUNCE_MS);
 }
 
-function restoreTerminalSnapshot(id, term, done = null) {
+function restoreTerminalSnapshot(id, term, done = null, entry = null) {
   try {
     const raw = localStorage.getItem(snapshotKey(id));
     if (!raw) return false;
@@ -2291,10 +2291,18 @@ function restoreTerminalSnapshot(id, term, done = null) {
         ? [{ row, startCol, endCol, text, url }]
         : [];
     }) : [];
+    const finishRestore = () => {
+      const finish = () => {
+        if (links.length) term.__passideckSnapshotLinks = { baseY: term.buffer.active.viewportY || 0, links };
+        done?.();
+      };
+      if (isHermesEntry(entry) && !isHermesTuiEntry(entry) && term.buffer?.active?.type === 'alternate') {
+        writeTerminalOutput(term, '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l', finish, false);
+      } else finish();
+    };
     const replayPendingOutput = () => {
-      if (links.length) term.__passideckSnapshotLinks = { baseY: term.buffer.active.viewportY || 0, links };
-      if (pendingOutput) writeTerminalOutput(term, pendingOutput, done, false);
-      else done?.();
+      if (pendingOutput) writeTerminalOutput(term, pendingOutput, finishRestore, false);
+      else finishRestore();
     };
     if (text) term.write(text, replayPendingOutput);
     else replayPendingOutput();
@@ -3213,7 +3221,7 @@ function createPanel(session, opts = {}) {
         try { fitEntry(id, entry, { force: true, allowHeight: true }); } catch {}
         requestTerminalRedraw(entry);
         scheduleTerminalSnapshot(id);
-      }));
+      }), entry);
     }
   });
 }
