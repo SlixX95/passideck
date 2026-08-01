@@ -52,6 +52,7 @@ const state = {
   responseSoundTone: 'soft',
   responseSoundVolume: 60,
   notifyBlinking: true,
+  dynamicTitles: true,
   performanceMode: false,
   minimized: new Set(),
   responsiveMinimized: new Set(),
@@ -1433,6 +1434,33 @@ function setNotifyBlinking(enabled, opts = {}) {
   if (select) select.value = state.notifyBlinking ? 'on' : 'off';
   window.passideckDesktop?.setNotifyBlinking?.(state.notifyBlinking);
   if (opts.persist !== false) saveUiState();
+}
+
+function applyDynamicTitleSettings(settings) {
+  if (!settings || typeof settings.dynamicTitles !== 'boolean') return;
+  state.dynamicTitles = settings.dynamicTitles;
+  const select = document.getElementById('dynamicTitleSelect');
+  if (select) select.value = state.dynamicTitles ? 'on' : 'off';
+  const hint = document.getElementById('dynamicTitleHint');
+  if (hint) hint.textContent = settings.appliesAt === 'next-session'
+    ? 'Applies to the next Hermes session'
+    : 'Dynamic session titles';
+}
+
+async function saveDynamicTitleSetting(enabled) {
+  const select = document.getElementById('dynamicTitleSelect');
+  const previous = state.dynamicTitles;
+  if (select) select.disabled = true;
+  try {
+    const saved = await api('PUT', '/api/settings', { dynamicTitles: Boolean(enabled) });
+    applyDynamicTitleSettings(saved);
+    showToast(`Dynamic Retitle ${saved.dynamicTitles ? 'enabled' : 'disabled'} for the next Hermes session`);
+  } catch (err) {
+    applyDynamicTitleSettings({ dynamicTitles: previous, appliesAt: 'next-session' });
+    showToast(`Retitle setting failed: ${err.message}`, 'error');
+  } finally {
+    if (select) select.disabled = false;
+  }
 }
 
 function setPerformanceMode(enabled, opts = {}) {
@@ -3985,12 +4013,14 @@ async function init() {
   installTooltips();
   loadResponseSoundPrefs();
   state.hydrating = true;
-  const [sessions, ui, health] = await Promise.all([
+  const [sessions, ui, health, settings] = await Promise.all([
     api('GET', '/api/sessions').catch(() => []),
     api('GET', '/api/ui-state').catch(() => null),
-    api('GET', '/api/health').catch(() => null)
+    api('GET', '/api/health').catch(() => null),
+    api('GET', '/api/settings').catch(() => null)
   ]);
   void updateVersionFooter(health);
+  applyDynamicTitleSettings(settings);
   loadPerformanceMode(ui?.performanceMode);
 
   state.uiRevision = Number(ui?.revision) || 0;
@@ -4081,6 +4111,7 @@ document.getElementById('chromeToggle').onclick = toggleChrome;
 document.getElementById('chromePeek').onclick = toggleChrome;
 document.getElementById('themeSelect').onchange = e => setTheme(e.target.value);
 document.getElementById('skinSelect').onchange = e => setSkin(e.target.value);
+document.getElementById('dynamicTitleSelect').onchange = e => { void saveDynamicTitleSetting(e.target.value === 'on'); };
 document.getElementById('fontSizeSelect').onchange = e => previewFontSize(Number(e.target.value));
 document.getElementById('notifyBlinkingSelect').onchange = e => setNotifyBlinking(e.target.value === 'on');
 document.getElementById('performanceModeSelect').onchange = e => setPerformanceMode(e.target.value === 'on');

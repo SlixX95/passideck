@@ -12,7 +12,7 @@ let pty = null;
 try { pty = require('@homebridge/node-pty-prebuilt-multiarch'); } catch {}
 
 const { SessionManager } = require('./session');
-const { loadConfig, configDir, normalizeTitleGenLlm } = require('./config');
+const { loadConfig, configDir, normalizeTitleGenLlm, writeTitleGenLlm } = require('./config');
 const { version: PASSIDECK_VERSION } = require('../../../package.json');
 
 let Database = null;
@@ -719,8 +719,17 @@ function passideckTitleEnv(config = {}, sessionId = '') {
   return [
     `PASSIDECK_TITLE_ENDPOINT=http://${urlHost}:${port}/internal/session-title`,
     `PASSIDECK_TITLE_GEN_LLM=${normalizeTitleGenLlm(config.titleGenLlm)}`,
+    `PASSIDECK_TITLE_SETTINGS_ENDPOINT=http://${urlHost}:${port}/internal/session-title/settings`,
     ...(sessionId ? [`HERMES_TUI_SIDECAR_URL=ws://${urlHost}:${port}/ws?hermesEvents=${encodeURIComponent(sessionId)}`] : [])
   ];
+}
+
+function dynamicTitlesEnabled(config = {}) {
+  return normalizeTitleGenLlm(config.titleGenLlm) !== 'off';
+}
+
+function dynamicTitleSettings(config = {}) {
+  return { dynamicTitles: dynamicTitlesEnabled(config), appliesAt: 'next-session' };
 }
 
 function sanitizeDynamicTitle(value) {
@@ -993,9 +1002,12 @@ function createServer(config = loadConfig()) {
   restoreTmuxSessions(sessions);
 
   app.set('trust proxy', 'loopback');
+  app.get('/internal/session-title/settings', (req, res) => {
+    if (!isTitleBridgeAddress(req.socket?.remoteAddress, config)) return res.status(403).json({ error: 'Local host only' });
+    res.json({ dynamicTitles: dynamicTitlesEnabled(config) });
+  });
   app.post('/internal/session-title', express.json({ limit: '8kb' }), (req, res) => {
     if (!isTitleBridgeAddress(req.socket?.remoteAddress, config)) return res.status(403).json({ error: 'Local host only' });
-    if (normalizeTitleGenLlm(config.titleGenLlm) === 'off') return res.status(409).json({ error: 'Dynamic titles disabled' });
 
     const sessionId = String(req.body?.sessionId || '').trim();
     const hermesSessionId = String(req.body?.hermesSessionId || '').trim();
@@ -1017,7 +1029,7 @@ function createServer(config = loadConfig()) {
       session.meta.titleSource === 'hermes-db' &&
       session.meta.hermesSessionId &&
       session.meta.hermesSessionId !== hermesSessionId;
-    if (targetsPreviousHermesSession || (currentGeneration && (!generation || compareTitleGenerations(generation, currentGeneration) <= 0))) {
+    if ((targetsPreviousHermesSession && kind !== 'reset') || (currentGeneration && (!generation || compareTitleGenerations(generation, currentGeneration) <= 0))) {
       return res.status(202).json({
         ok: true,
         stale: true,
@@ -1062,6 +1074,17 @@ function createServer(config = loadConfig()) {
       uptime: process.uptime(),
       pid: process.pid
     });
+  });
+  app.get('/api/settings', (_req, res) => res.json(dynamicTitleSettings(config)));
+  app.put('/api/settings', (req, res) => {
+    if (typeof req.body?.dynamicTitles !== 'boolean') return res.status(400).json({ error: 'dynamicTitles must be boolean' });
+    if (process.env.PASSIDECK_TITLE_GEN_LLM) return res.status(409).json({ error: 'Dynamic titles are managed by PASSIDECK_TITLE_GEN_LLM' });
+    try {
+      config.titleGenLlm = writeTitleGenLlm(req.body.dynamicTitles ? 'host_aux_title' : 'off');
+      res.json(dynamicTitleSettings(config));
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
   app.get('/api/system-metrics', (_req, res) => res.json(readSystemMetrics()));
   app.get('/api/codex-limits', async (_req, res) => {
@@ -1243,7 +1266,7 @@ function createServer(config = loadConfig()) {
   return { app, server, wss, sessions, close };
 }
 
-module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, UPLOAD_MIME_ALLOWLIST };
+module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings, UPLOAD_MIME_ALLOWLIST };
 
 if (require.main === module) {
   const config = loadConfig();

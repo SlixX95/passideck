@@ -65,7 +65,8 @@ const dbModule = require('../packages/server/src/database');
       passideckTitleEnv({ port: 9911, titleGenLlm: 'host_aux_title' }),
       [
         'PASSIDECK_TITLE_ENDPOINT=http://127.0.0.1:9911/internal/session-title',
-        'PASSIDECK_TITLE_GEN_LLM=host_aux_title'
+        'PASSIDECK_TITLE_GEN_LLM=host_aux_title',
+        'PASSIDECK_TITLE_SETTINGS_ENDPOINT=http://127.0.0.1:9911/internal/session-title/settings'
       ],
       'wildcard/default binds must keep the bridge loopback-only'
     );
@@ -74,7 +75,8 @@ const dbModule = require('../packages/server/src/database');
       passideckTitleEnv(tailscaleConfig),
       [
         'PASSIDECK_TITLE_ENDPOINT=http://100.74.164.4:9911/internal/session-title',
-        'PASSIDECK_TITLE_GEN_LLM=host_aux_title'
+        'PASSIDECK_TITLE_GEN_LLM=host_aux_title',
+        'PASSIDECK_TITLE_SETTINGS_ENDPOINT=http://100.74.164.4:9911/internal/session-title/settings'
       ],
       'a server bound only to a local interface must point the plugin at that reachable address'
     );
@@ -96,7 +98,6 @@ const dbModule = require('../packages/server/src/database');
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
-
     const provisionalResponse = await postTitle({
       sessionId: 'retitle-pane',
       hermesSessionId: 'hermes-1',
@@ -205,6 +206,37 @@ const dbModule = require('../packages/server/src/database');
     assert.strictEqual(oversizedResponse.status, 413, 'the local bridge must cap request bodies before parsing');
     const missingResponse = await postTitle({ sessionId: 'missing', title: 'Title', kind: 'model' });
     assert.strictEqual(missingResponse.status, 404);
+
+    const settingsBefore = await (await fetch(`${base}/api/settings`)).json();
+    assert.deepStrictEqual(settingsBefore, { dynamicTitles: true, appliesAt: 'next-session' });
+    const settingsOffResponse = await fetch(`${base}/api/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dynamicTitles: false })
+    });
+    assert.strictEqual(settingsOffResponse.status, 200);
+    assert.deepStrictEqual(await settingsOffResponse.json(), { dynamicTitles: false, appliesAt: 'next-session' });
+    assert.match(fs.readFileSync(path.join(home, 'config.yaml'), 'utf8'), /titleGenLlm:\s*off/);
+
+    const currentSessionAfterToggle = await postTitle({
+      sessionId: 'retitle-pane',
+      hermesSessionId: 'hermes-2',
+      title: 'Current session keeps Retitle mode',
+      kind: 'model',
+      generation: '1784647000000000000:4:1'
+    });
+    assert.strictEqual(currentSessionAfterToggle.status, 200, 'a session that started with Retitle on must finish after the setting changes');
+
+    const internalSettings = await (await fetch(`${base}/internal/session-title/settings`)).json();
+    assert.deepStrictEqual(internalSettings, { dynamicTitles: false });
+    const resetWithRetitleOff = await postTitle({
+      sessionId: 'retitle-pane',
+      hermesSessionId: 'hermes-3',
+      title: '',
+      kind: 'reset',
+      generation: '1784647000000000000:5:0'
+    });
+    assert.strictEqual(resetWithRetitleOff.status, 200, 'session reset clearing must remain available when Retitle is off');
 
     console.log('title-retitle ok');
   } finally {

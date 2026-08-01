@@ -1,9 +1,10 @@
 """PassiDeck-owned dynamic session titles for Hermes panes.
 
 The plugin is inert outside a PassiDeck-launched process. It clears the pane
-title on a Hermes session reset, observes the supported pre_llm_call hook,
-publishes an immediate first-prompt title to the local PassiDeck bridge, then
-refines titles asynchronously with Hermes' configured auxiliary.title_generation route.
+and Hermes title on a Hermes session reset, latches the current PassiDeck mode
+for that session, reserves a first-turn provisional title in Hermes' canonical
+state database, publishes it to the local PassiDeck bridge, then refines titles
+asynchronously with Hermes' configured auxiliary.title_generation route.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 _MODE = "host_aux_title"
 _DEFAULT_ENDPOINT = "http://127.0.0.1:8791/internal/session-title"
+_DEFAULT_SETTINGS_ENDPOINT = "http://127.0.0.1:8791/internal/session-title/settings"
 _TITLE_LIMIT = 80
 _CONTEXT_LIMIT = 3000
 _INSTANCE_EPOCH = time.time_ns()
@@ -42,6 +44,7 @@ _versions: dict[str, int] = {}
 _pending: dict[str, tuple[int, str, str, tuple[dict[str, Any], ...]]] = {}
 _running: set[str] = set()
 _current_titles: dict[str, str] = {}
+_session_modes: dict[str, tuple[str, bool]] = {}
 
 
 def _clean_text(value: Any) -> str:
@@ -209,6 +212,48 @@ def _call_title_model(context: str, images: tuple[dict[str, Any], ...] = ()) -> 
     return _sanitize_model_title(content)
 
 
+def _fallback_title_mode() -> bool:
+    return os.environ.get("PASSIDECK_TITLE_GEN_LLM", _MODE).strip().lower() == _MODE
+
+
+def _title_mode_for_session(pane_id: str, hermes_session_id: str) -> bool:
+    with _lock:
+        cached = _session_modes.get(pane_id)
+        if cached and cached[0] == hermes_session_id:
+            return cached[1]
+
+    enabled = _fallback_title_mode()
+    endpoint = os.environ.get("PASSIDECK_TITLE_SETTINGS_ENDPOINT", _DEFAULT_SETTINGS_ENDPOINT).strip() or _DEFAULT_SETTINGS_ENDPOINT
+    try:
+        request = urllib.request.Request(endpoint, headers={"User-Agent": "passideck-retitle/1"}, method="GET")
+        with urllib.request.urlopen(request, timeout=0.25) as response:
+            payload = json.loads(response.read().decode("utf-8") or "{}")
+            if isinstance(payload.get("dynamicTitles"), bool):
+                enabled = payload["dynamicTitles"]
+    except Exception as exc:
+        logger.debug("PassiDeck title settings unavailable: %s", exc)
+
+    with _lock:
+        _session_modes[pane_id] = (hermes_session_id, enabled)
+    return enabled
+
+
+def _persist_hermes_title(hermes_session_id: str, title: str) -> bool:
+    if not hermes_session_id:
+        return False
+    try:
+        from hermes_state import SessionDB  # type: ignore[import-not-found]
+
+        database = SessionDB()
+        try:
+            return bool(database.set_session_title(hermes_session_id, title))
+        finally:
+            database.close()
+    except Exception as exc:
+        logger.warning("Hermes canonical session title unavailable: %s", exc)
+        return False
+
+
 def _post_title(pane_id: str, hermes_session_id: str, title: str, kind: str, revision: int) -> bool:
     endpoint = os.environ.get("PASSIDECK_TITLE_ENDPOINT", _DEFAULT_ENDPOINT).strip() or _DEFAULT_ENDPOINT
     phase = 0 if kind in ("provisional", "reset") else 1
@@ -253,6 +298,7 @@ def _worker(pane_id: str) -> None:
         with _lock:
             if _versions.get(pane_id) != version:
                 continue
+        _persist_hermes_title(hermes_session_id, title)
         posted = _post_title(pane_id, hermes_session_id, title, "model", version)
         if posted is not False:
             with _lock:
@@ -265,16 +311,15 @@ def on_pre_llm_call(**kwargs: Any) -> None:
         return None
 
     pane_id = os.environ.get("PASSIDECK_SESSION", "").strip()
-    mode = os.environ.get("PASSIDECK_TITLE_GEN_LLM", _MODE).strip().lower()
     raw_user_message = kwargs.get("user_message", "")
     images = _image_parts(raw_user_message)
     user_message = _message_text({"content": raw_user_message})
     if not user_message and images:
         user_message = "Identify the work shown in the attached image."
-    if not pane_id or mode != _MODE or not user_message or _is_synthetic_user_message(user_message):
+    hermes_session_id = _clean_text(kwargs.get("session_id", ""))[:160]
+    if not pane_id or not hermes_session_id or not _title_mode_for_session(pane_id, hermes_session_id) or not user_message or _is_synthetic_user_message(user_message):
         return None
 
-    hermes_session_id = _clean_text(kwargs.get("session_id", ""))[:160]
     provisional = _provisional_title(user_message) if kwargs.get("is_first_turn") and not images else ""
 
     with _lock:
@@ -294,6 +339,7 @@ def on_pre_llm_call(**kwargs: Any) -> None:
             _running.add(pane_id)
 
     if provisional:
+        _persist_hermes_title(hermes_session_id, provisional)
         _post_title(pane_id, hermes_session_id, provisional, "provisional", version)
     if start_worker:
         threading.Thread(target=_worker, args=(pane_id,), daemon=True, name=f"passideck-title-{pane_id[:16]}").start()
@@ -305,11 +351,11 @@ def on_session_reset(**kwargs: Any) -> None:
         return None
 
     pane_id = os.environ.get("PASSIDECK_SESSION", "").strip()
-    mode = os.environ.get("PASSIDECK_TITLE_GEN_LLM", _MODE).strip().lower()
     hermes_session_id = _clean_text(kwargs.get("session_id", ""))[:160]
-    if not pane_id or mode != _MODE or not hermes_session_id:
+    if not pane_id or not hermes_session_id:
         return None
 
+    _title_mode_for_session(pane_id, hermes_session_id)
     with _lock:
         version = _versions.get(pane_id, 0) + 1
         _versions[pane_id] = version
@@ -317,6 +363,7 @@ def on_session_reset(**kwargs: Any) -> None:
         _current_titles.pop(pane_id, None)
 
     _post_title(pane_id, hermes_session_id, "", "reset", version)
+    _persist_hermes_title(hermes_session_id, "")
     return None
 
 

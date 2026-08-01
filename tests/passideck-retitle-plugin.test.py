@@ -16,6 +16,8 @@ def load_plugin():
     spec = importlib.util.spec_from_file_location(f"passideck_retitle_test_{time.time_ns()}", PLUGIN)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    module._real_persist_hermes_title = module._persist_hermes_title
+    module._persist_hermes_title = lambda *_args: True
     return module
 
 
@@ -58,6 +60,87 @@ class PassiDeckRetitlePluginTests(unittest.TestCase):
         self.assertEqual(posts[-1], (
             "pane-1", "hermes-1", "Dynamic session retitling", "model", 1
         ))
+
+    def test_first_prompt_reserves_canonical_hermes_title_before_bridge(self):
+        plugin = load_plugin()
+        events = []
+        refined = threading.Event()
+        plugin._call_title_model = lambda context: "Canonical session title"
+
+        def persist(session_id, title):
+            events.append(("persist", session_id, title))
+            return True
+
+        def post(_pane_id, session_id, title, kind, _revision):
+            events.append(("post", session_id, title, kind))
+            if kind == "model":
+                refined.set()
+
+        plugin._persist_hermes_title = persist
+        plugin._post_title = post
+        plugin.on_pre_llm_call(
+            session_id="hermes-1",
+            user_message="Please build automatic dynamic session titles",
+            conversation_history=[],
+            is_first_turn=True,
+        )
+
+        self.assertEqual(events[:2], [
+            ("persist", "hermes-1", "Please build automatic dynamic session titles"),
+            ("post", "hermes-1", "Please build automatic dynamic session titles", "provisional"),
+        ], "the provisional title must reserve Hermes' canonical title before the pane bridge")
+        self.assertTrue(refined.wait(2))
+        self.assertEqual(events[-2:], [
+            ("persist", "hermes-1", "Canonical session title"),
+            ("post", "hermes-1", "Canonical session title", "model"),
+        ])
+
+    def test_official_session_db_is_the_canonical_title_store(self):
+        plugin = load_plugin()
+        calls = []
+
+        class FakeSessionDB:
+            def set_session_title(self, session_id, title):
+                calls.append((session_id, title))
+                return True
+
+            def close(self):
+                pass
+
+        hermes_state = types.ModuleType("hermes_state")
+        hermes_state.SessionDB = FakeSessionDB
+        with patch.dict(sys.modules, {"hermes_state": hermes_state}):
+            self.assertTrue(plugin._real_persist_hermes_title("hermes-1", "Canonical title"))
+            worker_result = []
+            worker = threading.Thread(
+                target=lambda: worker_result.append(plugin._real_persist_hermes_title("hermes-1", "Worker title"))
+            )
+            worker.start()
+            worker.join(2)
+
+        self.assertEqual(worker_result, [True])
+        self.assertEqual(calls, [("hermes-1", "Canonical title"), ("hermes-1", "Worker title")])
+
+    def test_new_session_latches_current_setting_and_does_not_retitle_old_mode(self):
+        plugin = load_plugin()
+        posts = []
+        model_calls = []
+        plugin._title_mode_for_session = lambda _pane_id, _session_id: False
+        plugin._persist_hermes_title = lambda *_args: True
+        plugin._post_title = lambda *args: posts.append(args)
+        plugin._call_title_model = lambda _context: model_calls.append(True) or "Must not run"
+
+        plugin.on_session_reset(session_id="hermes-new")
+        plugin.on_pre_llm_call(
+            session_id="hermes-new",
+            user_message="Retitle this disabled session",
+            conversation_history=[],
+            is_first_turn=True,
+        )
+        time.sleep(0.05)
+
+        self.assertEqual(posts, [("pane-1", "hermes-new", "", "reset", 1)])
+        self.assertEqual(model_calls, [], "a session created with Retitle off must use Hermes' normal titler")
 
     def test_title_context_keeps_session_objective_and_recent_dialogue(self):
         plugin = load_plugin()
