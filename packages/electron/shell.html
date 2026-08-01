@@ -21,19 +21,11 @@
     .backend-tab.response-pulse { color: var(--tab-color); background: color-mix(in srgb, var(--tab-color) 28%, transparent); box-shadow: inset 0 -2px 0 var(--tab-color), 0 0 18px color-mix(in srgb, var(--tab-color) 48%, transparent); }
     .backend-tab.response-pulse.response-blinking:not(.active),
     .backend-tab.response-pulse.response-blinking.hidden-desktop-attention { animation: backend-response-pulse 1.6s ease-in-out infinite; }
+    .response-badge { width: 7px; height: 7px; flex: 0 0 auto; margin-left: 2px; background: var(--tab-color); box-shadow: 0 0 8px var(--tab-color); transform: rotate(45deg); }
     .backend-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .connectionStatus { position: relative; width: 12px; height: 12px; flex: 0 0 auto; --status-color: #d35454; }
-    .connectionStatus.loading { --status-color: #d5aa52; }
-    .connectionStatus.online { --status-color: #56d68b; }
-    .connectionStatus::before { content: ''; position: absolute; inset: 2.5px; border-radius: 50%; background: var(--status-color); box-shadow: 0 0 6px var(--status-color); }
-    .connectionStatus.attention::before { background: conic-gradient(transparent 0 25%, var(--status-color) 25%); animation: connection-dot-out 420ms ease-in forwards; }
-    .connectionStatus.attention::after { content: '🔔'; position: absolute; inset: 0; display: grid; place-items: center; font-size: 11px; line-height: 1; opacity: 0; animation: connection-bell-in 300ms 150ms ease-out forwards; }
-    @keyframes connection-dot-out { to { opacity: 0; transform: rotate(240deg) scale(.35); } }
-    @keyframes connection-bell-in { from { opacity: 0; transform: rotate(-160deg) scale(.45); } to { opacity: 1; transform: rotate(0) scale(1); } }
-    @media (prefers-reduced-motion: reduce) {
-      .connectionStatus.attention::before { animation: none; opacity: 0; }
-      .connectionStatus.attention::after { animation: none; opacity: 1; transform: none; }
-    }
+    .connectionStatus { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #d35454; box-shadow: 0 0 6px currentColor; }
+    .connectionStatus.loading { background: #d5aa52; }
+    .connectionStatus.online { background: #56d68b; }
     .backend-edit { margin-left: auto; color: inherit; opacity: 0; visibility: hidden; transition: opacity 80ms linear, visibility 0s linear 80ms; }
     .backend-tab:hover .backend-edit { opacity: 1; visibility: visible; transition-delay: 300ms; }
     .backend-tab:focus-visible .backend-edit { opacity: 1; visibility: visible; transition-delay: 0s; }

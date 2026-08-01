@@ -72,7 +72,7 @@ function render(next) {
     tab.setAttribute('aria-current', active ? 'page' : 'false');
     tab.setAttribute('aria-label', `${backend.name}${backend.attention ? ', new response' : ''}`);
     const connectionStatus = document.createElement('span');
-    connectionStatus.className = `connectionStatus ${backend.status || 'loading'}${backend.attention ? ' attention' : ''}`;
+    connectionStatus.className = `connectionStatus ${backend.status || 'loading'}`;
     connectionStatus.setAttribute('aria-hidden', 'true');
     const name = document.createElement('span');
     name.className = 'backend-name';
@@ -83,6 +83,12 @@ function render(next) {
     edit.setAttribute('aria-label', `Edit ${backend.name}`);
     edit.onclick = event => { event.stopPropagation(); void openDialog(backend); };
     tab.append(connectionStatus, name);
+    if (backend.attention) {
+      const badge = document.createElement('span');
+      badge.className = 'response-badge';
+      badge.setAttribute('aria-hidden', 'true');
+      tab.append(badge);
+    }
     tab.append(edit);
     tab.onclick = () => window.passideckShell.selectBackend(backend.id);
     return tab;
