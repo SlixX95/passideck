@@ -2796,6 +2796,34 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.deepStrictEqual(zeroScrollbackWheel.mouseData, [], `normal Hermes wheel without scrollback must not become PTY mouse/history input: ${JSON.stringify(zeroScrollbackWheel)}`);
     assert.deepStrictEqual(zeroScrollbackWheel.after, zeroScrollbackWheel.before, `normal Hermes wheel without scrollback must leave the viewport fixed: ${JSON.stringify(zeroScrollbackWheel)}`);
 
+    const alternateBufferHermesWheel = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const oldCommand = entry.session.meta.command;
+      const saved = entry.serialize.serialize({ scrollback: 20000 });
+      entry.session.meta.command = 'hermes';
+      entry.term.reset();
+      await new Promise(resolve => entry.term.write('\\x1b[?1049h\\x1b[?1000h\\x1b[?1006h', resolve));
+      const target = entry.el.querySelector('.xterm-viewport') || entry.el.querySelector('.terminal');
+      const rect = target.getBoundingClientRect();
+      const mouseData = [];
+      const listener = entry.term.onData(data => mouseData.push(data));
+      const before = { type: entry.term.buffer.active.type, baseY: entry.term.buffer.active.baseY, viewportY: entry.term.buffer.active.viewportY };
+      const event = new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true, clientX: rect.left + 20, clientY: rect.top + 40 });
+      const dispatched = target.dispatchEvent(event);
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const after = { type: entry.term.buffer.active.type, baseY: entry.term.buffer.active.baseY, viewportY: entry.term.buffer.active.viewportY };
+      listener.dispose();
+      await new Promise(resolve => entry.term.write('\\x1b[?1000l\\x1b[?1006l\\x1b[?1049l', resolve));
+      entry.term.reset();
+      await new Promise(resolve => entry.term.write(saved, resolve));
+      entry.session.meta.command = oldCommand;
+      return { before, after, canceled: !dispatched || event.defaultPrevented, mouseData };
+    })()`);
+    assert.strictEqual(alternateBufferHermesWheel.before.type, 'alternate', `normal Hermes alternate-buffer regression setup must enter the alternate buffer: ${JSON.stringify(alternateBufferHermesWheel)}`);
+    assert.strictEqual(alternateBufferHermesWheel.canceled, true, `normal Hermes wheel must remain PassiDeck-owned in a stale alternate buffer: ${JSON.stringify(alternateBufferHermesWheel)}`);
+    assert.deepStrictEqual(alternateBufferHermesWheel.mouseData, [], `normal Hermes wheel in a stale alternate buffer must not become PTY mouse/history input: ${JSON.stringify(alternateBufferHermesWheel)}`);
+    assert.deepStrictEqual(alternateBufferHermesWheel.after, alternateBufferHermesWheel.before, `normal Hermes wheel in a stale alternate buffer must leave the viewport fixed: ${JSON.stringify(alternateBufferHermesWheel)}`);
+
     const wheelScroll = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
       const oldCommand = entry.session.meta.command;

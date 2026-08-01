@@ -1964,7 +1964,9 @@ function installTerminalWheelScroll(termEl, term, session = null) {
       return true;
     }
     const buffer = term.buffer?.active;
-    if (buffer?.type === 'alternate') return true;
+    // Command ownership wins over xterm buffer state. A restored/redrawn normal
+    // Hermes pane can temporarily retain an alternate buffer with mouse mode.
+    if (!isHermes && buffer?.type === 'alternate') return true;
     if (!buffer || buffer.baseY <= 0) {
       if (isHermes) {
         e.preventDefault();
@@ -1996,7 +1998,6 @@ function installTerminalWheelScroll(termEl, term, session = null) {
       return;
     }
     const buffer = term.buffer?.active;
-    if (buffer?.type === 'alternate') return;
     if (!buffer || buffer.baseY <= 0) {
       e.preventDefault();
       e.stopImmediatePropagation();
