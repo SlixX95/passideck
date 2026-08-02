@@ -52,6 +52,8 @@ const TMUX_CMD = process.env.PASSIDECK_TMUX_CMD || 'tmux';
 const TMUX_ARGS = process.env.PASSIDECK_TMUX_SOCKET
   ? ['-L', process.env.PASSIDECK_TMUX_SOCKET]
   : (process.env.PASSIDECK_TMUX_ARGS || '-L passideck').split(/\s+/).filter(Boolean);
+const TMUX_HISTORY_REPLAY_LINES = 2000;
+const TMUX_HISTORY_REPLAY_MAX_BYTES = 2 * 1024 * 1024;
 const tmuxArgs = (args) => [...TMUX_ARGS, ...args];
 
 let lastCpuSample = null;
@@ -930,6 +932,17 @@ function tmuxKill(name) {
   try { execFileSync(TMUX_CMD, tmuxArgs(['kill-session', '-t', name]), { stdio: 'ignore' }); } catch {}
 }
 
+function tmuxCapturePane(session) {
+  if (!session?.tmuxName || !isPlainShellCommand(session.meta?.command)) return '';
+  try {
+    return execFileSync(TMUX_CMD, tmuxArgs([
+      'capture-pane', '-e', '-p', '-S', `-${TMUX_HISTORY_REPLAY_LINES}`, '-t', session.tmuxName
+    ]), { encoding: 'utf8', maxBuffer: TMUX_HISTORY_REPLAY_MAX_BYTES }).replace(/\r?\n$/, '');
+  } catch {
+    return '';
+  }
+}
+
 function tmuxRefreshClient(session) {
   if (!session?.tmuxName || session.tmuxRefreshTimer) return;
   const delay = Math.max(0, 100 - (Date.now() - (session.lastTmuxRefreshAt || 0)));
@@ -1277,14 +1290,24 @@ function createServer(config = loadConfig()) {
     ws.send(JSON.stringify({ type: 'meta', session: session.toJSON() }));
     if (session.hermesEventPublishers?.size) ws.send(JSON.stringify({ type: 'hermes-events', connected: true, running: session.hermesRunning ?? null }));
     else if (typeof session.hermesRunning === 'boolean') ws.send(JSON.stringify({ type: 'hermes-event', event: hermesWorkingEvent(session.hermesRunning) }));
-    ws.send(JSON.stringify({ type: 'replay', data: '\r\n[PassiDeck reconnect: output replay disabled; live session still running]\r\n' }));
+    const shellHistory = tmuxCapturePane(session);
+    ws.shellHistorySent = Boolean(shellHistory);
+    ws.send(JSON.stringify(shellHistory
+      ? { type: 'replay', kind: 'tmux-history', data: shellHistory }
+      : { type: 'replay', data: '\r\n[PassiDeck reconnect: output replay disabled; live session still running]\r\n' }));
 
     ws.on('message', (raw) => {
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (msg.type === 'ping') return ws.send(JSON.stringify({ type: 'pong' }));
       if (msg.type === 'input' && session.pty) session.pty.write(String(msg.data || ''));
-      if (msg.type === 'redraw' && session.pty) tmuxRefreshClient(session);
+      if (msg.type === 'redraw' && session.pty) {
+        if (ws.shellHistorySent) {
+          ws.shellHistorySent = false;
+          return;
+        }
+        tmuxRefreshClient(session);
+      }
       if (msg.type === 'resize' && session.pty) {
         const cols = Math.min(TERMINAL_MAX_DIMENSION, Math.max(2, Number(msg.cols) || 120));
         const rows = Math.min(TERMINAL_MAX_DIMENSION, Math.max(2, Number(msg.rows) || 30));

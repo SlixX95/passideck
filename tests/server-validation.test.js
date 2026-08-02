@@ -172,6 +172,45 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     assert.ok(!persistentPaneEnv.some(value => value.startsWith('PASSIDECK_WORKING_ENDPOINT=')), 'non-Hermes shell panes must not receive the Hermes working-state bridge');
     assert.ok(!persistentPaneEnv.some(value => value.startsWith('HERMES_TUI_SIDECAR_URL=')), 'non-Hermes shell panes must not receive the TUI event publisher');
 
+    const persistentSession = app.sessions.get(persistent.id);
+    persistentSession.pty.write('for i in $(seq 1 120); do echo shell-history-$i; done\r');
+    await delay(250);
+    const historySocket = new WebSocket(`ws://127.0.0.1:${port}/ws?session=${persistent.id}`);
+    const historyMessages = [];
+    let historyOutput = 0;
+    historySocket.on('message', raw => {
+      try {
+        const message = JSON.parse(raw.toString());
+        historyMessages.push(message);
+        if (message.type === 'output') historyOutput += 1;
+      } catch {}
+    });
+    await opened(historySocket);
+    await waitFor(() => historyMessages.some(message => message.type === 'replay'), 'shell clients must receive tmux history when they attach to an existing pane');
+    const historyReplay = historyMessages.find(message => message.type === 'replay');
+    assert.strictEqual(historyReplay.kind, 'tmux-history', 'plain shell history must be labeled separately from the reconnect marker');
+    assert.ok(historyReplay.data.includes('shell-history-1') && historyReplay.data.includes('shell-history-120'), 'plain shell history replay must contain the pane scrollback');
+    historySocket.send(JSON.stringify({ type: 'redraw' }));
+    await delay(100);
+    assert.strictEqual(historyOutput, 0, 'the automatic first redraw must not duplicate the shell frame after tmux history replay');
+    historySocket.close();
+
+    const originalPersistentCommand = persistentSession.meta.command;
+    persistentSession.meta.command = 'hermes --tui';
+    const tuiSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?session=${persistent.id}`);
+    const tuiMessages = [];
+    tuiSocket.on('message', raw => {
+      try { tuiMessages.push(JSON.parse(raw.toString())); } catch {}
+    });
+    await opened(tuiSocket);
+    await waitFor(() => tuiMessages.some(message => message.type === 'replay'), 'non-shell panes must still receive the reconnect marker');
+    const tuiReplay = tuiMessages.find(message => message.type === 'replay');
+    assert.strictEqual(tuiReplay.kind, undefined, 'Hermes TUI panes must not receive shell history replay');
+    assert.ok(tuiReplay.data.includes('output replay disabled'), 'non-shell reconnect semantics must stay unchanged');
+    tuiSocket.close();
+    persistentSession.meta.command = originalPersistentCommand;
+
+    persistentSession.meta.command = 'hermes';
     const redrawSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?session=${persistent.id}`);
     let redrawOutput = '';
     redrawSocket.on('message', raw => {
@@ -184,9 +223,10 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     await delay(100);
     redrawOutput = '';
     redrawSocket.send(JSON.stringify({ type: 'redraw' }));
-    await delay(100);
+    await delay(500);
     assert.ok(redrawOutput.length > 0, 'a client redraw request must make tmux repaint its current full terminal frame');
     redrawSocket.close();
+    persistentSession.meta.command = originalPersistentCommand;
 
     const inputResponse = await fetch(`${base}/api/sessions/validation/input`, {
       method: 'POST',

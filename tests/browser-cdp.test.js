@@ -154,6 +154,8 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const session = await requestJson(base, 'POST', '/api/sessions', { command: '/bin/bash', label: `smoke-${i}`, cols: 120, rows: 30 });
       madeSessions.push(session.id);
     }
+    appServer.sessions.get(madeSessions[0]).pty.write('for i in $(seq 1 120); do echo shell-history-$i; done\r');
+    await sleep(250);
     const firstTmux = `passideck_${madeSessions[0].replace(/[^a-zA-Z0-9_]/g, '')}`;
     const firstPanePid = execFileSync('tmux', ['-L', socket, 'list-panes', '-t', firstTmux, '-F', '#{pane_pid}'], { encoding: 'utf8' }).trim();
     const firstPaneEnv = fs.readFileSync(`/proc/${firstPanePid}/environ`, 'utf8').split('\0');
@@ -192,6 +194,24 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await cdp.send('Page.navigate', { url: base }, sid);
     await waitEval(cdp, sid, 'document.readyState === "complete"');
     await waitEval(cdp, sid, 'document.querySelectorAll(".term-panel").length >= 11');
+    await waitEval(cdp, sid, '[...state.sessions.values()][0].term.buffer.active.baseY > 0', 10000);
+    const shellHistoryWheel = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      entry.term.scrollToBottom();
+      const target = entry.el.querySelector('.xterm-viewport') || entry.el.querySelector('.terminal');
+      const rect = target.getBoundingClientRect();
+      const before = { baseY: entry.term.buffer.active.baseY, viewportY: entry.term.buffer.active.viewportY };
+      const event = new WheelEvent('wheel', { deltaY: -480, bubbles: true, cancelable: true, clientX: rect.left + 20, clientY: rect.top + 40 });
+      const dispatched = target.dispatchEvent(event);
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const after = { baseY: entry.term.buffer.active.baseY, viewportY: entry.term.buffer.active.viewportY };
+      const line = entry.term.buffer.active.getLine(entry.term.buffer.active.viewportY)?.translateToString(false).trim() || '';
+      return { before, after, line, canceled: !dispatched || event.defaultPrevented };
+    })()`);
+    assert.ok(shellHistoryWheel.before.baseY > 0, `plain shell attach must restore tmux scrollback into xterm: ${JSON.stringify(shellHistoryWheel)}`);
+    assert.ok(shellHistoryWheel.line.includes('shell-history-'), `plain shell wheel must expose restored command output, not only a blank viewport: ${JSON.stringify(shellHistoryWheel)}`);
+    assert.ok(shellHistoryWheel.after.viewportY < shellHistoryWheel.before.viewportY, `plain shell wheel must move the restored terminal scrollback: ${JSON.stringify(shellHistoryWheel)}`);
+    assert.strictEqual(shellHistoryWheel.canceled, true, `plain shell wheel must stay in terminal scrollback instead of becoming shell input: ${JSON.stringify(shellHistoryWheel)}`);
     const compactLaunchStrip = await evalExpr(cdp, sid, `(() => {
       const strip = document.querySelector('.command-strip').getBoundingClientRect();
       const first = document.querySelector('.topbar-ql-btn').getBoundingClientRect();
