@@ -1771,11 +1771,7 @@ function sendResize(id, entry, force = false) {
 
 function requestTerminalRedraw(entry) {
   entry.term.__passideckSnapshotLinks = null;
-  if (entry.ws?.readyState !== WebSocket.OPEN) {
-    entry.redrawPending = true;
-    return;
-  }
-  entry.redrawPending = false;
+  if (entry.ws?.readyState !== WebSocket.OPEN) return;
   entry.ws.send(JSON.stringify({ type: 'redraw' }));
 }
 
@@ -1978,38 +1974,35 @@ function installTerminalDragSelection(termEl, term, session) {
   window.addEventListener('blur', cancelInterruptedDrag, true);
 }
 
+function declaredTerminalOwner(session) {
+  const command = String(session?.meta?.command || '').trim();
+  return /\bhermes\b[^\n]*\s--tui\b/i.test(command) ? 'application' : 'viewport';
+}
+
 function installTerminalWheelScroll(termEl, term, session = null) {
   let wheelRemainder = 0;
   let touchY = null;
   let touchRemainder = 0;
+  const applicationOwnsTouch = () => state.sessions.get(session?.id)?.terminalOwner === 'application';
   term.attachCustomWheelEventHandler?.(e => {
-    const command = String(session?.meta?.command || session?.meta?.label || '').toLowerCase();
-    const isHermes = /\bhermes\b/.test(command);
-    const isHermesTui = /\bhermes\b[^\n]*\s--tui\b/.test(command);
+    const entry = state.sessions.get(session?.id);
     if (e.ctrlKey) return true;
-    if (isHermesTui) {
+    if (entry?.terminalOwner === 'application') {
       term.clearSelection();
       term.__passideckResumeMouse?.();
       return true;
     }
     const buffer = term.buffer?.active;
-    // Command ownership wins over xterm buffer state. A restored/redrawn normal
-    // Hermes pane can temporarily retain an alternate buffer with mouse mode.
-    if (!isHermes && buffer?.type === 'alternate') return true;
     if (!buffer || buffer.baseY <= 0) {
-      if (isHermes) {
-        e.preventDefault();
-        return false;
-      }
-      return true;
+      e.preventDefault();
+      return false;
     }
-    const forceScrollback = isHermes;
     const unit = e.deltaMode === 1 ? 1 : e.deltaMode === 2 ? term.rows : 1 / Math.max(8, state.fontSize * 1.2);
     wheelRemainder += e.deltaY * unit;
     const lines = Math.trunc(wheelRemainder);
     if (!lines) {
-      if (forceScrollback) e.preventDefault();
-      return !forceScrollback;
+      e.preventDefault();
+      return false;
     }
     wheelRemainder -= lines;
     term.scrollLines(lines);
@@ -2017,11 +2010,9 @@ function installTerminalWheelScroll(termEl, term, session = null) {
     return false;
   });
   termEl.addEventListener('wheel', e => {
-    const command = String(session?.meta?.command || session?.meta?.label || '').toLowerCase();
-    const isHermes = /\bhermes\b/.test(command);
-    const isHermesTui = /\bhermes\b[^\n]*\s--tui\b/.test(command);
-    if (!isHermes || e.ctrlKey) return;
-    if (isHermesTui) {
+    const entry = state.sessions.get(session?.id);
+    if (e.ctrlKey) return;
+    if (entry?.terminalOwner === 'application') {
       term.clearSelection();
       term.__passideckResumeMouse?.();
       return;
@@ -2047,7 +2038,7 @@ function installTerminalWheelScroll(termEl, term, session = null) {
   }, { capture: true, passive: false });
   termEl.addEventListener('touchstart', e => {
     const buffer = term.buffer?.active;
-    if (e.touches.length !== 1 || buffer?.type === 'alternate' || !buffer || buffer.baseY <= 0) {
+    if (applicationOwnsTouch() || e.touches.length !== 1 || buffer?.type === 'alternate' || !buffer || buffer.baseY <= 0) {
       touchY = null;
       return;
     }
@@ -2055,6 +2046,7 @@ function installTerminalWheelScroll(termEl, term, session = null) {
     touchRemainder = 0;
   }, { capture: true, passive: true });
   termEl.addEventListener('touchmove', e => {
+    if (applicationOwnsTouch()) { touchY = null; touchRemainder = 0; return; }
     if (touchY === null || e.touches.length !== 1) return;
     const y = e.touches[0].clientY;
     touchRemainder += (touchY - y) / Math.max(8, state.fontSize * 1.2);
@@ -2108,6 +2100,7 @@ function normalizeReplayText(data) {
     .replace(/\x1b[P_^][\s\S]*?\x1b\\/g, '')
     .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
     .replace(/\x1b[@-Z\\-_]/g, '')
+    .replace(/\r?\n/g, '\r\n')
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
 }
 
@@ -2147,7 +2140,9 @@ function terminalOutputDelay(id) {
 
 function scheduleTerminalOutputFlush(id, term) {
   const entry = state.sessions.get(id);
-  if (!entry || entry.outputWriteInFlight || entry.outputFlushTimer || !entry.outputBuffer) return;
+  if (!entry || entry.outputWriteInFlight || entry.outputFlushTimer) return;
+  if (entry.pendingReplay !== null) return flushTerminalReplay(id, term);
+  if (!entry.outputBuffer) return;
   entry.outputFlushTimer = setTimeout(() => flushTerminalOutput(id, term), terminalOutputDelay(id));
 }
 
@@ -2166,6 +2161,10 @@ function flushTerminalOutput(id, term) {
     if (!live()) return;
     entry.outputFrameHandle = null;
     entry.outputWriteInFlight = false;
+    if (entry.pendingReplay !== null) {
+      flushTerminalReplay(id, term);
+      return;
+    }
     syncSessionWorkingFromTerminal(id, entry);
     refreshTitleFromTerminal(id);
     if (entry.outputBuffer) {
@@ -2192,9 +2191,38 @@ function queueTerminalOutput(id, term, data) {
   scheduleTerminalOutputFlush(id, term);
 }
 
-function writeTerminalReplay(term, data) {
+function flushTerminalReplay(id, term) {
+  const entry = state.sessions.get(id);
+  if (!entry || entry.outputCancelled || entry.outputWriteInFlight || entry.pendingReplay === null) return;
+  const replay = entry.pendingReplay;
+  entry.pendingReplay = null;
+  entry.outputWriteInFlight = true;
   try { term.reset(); } catch {}
-  writeTerminalOutput(term, normalizeReplayText(data));
+  const live = () => !entry.outputCancelled && state.sessions.get(id) === entry;
+  writeTerminalOutput(term, replay, () => {
+    if (!live()) return;
+    entry.outputFrameHandle = null;
+    entry.outputWriteInFlight = false;
+    if (entry.pendingReplay !== null) return flushTerminalReplay(id, term);
+    syncSessionWorkingFromTerminal(id, entry);
+    refreshTitleFromTerminal(id);
+    if (entry.outputBuffer) scheduleTerminalOutputFlush(id, term);
+    else scheduleTerminalSnapshot(id);
+  }, false, handle => {
+    if (live()) entry.outputFrameHandle = handle;
+  }, live);
+}
+
+function queueTerminalReplay(id, term, data) {
+  const entry = state.sessions.get(id);
+  if (!entry) return;
+  clearTimeout(entry.snapshotTimer);
+  clearTimeout(entry.outputFlushTimer);
+  entry.snapshotTimer = null;
+  entry.outputFlushTimer = null;
+  entry.outputBuffer = '';
+  entry.pendingReplay = normalizeReplayText(data);
+  flushTerminalReplay(id, term);
 }
 
 function snapshotKey(id) {
@@ -3215,7 +3243,7 @@ function createPanel(session, opts = {}) {
   });
 
   const hasSnapshot = hasTerminalSnapshot(id);
-  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, arrangeCleanup: dismissArrange, restored: hasSnapshot, redrawPending: true, snapshotTimer: null, outputBuffer: '', outputFlushTimer: null, outputWriteInFlight: false, outputFrameHandle: null, outputCancelled: false, titleSource: '', working: false, lastSentCols: 0, lastSentRows: 0 });
+  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, arrangeCleanup: dismissArrange, terminalOwner: declaredTerminalOwner(session), hasSnapshot, attachCount: 0, attachId: '', outputSequence: 0, snapshotTimer: null, outputBuffer: '', pendingReplay: null, outputFlushTimer: null, outputWriteInFlight: false, outputFrameHandle: null, outputCancelled: false, titleSource: '', working: false, lastSentCols: 0, lastSentRows: 0 });
   term.onWriteParsed?.(() => refreshTitleFromTerminal(id));
   term.onBell?.(() => notifyResponseComplete(id));
 
@@ -3243,15 +3271,6 @@ function createPanel(session, opts = {}) {
   else applyLayoutVisibility();
   requestAnimationFrame(() => {
     fitAll({ allowHeight: true, scrollBottom: true });
-    const entry = state.sessions.get(id);
-    if (entry && hasSnapshot) {
-      entry.restored = restoreTerminalSnapshot(id, term, () => requestAnimationFrame(() => {
-        if (state.sessions.get(id) !== entry) return;
-        try { fitEntry(id, entry, { force: true, allowHeight: true }); } catch {}
-        requestTerminalRedraw(entry);
-        scheduleTerminalSnapshot(id);
-      }), entry);
-    }
   });
 }
 
@@ -3330,6 +3349,55 @@ function handleSocketClose(id, socket, event) {
   }, 1000);
 }
 
+function applyTerminalOwner(id, term, owner) {
+  const entry = state.sessions.get(id);
+  if (!entry || !['viewport', 'application'].includes(owner)) return;
+  const previous = entry.terminalOwner;
+  entry.terminalOwner = owner;
+  if (owner === 'viewport' && previous === 'application' && term.buffer?.active?.type === 'alternate') {
+    queueTerminalOutput(id, term, '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l');
+  }
+}
+
+function hydrateLiveTerminal(id, term) {
+  const entry = state.sessions.get(id);
+  if (!entry) return;
+  const finish = () => requestAnimationFrame(() => {
+    if (state.sessions.get(id) !== entry) return;
+    try { fitEntry(id, entry, { force: true, allowHeight: true }); } catch {}
+    requestTerminalRedraw(entry);
+    scheduleTerminalSnapshot(id);
+  });
+  const firstAttach = entry.attachCount++ === 0;
+  if (firstAttach && entry.hasSnapshot && restoreTerminalSnapshot(id, term, finish, entry)) return;
+  finish();
+}
+
+function hydrateTerminalAttach(id, term, msg) {
+  const entry = state.sessions.get(id);
+  if (!entry) return;
+  const sequence = Number(msg.sequence);
+  if (Number.isFinite(sequence)) entry.outputSequence = sequence;
+  if (msg.attachId) entry.attachId = String(msg.attachId);
+  applyTerminalOwner(id, term, msg.owner);
+  if (msg.kind === 'tmux-history') {
+    entry.attachCount += 1;
+    queueTerminalReplay(id, term, msg.data);
+    entry.ws?.send(JSON.stringify({ type: 'replay-ack', attachId: msg.attachId }));
+    return;
+  }
+  if (msg.kind === 'live-only' || msg.kind === 'capture-unavailable') {
+    hydrateLiveTerminal(id, term);
+    return;
+  }
+  if (!msg.kind && String(msg.data || '').includes('output replay disabled')) {
+    hydrateLiveTerminal(id, term);
+    return;
+  }
+  entry.attachCount += 1;
+  queueTerminalReplay(id, term, msg.data);
+}
+
 function attachSocket(id, term, el) {
   const qs = new URLSearchParams({ session: id });
   const token = authToken();
@@ -3354,14 +3422,15 @@ function attachSocket(id, term, el) {
     const entry = state.sessions.get(id);
     if (msg.type === 'hermes-event' || msg.type === 'hermes-events') applyHermesEvent(id, msg);
     if (msg.type === 'meta') applySessionMeta(id, msg.session);
-    if (msg.type === 'replay') {
-      // The server intentionally does not replay PTY history anymore. Do not print its
-      // reconnect marker into the terminal: that visibly changes shell contents on every
-      // browser reload. A saved client viewport snapshot is restored separately.
-      if (String(msg.data || '').includes('output replay disabled')) return;
-      if (!entry?.restored) writeTerminalReplay(term, msg.data);
+    if (msg.type === 'terminal-owner') applyTerminalOwner(id, term, msg.owner);
+    if (msg.type === 'replay') hydrateTerminalAttach(id, term, msg);
+    if (msg.type === 'output') {
+      const sequence = Number(msg.sequence);
+      if (!Number.isFinite(sequence) || sequence > entry.outputSequence) {
+        if (Number.isFinite(sequence)) entry.outputSequence = sequence;
+        queueTerminalOutput(id, term, msg.data);
+      }
     }
-    if (msg.type === 'output') queueTerminalOutput(id, term, msg.data);
     if (msg.type === 'exit') {
       el.classList.add('exited');
       setConnectionStatus(id, 'offline');
@@ -3378,11 +3447,6 @@ function attachSocket(id, term, el) {
     setConnectionStatus(id, 'live');
     try { sendSocketPing(entry); } catch {}
     scheduleTerminalFit({ force: true });
-    if (entry.redrawPending) requestAnimationFrame(() => {
-      if (state.sessions.get(id)?.ws !== ws) return;
-      try { fitEntry(id, entry, { force: true, allowHeight: true }); } catch {}
-      requestTerminalRedraw(entry);
-    });
   };
   ws.onerror = () => {
     if (state.sessions.get(id)?.ws === ws) setConnectionStatus(id, 'offline');
@@ -3396,7 +3460,6 @@ function reconnect(id, force = false) {
   if (!entry || entry.el.classList.contains('exited')) return;
   const oldSocket = entry.ws;
   if (!force && oldSocket?.readyState === WebSocket.OPEN) return;
-  entry.redrawPending = true;
   entry.ws = attachSocket(id, entry.term, entry.el);
   if (oldSocket && oldSocket !== entry.ws) {
     try { oldSocket.close(4000, 'superseded'); } catch {}
@@ -3455,7 +3518,6 @@ function resumeAllPanes(forceReconnect = false) {
   for (const [id, entry] of state.sessions) {
     try { entry.term.refresh(0, Math.max(0, entry.term.rows - 1)); } catch {}
     if (forceReconnect) {
-      entry.redrawPending = true;
       reconnect(id, true);
     } else if (ensureSocketLive(id, entry, now)) {
       sendResize(id, entry, true);

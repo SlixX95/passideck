@@ -38,7 +38,14 @@ for (const needle of [
   'function makeFreeWindow',
   'function savePanePrefs',
   'function pollSystemMonitor',
+  'function queueTerminalReplay',
+  "msg.kind === 'tmux-history'",
+  "terminalOwner === 'application'",
+  'applicationOwnsTouch()',
 ]) assert.ok(app.includes(needle), `missing app guard: ${needle}`);
+
+assert.ok(!app.includes("if (String(msg.data || '').includes('output replay disabled'))"), 'typed replay frames must not be classified by visible terminal text');
+assert.ok(!app.includes('if (entry.pendingReplay)') && app.includes('entry.pendingReplay !== null'), 'empty replay revisions must use the null sentinel instead of truthiness');
 
 for (const needle of [
   "app.get('/api/system-metrics'",
@@ -297,11 +304,12 @@ assert.ok(
   app.includes('handleTerminalLink(event, link)'),
   'Hermes TUI selection must support mouse-only browser/desktop input and activate terminal links from the trusted pointer event'
 );
-assert.ok(html.includes('app.js?v=20260801-cli-working-v1') && html.includes('style.css?v=20260801-desktop-reload-v1'), 'client cache keys must activate CLI working-state support and restored desktop repaint');
+assert.ok(html.includes('app.js?v=20260803-terminal-owner-v1') && html.includes('style.css?v=20260801-desktop-reload-v1'), 'client cache keys must activate terminal ownership and restored desktop repaint');
 assert.ok(app.includes("const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v2:'"), 'legacy snapshots without OSC 8 targets must be invalidated');
 assert.ok(app.includes('cols: entry.term.cols') && app.includes('Number.isInteger(snapshot.cols) && snapshot.cols === term.cols'), 'snapshot OSC 8 targets must fail closed after terminal column reflow');
 assert.ok(app.includes('const HERMES_TUI_WHEEL_MULTIPLIER = 3') && app.includes('clean.repeat(HERMES_TUI_WHEEL_MULTIPLIER)'), 'Hermes TUI wheel input must be accelerated at the PTY input boundary');
-assert.ok(app.includes("JSON.stringify({ type: 'redraw' })") && app.includes('requestTerminalRedraw(entry)') && app.includes('redrawPending: true'), 'initial attach, reload, and resume must request a full tmux terminal redraw');
+assert.ok(app.includes("JSON.stringify({ type: 'redraw' })") && app.includes('requestTerminalRedraw(entry)') && app.includes("msg.kind === 'live-only'") && app.includes("type: 'replay-ack'"), 'live-only attach must redraw while authoritative history acknowledges its typed replay');
+assert.ok(!app.includes('redrawPending'), 'removed initial-redraw state must not leave dead writes behind');
 assert.ok(app.includes('if (changed) entry.term.__passideckSnapshotLinks = null'), 'later terminal resize must invalidate restored OSC 8 target coordinates');
 
 assert.ok(html.includes('id="uploadFileBtn"') && html.includes('id="clipboardImageBtn"') && html.includes('id="fileInput"'), 'upload, clipboard image, and file picker controls must stay available');

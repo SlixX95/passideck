@@ -54,6 +54,12 @@ const TMUX_ARGS = process.env.PASSIDECK_TMUX_SOCKET
   : (process.env.PASSIDECK_TMUX_ARGS || '-L passideck').split(/\s+/).filter(Boolean);
 const TMUX_HISTORY_REPLAY_LINES = 2000;
 const TMUX_HISTORY_REPLAY_MAX_BYTES = 2 * 1024 * 1024;
+const TMUX_HYDRATION_SETTLE_MS = 100;
+const TMUX_HYDRATION_MAX_MS = 15000;
+const TERMINAL_OWNER_VIEWPORT = 'viewport';
+const TERMINAL_OWNER_APPLICATION = 'application';
+const TERMINAL_APPLICATION_COMMANDS = new Set(['vi', 'vim', 'nvim', 'nano', 'emacs', 'less', 'more', 'man', 'top', 'htop', 'btop', 'atop', 'glances', 'watch', 'mc', 'nnn', 'ranger', 'lf', 'lazygit', 'fzf', 'tmux', 'screen', 'ssh', 'mosh', 'codex']);
+const TERMINAL_REPLAY_DISABLED = '\r\n[PassiDeck reconnect: output replay disabled; live session still running]\r\n';
 const tmuxArgs = (args) => [...TMUX_ARGS, ...args];
 
 let lastCpuSample = null;
@@ -315,9 +321,39 @@ function resolveCwd(cwd) {
   return path.resolve(String(cwd || os.homedir()).replace(/^~/, os.homedir()));
 }
 
+function unwrapShellCommand(command) {
+  let argv = Array.isArray(command) ? [...command] : String(command || '').trim().split(/\s+/).filter(Boolean);
+  if (path.basename(String(argv[0] || '')) === 'exec') argv.shift();
+  const wrapper = path.basename(String(argv[0] || '')).toLowerCase();
+  if (wrapper === 'env') {
+    argv.shift();
+    while (argv.length) {
+      if (argv[0] === '--') { argv.shift(); break; }
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(argv[0]) || ['-i', '--ignore-environment'].includes(argv[0]) || /^(?:--unset|--chdir)=/.test(argv[0])) argv.shift();
+      else if (['-u', '--unset', '-C', '--chdir'].includes(argv[0])) argv.splice(0, 2);
+      else break;
+    }
+  } else if (wrapper === 'sudo') {
+    argv.shift();
+    const valued = new Set(['-u', '--user', '-g', '--group', '-h', '--host', '-p', '--prompt', '-C', '--close-from', '-r', '--role', '-t', '--type']);
+    const flags = new Set(['-E', '--preserve-env', '-H', '--set-home', '-n', '--non-interactive', '-S', '--stdin', '-k', '--reset-timestamp', '-K', '--remove-timestamp']);
+    while (argv.length) {
+      if (argv[0] === '--') { argv.shift(); break; }
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(argv[0]) || flags.has(argv[0]) || /^--(?:user|group|host|prompt|close-from|role|type)=/.test(argv[0])) argv.shift();
+      else if (valued.has(argv[0])) argv.splice(0, 2);
+      else break;
+    }
+  }
+  return argv;
+}
+
 function isPlainShellCommand(command) {
-  const cmd = String(command || '').trim();
-  return !cmd || /^(zsh|bash|fish|sh|dash|tcsh|ksh|csh|pwsh|powershell|\/bin\/bash|\/bin\/sh)$/i.test(cmd);
+  const originalEmpty = Array.isArray(command) ? command.length === 0 : !String(command || '').trim();
+  const [file = '', ...args] = unwrapShellCommand(command);
+  if (!file) return originalEmpty;
+  const shell = path.basename(file).replace(/^-/, '').toLowerCase();
+  return new Set(['zsh', 'bash', 'fish', 'sh', 'dash', 'tcsh', 'ksh', 'csh', 'pwsh', 'powershell']).has(shell) &&
+    args.every(arg => /^-(?:[a-z]+|-?[a-z][a-z-]*(?:=.*)?)$/i.test(arg));
 }
 
 function normalizeTerminalOutput(data) {
@@ -675,7 +711,11 @@ function splitCommand(command, shell) {
   const cmd = String(command || '').trim();
   const sh = shell || '/bin/bash';
   if (!cmd) return { file: sh, args: [] };
-  if (isPlainShellCommand(cmd)) return { file: cmd, args: [] };
+  if (isPlainShellCommand(cmd)) {
+    const argv = cmd.split(/\s+/).filter(Boolean);
+    if (path.basename(argv[0] || '') === 'exec') argv.shift();
+    return { file: argv[0], args: argv.slice(1) };
+  }
 
   // Run quick commands like `hermes` and `codex` inside an interactive shell.
   // Ctrl-C then interrupts the foreground CLI, not the whole PTY session, so the
@@ -791,36 +831,135 @@ function hermesActiveSessionIdFromEnv(env) {
   } catch { return null; }
 }
 
-function activeHermesResumeId(session) {
+function paneProcesses(session) {
   const name = String(session?.tmuxName || '');
-  if (!name || process.platform !== 'linux') return null;
+  if (!name || process.platform !== 'linux') return [];
 
   let panePid;
   try {
     panePid = Number(String(execFileSync(TMUX_CMD, tmuxArgs(['list-panes', '-t', name, '-F', '#{pane_pid}']), { encoding: 'utf8' })).trim().split(/\s+/)[0]);
-  } catch { return null; }
-  if (!Number.isInteger(panePid) || panePid < 2) return null;
+  } catch { return []; }
+  if (!Number.isInteger(panePid) || panePid < 2) return [];
 
   const queue = [panePid];
   const seen = new Set();
+  const processes = [];
   while (queue.length && seen.size < 256) {
     const pid = queue.shift();
     if (seen.has(pid)) continue;
     seen.add(pid);
+    let env = [];
     try {
-      const activeId = hermesActiveSessionIdFromEnv(fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0'));
-      if (activeId) return activeId;
+      env = fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
     } catch {}
     let argv = [];
     try {
       argv = fs.readFileSync(`/proc/${pid}/cmdline`).toString('utf8').split('\0').filter(Boolean);
     } catch {}
-    const resumedId = hermesResumeIdFromArgv(argv);
-    if (resumedId) return resumedId;
+    let pgrp = 0;
+    let tpgid = 0;
+    try {
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+      pgrp = Number(fields[2]) || 0;
+      tpgid = Number(fields[5]) || 0;
+    } catch {}
+    processes.push({ pid, argv, env, pgrp, tpgid });
     try {
       const children = fs.readFileSync(`/proc/${pid}/task/${pid}/children`, 'utf8').trim().split(/\s+/).filter(Boolean).map(Number);
       for (const child of children) if (Number.isInteger(child) && child > 1) queue.push(child);
     } catch {}
+  }
+  return processes;
+}
+
+function hermesArgvIndex(argv) {
+  const args = Array.isArray(argv) ? argv : [];
+  const executable = path.basename(String(args[0] || '')).toLowerCase();
+  if (executable === 'hermes') return 0;
+  if (/^(?:python(?:\d+(?:\.\d+)*)?|node|sh|bash|zsh)$/.test(executable) && path.basename(String(args[1] || '')).toLowerCase() === 'hermes') return 1;
+  return -1;
+}
+
+function argvHasHermes(argv) {
+  return hermesArgvIndex(argv) >= 0;
+}
+
+function argvHasHermesTui(argv) {
+  const index = hermesArgvIndex(argv);
+  return index >= 0 && argv.slice(index + 1).includes('--tui');
+}
+
+function argvHasTerminalApplication(argv) {
+  const args = Array.isArray(argv) ? argv : [];
+  const executable = path.basename(String(args[0] || '')).toLowerCase();
+  if (TERMINAL_APPLICATION_COMMANDS.has(executable)) return true;
+  if (/^(?:python(?:\d+(?:\.\d+)*)?|node|sh|bash|zsh)$/.test(executable)) {
+    return TERMINAL_APPLICATION_COMMANDS.has(path.basename(String(args[1] || '')).toLowerCase());
+  }
+  return false;
+}
+
+function terminalOwnerFromProcesses(meta = {}, processes = []) {
+  const command = String(meta.command || '').trim();
+  const records = (Array.isArray(processes) ? processes : []).filter(record => Array.isArray(record?.argv) && record.argv.length);
+  const foregroundPgrp = records.find(record => Number(record.tpgid) > 1)?.tpgid;
+  const foregroundRecords = foregroundPgrp
+    ? records.filter(record => Number(record.pgrp) === foregroundPgrp)
+    : records;
+  if (foregroundRecords.some(record => argvHasHermesTui(record.argv))) return TERMINAL_OWNER_APPLICATION;
+  if (foregroundRecords.some(record => argvHasHermes(record.argv))) return TERMINAL_OWNER_VIEWPORT;
+  const foreground = foregroundRecords.at(-1)?.argv || [];
+  if (foreground.length) return argvHasTerminalApplication(foreground) ? TERMINAL_OWNER_APPLICATION : TERMINAL_OWNER_VIEWPORT;
+  const declaredArgv = command.split(/\s+/).filter(Boolean);
+  if (argvHasHermesTui(declaredArgv)) return TERMINAL_OWNER_APPLICATION;
+  if (argvHasHermes(declaredArgv)) return TERMINAL_OWNER_VIEWPORT;
+  return argvHasTerminalApplication(declaredArgv) ? TERMINAL_OWNER_APPLICATION : TERMINAL_OWNER_VIEWPORT;
+}
+
+function terminalOwner(session) {
+  return terminalOwnerFromProcesses(session?.meta, paneProcesses(session));
+}
+
+function refreshTerminalOwner(session) {
+  const owner = terminalOwner(session);
+  if (session.terminalOwner && session.terminalOwner !== owner) session.broadcast({ type: 'terminal-owner', owner });
+  session.terminalOwner = owner;
+  return owner;
+}
+
+function scheduleTerminalOwnerRefresh(session) {
+  if (!session.clients?.size || session.terminalOwnerTimer) return;
+  session.terminalOwnerTimer = setTimeout(() => {
+    session.terminalOwnerTimer = null;
+    refreshTerminalOwner(session);
+  }, 250);
+  session.terminalOwnerTimer.unref?.();
+}
+
+function clearSessionTimers(session) {
+  clearTimeout(session?.terminalOwnerTimer);
+  clearTimeout(session?.tmuxRefreshTimer);
+  if (session) {
+    session.terminalOwnerTimer = null;
+    session.tmuxRefreshTimer = null;
+    for (const ws of session.clients || []) {
+      clearTimeout(ws.hydrationTimer);
+      ws.hydrationTimer = null;
+      ws.hydrating = false;
+      ws.hydrationConfirming = false;
+      ws.hydrationReplay = null;
+      ws.hydrationStartedAt = 0;
+    }
+  }
+}
+
+function activeHermesResumeId(session) {
+  for (const record of paneProcesses(session)) {
+    const activeId = hermesActiveSessionIdFromEnv(record.env);
+    if (activeId) return activeId;
+    const resumedId = hermesResumeIdFromArgv(record.argv);
+    if (resumedId) return resumedId;
   }
   return null;
 }
@@ -932,15 +1071,77 @@ function tmuxKill(name) {
   try { execFileSync(TMUX_CMD, tmuxArgs(['kill-session', '-t', name]), { stdio: 'ignore' }); } catch {}
 }
 
-function tmuxCapturePane(session) {
-  if (!session?.tmuxName || !isPlainShellCommand(session.meta?.command)) return '';
+function tmuxClients() {
   try {
     return execFileSync(TMUX_CMD, tmuxArgs([
-      'capture-pane', '-e', '-p', '-S', `-${TMUX_HISTORY_REPLAY_LINES}`, '-t', session.tmuxName
-    ]), { encoding: 'utf8', maxBuffer: TMUX_HISTORY_REPLAY_MAX_BYTES }).replace(/\r?\n$/, '');
-  } catch {
-    return '';
+      'list-clients', '-F', '#{client_name}\t#{client_tty}\t#{client_written}'
+    ]), { encoding: 'utf8' }).trim().split(/\r?\n/).filter(Boolean).map(line => line.split('\t'));
+  } catch { return []; }
+}
+
+function tmuxOutputClient(session) {
+  const clients = tmuxClients();
+  const expectedTty = String(session.tmuxClientTty || '');
+  const match = clients.find(([, tty]) => tty === expectedTty);
+  return match?.[0] || '';
+}
+
+function captureTmuxHistory(session, start) {
+  let data = execFileSync(TMUX_CMD, tmuxArgs([
+    'capture-pane', '-e', '-p', '-S', start, '-t', session.tmuxName
+  ]), { encoding: 'utf8', maxBuffer: TMUX_HISTORY_REPLAY_MAX_BYTES }).replace(/\r?\n$/, '');
+  const cursor = execFileSync(TMUX_CMD, tmuxArgs([
+    'display-message', '-p', '-t', session.tmuxName, '#{cursor_x}\t#{cursor_y}'
+  ]), { encoding: 'utf8' }).trim().split('\t').map(Number);
+  const cursorX = Number.isFinite(cursor[0]) ? cursor[0] : 0;
+  const cursorY = Number.isFinite(cursor[1]) ? cursor[1] : 0;
+  return { data, cursorX, cursorY };
+}
+
+function tmuxClientWritten(session) {
+  const expectedTty = String(session.tmuxClientTty || '');
+  const match = tmuxClients().find(([, tty]) => tty === expectedTty);
+  const raw = String(match?.[2] || '');
+  if (!/^\d+$/.test(raw)) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+function tmuxCapturePane(session, owner = terminalOwner(session)) {
+  if (owner !== TERMINAL_OWNER_VIEWPORT) return { kind: 'live-only', owner, data: TERMINAL_REPLAY_DISABLED };
+  if (!session?.tmuxName) return { kind: 'capture-unavailable', owner, data: TERMINAL_REPLAY_DISABLED, reason: 'tmux pane unavailable' };
+  if (!tmuxOutputClient(session)) return { kind: 'capture-unavailable', owner, data: TERMINAL_REPLAY_DISABLED, reason: 'exact tmux client unavailable' };
+  try {
+    return { kind: 'tmux-history', owner, ...captureTmuxHistory(session, '-'), truncated: false };
+  } catch (err) {
+    try {
+      return { kind: 'tmux-history', owner, ...captureTmuxHistory(session, `-${TMUX_HISTORY_REPLAY_LINES}`), truncated: true };
+    } catch {
+      return { kind: 'capture-unavailable', owner, data: TERMINAL_REPLAY_DISABLED, reason: String(err?.code || 'capture failed').slice(0, 80) };
+    }
   }
+}
+
+function isWheelMouseInput(data) {
+  let input = String(data || '');
+  let matched = false;
+  while (input) {
+    let packet = input.match(/^\x1b\[<(\d+);\d+;\d+[Mm]/);
+    if (packet) {
+      if ((Number(packet[1]) & 64) === 0) return false;
+    } else {
+      packet = input.match(/^\x1b\[(\d+);\d+;\d+M/);
+      if (packet) {
+        if (((Number(packet[1]) - 32) & 64) === 0) return false;
+      } else {
+        packet = input.match(/^\x1b\[M(.)(.)(.)/su);
+        if (!packet || ((packet[1].codePointAt(0) - 32) & 64) === 0) return false;
+      }
+    }
+    matched = true;
+    input = input.slice(packet[0].length);
+  }
+  return matched;
 }
 
 function tmuxRefreshClient(session) {
@@ -961,6 +1162,83 @@ function tmuxRefreshClient(session) {
   session.tmuxRefreshTimer.unref?.();
 }
 
+function startTerminalHydration(session, ws) {
+  session.attachSequence = (session.attachSequence || 0) + 1;
+  const attachId = `${session.id}:${session.attachSequence}`;
+  ws.attachId = attachId;
+  ws.hydrating = true;
+  ws.hydrationConfirming = false;
+  ws.hydrationReplay = null;
+  ws.hydrationStartedAt = Date.now();
+  ws.shellHistorySent = false;
+
+  function finish() {
+    clearTimeout(ws.hydrationTimer);
+    ws.hydrationTimer = null;
+    ws.hydrating = false;
+    ws.hydrationConfirming = false;
+    ws.hydrationReplay = null;
+    ws.hydrationStartedAt = 0;
+  }
+
+  function sendFrame(replay, sequence) {
+    ws.shellHistorySent = replay.kind === 'tmux-history';
+    ws.send(JSON.stringify({ type: 'replay', attachId, sequence, outputBoundary: sequence, ...replay }));
+  }
+
+  function fallback(reason) {
+    const sequence = session.outputBytes;
+    sendFrame({
+      kind: 'capture-unavailable', owner: refreshTerminalOwner(session), data: TERMINAL_REPLAY_DISABLED,
+      reason
+    }, sequence);
+    finish();
+  }
+
+  function scheduleSettle() {
+    clearTimeout(ws.hydrationTimer);
+    ws.hydrationTimer = setTimeout(settle, TMUX_HYDRATION_SETTLE_MS);
+    ws.hydrationTimer.unref?.();
+  }
+
+  function settle() {
+    if (ws.readyState !== 1) return;
+    if (Date.now() - ws.hydrationStartedAt >= TMUX_HYDRATION_MAX_MS) return fallback('tmux hydration timeout');
+    const written = tmuxClientWritten(session);
+    if (written === null) return fallback('tmux client counter unavailable');
+    if (session.outputBytes !== ws.hydrationSequence || written !== session.outputBytes) {
+      ws.hydrationConfirming = false;
+      ws.hydrationTimer = setTimeout(hydrate, 10);
+      ws.hydrationTimer.unref?.();
+      return;
+    }
+    if (!ws.hydrationConfirming) {
+      ws.hydrationConfirming = true;
+      hydrate();
+      return;
+    }
+    if (!ws.hydrationReplay) return fallback('tmux replay unavailable');
+    sendFrame(ws.hydrationReplay.replay, ws.hydrationReplay.sequence);
+    finish();
+  }
+
+  function hydrate() {
+    if (ws.readyState !== 1) return;
+    const replay = tmuxCapturePane(session, refreshTerminalOwner(session));
+    const sequence = session.outputBytes;
+    ws.hydrationSequence = sequence;
+    if (replay.kind !== 'tmux-history') {
+      sendFrame(replay, sequence);
+      finish();
+      return;
+    }
+    ws.hydrationReplay = { replay, sequence };
+    scheduleSettle();
+  }
+
+  hydrate();
+}
+
 function attachTmux(session) {
   if (!pty) throw new Error('PTY support not available');
   const name = tmuxName(session.id);
@@ -975,14 +1253,22 @@ function attachTmux(session) {
   session.pty = term;
   session.pid = term.pid;
   session.tmuxName = name;
+  session.tmuxClientTty = term.ptsName;
+  session.outputBytes = 0;
   session.meta.status = 'active';
   term.onData((data) => {
     const normalized = normalizeTerminalOutput(data);
-    session.broadcast({ type: 'output', data: normalized });
+    const bytes = Buffer.from(normalized);
+    session.outputBytes += bytes.length;
+    for (const ws of session.clients) {
+      if (ws.readyState === 1 && !ws.hydrating) ws.send(JSON.stringify({ type: 'output', data: normalized, sequence: session.outputBytes }));
+    }
+    scheduleTerminalOwnerRefresh(session);
   });
   term.onExit(({ exitCode, signal }) => {
     session.pty = null;
     session.pid = null;
+    clearSessionTimers(session);
     if (!tmuxHas(name)) {
       session.meta.status = 'exited';
       session.meta.exitCode = exitCode;
@@ -1198,6 +1484,7 @@ function createServer(config = loadConfig()) {
       console.log(`[tmux] ${session.id} attach=${session.pid} session=${name} command=${session.meta.command}`);
       res.json(session.toJSON());
     } catch (err) {
+      clearSessionTimers(session);
       sessions.remove(session.id);
       res.status(500).json({ error: err.message });
     }
@@ -1225,7 +1512,10 @@ function createServer(config = loadConfig()) {
 
   app.delete('/api/sessions/:id', (req, res) => {
     const s = sessions.get(req.params.id);
-    if (s) tmuxKill(tmuxName(s.id));
+    if (s) {
+      clearSessionTimers(s);
+      tmuxKill(tmuxName(s.id));
+    }
     const removed = sessions.remove(req.params.id);
     if (!removed) return res.status(404).json({ error: 'Session not found' });
     if (db && dbModule) dbModule.markSessionExited(db, req.params.id, 0, 'closed');
@@ -1290,17 +1580,21 @@ function createServer(config = loadConfig()) {
     ws.send(JSON.stringify({ type: 'meta', session: session.toJSON() }));
     if (session.hermesEventPublishers?.size) ws.send(JSON.stringify({ type: 'hermes-events', connected: true, running: session.hermesRunning ?? null }));
     else if (typeof session.hermesRunning === 'boolean') ws.send(JSON.stringify({ type: 'hermes-event', event: hermesWorkingEvent(session.hermesRunning) }));
-    const shellHistory = tmuxCapturePane(session);
-    ws.shellHistorySent = Boolean(shellHistory);
-    ws.send(JSON.stringify(shellHistory
-      ? { type: 'replay', kind: 'tmux-history', data: shellHistory }
-      : { type: 'replay', data: '\r\n[PassiDeck reconnect: output replay disabled; live session still running]\r\n' }));
+    startTerminalHydration(session, ws);
 
     ws.on('message', (raw) => {
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
       if (msg.type === 'ping') return ws.send(JSON.stringify({ type: 'pong' }));
-      if (msg.type === 'input' && session.pty) session.pty.write(String(msg.data || ''));
+      if (msg.type === 'replay-ack' && msg.attachId === ws.attachId) {
+        ws.shellHistorySent = false;
+        return;
+      }
+      if (msg.type === 'input' && session.pty) {
+        const input = String(msg.data || '');
+        if (isWheelMouseInput(input) && refreshTerminalOwner(session) === TERMINAL_OWNER_VIEWPORT) return;
+        session.pty.write(input);
+      }
       if (msg.type === 'redraw' && session.pty) {
         if (ws.shellHistorySent) {
           ws.shellHistorySent = false;
@@ -1318,6 +1612,12 @@ function createServer(config = loadConfig()) {
     });
 
     ws.on('close', () => {
+      clearTimeout(ws.hydrationTimer);
+      ws.hydrationTimer = null;
+      ws.hydrating = false;
+      ws.hydrationConfirming = false;
+      ws.hydrationReplay = null;
+      ws.hydrationStartedAt = 0;
       session.clients.delete(ws);
     });
   });
@@ -1329,6 +1629,7 @@ function createServer(config = loadConfig()) {
     for (const client of uiEventClients) client.end();
     uiEventClients.clear();
     for (const session of sessions.sessions.values()) {
+      clearSessionTimers(session);
       if (session.pid) try { process.kill(session.pid, 'SIGTERM'); } catch {}
     }
     await new Promise(resolve => wss.close(() => resolve()));
@@ -1341,7 +1642,7 @@ function createServer(config = loadConfig()) {
   return { app, server, wss, sessions, close };
 }
 
-module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings, UPLOAD_MIME_ALLOWLIST };
+module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, isPlainShellCommand, isWheelMouseInput, splitCommand, tmuxOutputClient, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings, UPLOAD_MIME_ALLOWLIST };
 
 if (require.main === module) {
   const config = loadConfig();

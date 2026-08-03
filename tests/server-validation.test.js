@@ -5,6 +5,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const WebSocket = require('ws');
 const Database = require('better-sqlite3');
+const testPty = require('@homebridge/node-pty-prebuilt-multiarch');
 
 const tmpRoot = path.join(os.homedir(), 'tmp');
 fs.mkdirSync(tmpRoot, { recursive: true });
@@ -14,6 +15,7 @@ process.env.PASSIDECK_TMUX_SOCKET = `passideck-validation-${process.pid}`;
 const tmux = (...args) => execFileSync('tmux', ['-L', process.env.PASSIDECK_TMUX_SOCKET, ...args], { stdio: 'pipe' });
 
 let app;
+let extraTmuxClient;
 const opened = ws => new Promise((resolve, reject) => {
   ws.once('open', resolve);
   ws.once('error', reject);
@@ -30,13 +32,83 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
 
 (async () => {
   try {
-    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, parseCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount } = require('../packages/server/src/index');
+    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, isPlainShellCommand, isWheelMouseInput, splitCommand, tmuxOutputClient, parseCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount } = require('../packages/server/src/index');
     assert.strictEqual(
       hermesResumeIdFromArgv(['/venv/bin/python3', '/venv/bin/hermes', '--resume', '20260716_180100_5dbdcf']),
       '20260716_180100_5dbdcf',
       'the active Hermes resume id must be parsed from the real Python launcher argv shape'
     );
     assert.strictEqual(hermesResumeIdFromArgv(['/bin/bash']), null, 'ordinary shell panes must not be treated as resumed Hermes sessions');
+    for (const command of ['/usr/bin/bash --login -i', 'exec /bin/sh -i', '/usr/bin/env -i HOME=/tmp /bin/zsh -l', 'sudo -u maeve /bin/bash -l']) {
+      assert.strictEqual(isPlainShellCommand(command), true, `${command} must be recognized as a safe shell launch`);
+    }
+    for (const command of ['bash script.sh', 'env bash -c vim', 'sudo -u maeve vim', 'env -u', 'sudo -u']) {
+      assert.strictEqual(isPlainShellCommand(command), false, `${command} must not be treated as a plain shell launch`);
+    }
+    assert.deepStrictEqual(splitCommand('/usr/bin/bash --login -i'), { file: '/usr/bin/bash', args: ['--login', '-i'] }, 'shell flags must become spawn arguments, not part of the executable path');
+    assert.deepStrictEqual(splitCommand('exec /bin/sh -i'), { file: '/bin/sh', args: ['-i'] }, 'the shell exec keyword must be removed before spawning');
+    assert.deepStrictEqual(splitCommand('/usr/bin/env -i HOME=/tmp /bin/zsh -l'), { file: '/usr/bin/env', args: ['-i', 'HOME=/tmp', '/bin/zsh', '-l'] }, 'safe env wrappers must remain executable launch arguments');
+    assert.deepStrictEqual(splitCommand('sudo -u maeve /bin/bash -l'), { file: 'sudo', args: ['-u', 'maeve', '/bin/bash', '-l'] }, 'safe sudo wrappers must remain executable launch arguments');
+
+    assert.strictEqual(
+      terminalOwnerFromProcesses({ command: '/bin/bash' }, [{ argv: ['/bin/bash'] }]),
+      'viewport',
+      'an actual foreground shell must leave wheel ownership with the viewport'
+    );
+    assert.strictEqual(
+      terminalOwnerFromProcesses({ command: '/bin/bash' }, [{ argv: ['/usr/bin/python3', '/usr/local/bin/hermes'] }]),
+      'viewport',
+      'normal Hermes launched manually inside a shell must leave wheel ownership with the viewport'
+    );
+    assert.strictEqual(
+      terminalOwnerFromProcesses({ command: '/bin/bash' }, [{ argv: ['/usr/bin/python3', '/usr/local/bin/hermes', '--tui'] }]),
+      'application',
+      'Hermes TUI launched manually inside a shell must keep application wheel ownership'
+    );
+    assert.strictEqual(
+      terminalOwnerFromProcesses({ command: 'hermes --tui' }, [{ argv: ['/bin/bash'] }]),
+      'viewport',
+      'the foreground shell must reclaim wheel ownership after an explicitly launched Hermes TUI exits'
+    );
+    assert.strictEqual(
+      terminalOwnerFromProcesses({ command: 'hermes --tui' }, []),
+      'application',
+      'the explicit TUI launch remains the safe startup fallback before process discovery is available'
+    );
+    assert.strictEqual(
+      terminalOwnerFromProcesses({ command: '/bin/bash' }, [{ argv: ['/usr/bin/vim', 'notes.txt'] }]),
+      'application',
+      'generic foreground applications inside a shell must keep application wheel ownership'
+    );
+    for (const argv of [['/usr/bin/vim', 'hermes'], ['/usr/bin/less', '/tmp/hermes'], ['/usr/bin/grep', 'hermes', 'notes.txt']]) {
+      const expected = /(?:vim|less)$/.test(argv[0]) ? 'application' : 'viewport';
+      assert.strictEqual(terminalOwnerFromProcesses({ command: '/bin/bash' }, [{ argv }]), expected, `${argv[0]} must not become Hermes merely because a file or pattern is named hermes`);
+    }
+    assert.strictEqual(terminalOwnerFromProcesses({ command: '/bin/bash' }, [{ argv: ['/usr/bin/sleep', '5'] }]), 'viewport', 'unknown non-interactive commands must not gain PTY wheel ownership');
+    assert.strictEqual(
+      terminalOwnerFromProcesses({ command: '/bin/bash' }, [
+        { argv: ['/bin/bash'], pgrp: 100, tpgid: 100 },
+        { argv: ['/usr/bin/vim', 'background.txt'], pgrp: 200, tpgid: 100 }
+      ]),
+      'viewport',
+      'a background child must not steal wheel ownership from the foreground shell process group'
+    );
+    assert.strictEqual(
+      terminalOwnerFromProcesses({ command: '/bin/bash' }, [
+        { argv: ['/bin/bash'], pgrp: 100, tpgid: 200 },
+        { argv: ['/usr/bin/vim', 'notes.txt'], pgrp: 200, tpgid: 200 }
+      ]),
+      'application',
+      'a real foreground child process group must retain application wheel ownership'
+    );
+    assert.strictEqual(isWheelMouseInput('\x1b[<64;10;20M'), true, 'SGR wheel input must be recognized');
+    assert.strictEqual(isWheelMouseInput('\x1b[<68;10;20M'), true, 'modifier-encoded SGR wheel input must be recognized');
+    assert.strictEqual(isWheelMouseInput('\x1b[M`!!'), true, 'X10 wheel input must be recognized');
+    assert.strictEqual(isWheelMouseInput('\x1b[Md!!'), true, 'modifier-encoded X10 wheel input must be recognized');
+    assert.strictEqual(isWheelMouseInput('\x1b[96;10;20M'), true, 'URXVT wheel input must be recognized');
+    assert.strictEqual(isWheelMouseInput('\x1b[100;10;20M'), true, 'modifier-encoded URXVT wheel input must be recognized');
+    assert.strictEqual(isWheelMouseInput('\x1b[A'), false, 'ordinary arrow keys must not be mistaken for wheel input');
+    assert.strictEqual(isWheelMouseInput('\x1b[M !!'), false, 'ordinary X10 mouse buttons must not be mistaken for wheel input');
     const tuiActiveSessionFile = path.join(home, 'tui-active-session.json');
     fs.writeFileSync(tuiActiveSessionFile, JSON.stringify({ session_id: '20260718_210406_6404d7' }));
     assert.strictEqual(
@@ -173,7 +245,43 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     assert.ok(!persistentPaneEnv.some(value => value.startsWith('HERMES_TUI_SIDECAR_URL=')), 'non-Hermes shell panes must not receive the TUI event publisher');
 
     const persistentSession = app.sessions.get(persistent.id);
-    persistentSession.pty.write('for i in $(seq 1 120); do echo shell-history-$i; done\r');
+    assert.ok(persistentSession.pty.ptsName, 'node-pty must expose the PassiDeck tmux client PTY through ptsName');
+    extraTmuxClient = testPty.spawn('tmux', ['-L', process.env.PASSIDECK_TMUX_SOCKET, 'attach-session', '-t', persistentTmux], {
+      name: 'xterm-256color', cols: 80, rows: 24, cwd: home, env: { ...process.env, TERM: 'xterm-256color' }
+    });
+    await waitFor(() => tmux('list-clients', '-t', persistentTmux, '-F', '#{client_name}').toString().trim().split(/\r?\n/).filter(Boolean).length === 2, 'the multi-client replay fixture must attach a second tmux client');
+    assert.strictEqual(tmuxOutputClient(persistentSession), persistentSession.pty.ptsName, 'replay boundaries must target the exact PassiDeck tmux client when another client is attached');
+    const realTmuxClientTty = persistentSession.tmuxClientTty;
+    persistentSession.tmuxClientTty = '/dev/pts/not-passideck';
+    assert.strictEqual(tmuxOutputClient(persistentSession), '', 'an unmatched PTY must not fall back to another tmux client');
+    const unmatchedSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?session=${persistent.id}`);
+    let unmatchedReplay = null;
+    unmatchedSocket.on('message', raw => {
+      try {
+        const message = JSON.parse(raw.toString());
+        if (message.type === 'replay') unmatchedReplay = message;
+      } catch {}
+    });
+    await opened(unmatchedSocket);
+    await waitFor(() => unmatchedReplay, 'unmatched PTY attach must receive a typed fallback frame');
+    assert.strictEqual(unmatchedReplay.kind, 'capture-unavailable', 'unmatched PTY attach must fail closed instead of using another client boundary');
+    unmatchedSocket.close();
+    persistentSession.tmuxClientTty = realTmuxClientTty;
+    const lostCounterSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?session=${persistent.id}`);
+    const lostCounterReplays = [];
+    lostCounterSocket.on('message', raw => {
+      try {
+        const message = JSON.parse(raw.toString());
+        if (message.type === 'replay') lostCounterReplays.push(message);
+      } catch {}
+    });
+    await opened(lostCounterSocket);
+    persistentSession.tmuxClientTty = '/dev/pts/disappeared';
+    await waitFor(() => lostCounterReplays.some(message => message.reason === 'tmux client counter unavailable'), 'hydration must fail closed when its exact tmux counter disappears');
+    assert.strictEqual(lostCounterReplays.at(-1).kind, 'capture-unavailable', 'lost tmux counters must terminate hydration with a typed fallback');
+    lostCounterSocket.close();
+    persistentSession.tmuxClientTty = realTmuxClientTty;
+    persistentSession.pty.write("for i in $(seq 1 120); do echo shell-history-$i; done; echo '[PassiDeck reconnect: output replay disabled; live session still running]'\r");
     await delay(250);
     const historySocket = new WebSocket(`ws://127.0.0.1:${port}/ws?session=${persistent.id}`);
     const historyMessages = [];
@@ -189,7 +297,14 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     await waitFor(() => historyMessages.some(message => message.type === 'replay'), 'shell clients must receive tmux history when they attach to an existing pane');
     const historyReplay = historyMessages.find(message => message.type === 'replay');
     assert.strictEqual(historyReplay.kind, 'tmux-history', 'plain shell history must be labeled separately from the reconnect marker');
+    assert.strictEqual(historyReplay.owner, 'viewport', 'plain shell replay must explicitly assign viewport wheel ownership');
+    assert.ok(historyReplay.attachId?.startsWith(`${persistent.id}:`), 'replay must identify the attach revision');
+    assert.ok(Number.isFinite(historyReplay.outputBoundary) && historyReplay.outputBoundary > 0 && historyReplay.sequence === historyReplay.outputBoundary, 'tmux replay must expose its exact positive output-sequence boundary');
+    assert.ok(Number.isFinite(historyReplay.cursorX) && Number.isFinite(historyReplay.cursorY), 'tmux replay must expose the pane cursor used to align following live redraws');
     assert.ok(historyReplay.data.includes('shell-history-1') && historyReplay.data.includes('shell-history-120'), 'plain shell history replay must contain the pane scrollback');
+    assert.ok(historyReplay.data.includes('[PassiDeck reconnect: output replay disabled; live session still running]'), 'visible shell output equal to the legacy marker must remain ordinary history data');
+    await delay(100);
+    historyOutput = 0;
     historySocket.send(JSON.stringify({ type: 'redraw' }));
     await delay(100);
     assert.strictEqual(historyOutput, 0, 'the automatic first redraw must not duplicate the shell frame after tmux history replay');
@@ -197,6 +312,12 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
 
     const originalPersistentCommand = persistentSession.meta.command;
     persistentSession.meta.command = 'hermes --tui';
+    persistentSession.pty.write('top\r');
+    await waitFor(() => {
+      try {
+        return execFileSync('tmux', ['-L', process.env.PASSIDECK_TMUX_SOCKET, 'display-message', '-p', '-t', persistentSession.tmuxName, '#{pane_current_command}'], { encoding: 'utf8' }).trim() === 'top';
+      } catch { return false; }
+    }, 'foreground application must be active before the TUI attach contract is checked');
     const tuiSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?session=${persistent.id}`);
     const tuiMessages = [];
     tuiSocket.on('message', raw => {
@@ -205,26 +326,41 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     await opened(tuiSocket);
     await waitFor(() => tuiMessages.some(message => message.type === 'replay'), 'non-shell panes must still receive the reconnect marker');
     const tuiReplay = tuiMessages.find(message => message.type === 'replay');
-    assert.strictEqual(tuiReplay.kind, undefined, 'Hermes TUI panes must not receive shell history replay');
+    assert.strictEqual(tuiReplay.kind, 'live-only', 'Hermes TUI panes must receive an explicit live-only attach frame');
+    assert.strictEqual(tuiReplay.owner, 'application', 'Hermes TUI panes must retain application wheel ownership');
     assert.ok(tuiReplay.data.includes('output replay disabled'), 'non-shell reconnect semantics must stay unchanged');
     tuiSocket.close();
+    persistentSession.pty.write('\x03');
+    await waitFor(() => {
+      try {
+        return execFileSync('tmux', ['-L', process.env.PASSIDECK_TMUX_SOCKET, 'display-message', '-p', '-t', persistentSession.tmuxName, '#{pane_current_command}'], { encoding: 'utf8' }).trim() === 'bash';
+      } catch { return false; }
+    }, 'shell must resume after the TUI attach fixture exits');
     persistentSession.meta.command = originalPersistentCommand;
 
     persistentSession.meta.command = 'hermes';
     const redrawSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?session=${persistent.id}`);
     let redrawOutput = '';
+    const redrawMessages = [];
     redrawSocket.on('message', raw => {
       try {
         const message = JSON.parse(raw.toString());
+        redrawMessages.push(message);
         if (message.type === 'output') redrawOutput += String(message.data || '');
       } catch {}
     });
     await opened(redrawSocket);
+    await waitFor(() => redrawMessages.some(message => message.type === 'replay'), 'normal Hermes must receive an attach replay');
+    const hermesReplay = redrawMessages.find(message => message.type === 'replay');
+    assert.strictEqual(hermesReplay.kind, 'tmux-history', 'normal Hermes must receive tmux history on a fresh renderer attach');
+    assert.strictEqual(hermesReplay.owner, 'viewport', 'normal Hermes must assign viewport wheel ownership');
+    assert.ok(Number.isFinite(hermesReplay.outputBoundary), 'normal Hermes replay must retain the tmux output boundary');
+    assert.ok(hermesReplay.data.includes('shell-history-120'), 'normal Hermes fresh attach must retain pre-existing tmux history');
     await delay(100);
     redrawOutput = '';
+    redrawSocket.send(JSON.stringify({ type: 'replay-ack', attachId: hermesReplay.attachId }));
     redrawSocket.send(JSON.stringify({ type: 'redraw' }));
-    await delay(500);
-    assert.ok(redrawOutput.length > 0, 'a client redraw request must make tmux repaint its current full terminal frame');
+    await waitFor(() => redrawOutput.length > 0, 'replay acknowledgement must make the next explicit redraw effective');
     redrawSocket.close();
     persistentSession.meta.command = originalPersistentCommand;
 
@@ -259,6 +395,15 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     second.send(JSON.stringify({ type: 'input', data: 'second-client' }));
     await delay(20);
     assert.deepStrictEqual(writes, ['first-client', 'second-client'], 'all connected browsers must retain terminal input control');
+    first.send(JSON.stringify({ type: 'input', data: '\x1b[<64;10;5M' }));
+    await delay(20);
+    assert.deepStrictEqual(writes, ['first-client', 'second-client'], 'viewport-owned SGR wheel input must be dropped at the final PTY boundary');
+    session.meta.command = 'hermes --tui';
+    first.send(JSON.stringify({ type: 'input', data: '\x1b[<65;10;5M' }));
+    first.send(JSON.stringify({ type: 'input', data: '\x1b[A' }));
+    await delay(20);
+    assert.deepStrictEqual(writes, ['first-client', 'second-client', '\x1b[<65;10;5M', '\x1b[A'], 'application-owned wheel and ordinary keyboard arrows must remain exact PTY input');
+    session.meta.command = '';
 
     const hermesPublisher = new WebSocket(`ws://127.0.0.1:${port}/ws?hermesEvents=validation`);
     await opened(hermesPublisher);
@@ -442,7 +587,13 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     assert.strictEqual((await stale.json()).activeId, 'validation', 'conflict response must return current authoritative state');
     await reader.cancel();
 
+    persistentSession.terminalOwnerTimer = setTimeout(() => {}, 60000);
+    persistentSession.tmuxRefreshTimer = setTimeout(() => {}, 60000);
+    persistentSession.terminalOwnerTimer.unref?.();
+    persistentSession.tmuxRefreshTimer.unref?.();
     await app.close();
+    assert.strictEqual(persistentSession.terminalOwnerTimer, null, 'server close must clear pending terminal-owner timers');
+    assert.strictEqual(persistentSession.tmuxRefreshTimer, null, 'server close must clear pending tmux-refresh timers');
     app = null;
     await delay(20);
     assert.strictEqual(first.readyState, WebSocket.CLOSED, 'shutdown must close first WebSocket client');
@@ -451,6 +602,7 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     console.log('server-validation ok');
   } finally {
     if (app) await app.close();
+    try { extraTmuxClient?.kill(); } catch {}
     try { tmux('kill-server'); } catch {}
     fs.rmSync(home, { recursive: true, force: true });
   }
