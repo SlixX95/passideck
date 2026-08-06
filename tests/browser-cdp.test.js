@@ -67,24 +67,41 @@ class CDP {
     this.pending = new Map();
     this.events = [];
     this.ws.on('message', raw => this.onMessage(raw));
+    this.ws.on('close', () => this.rejectPending(new Error('CDP socket closed')));
+    this.ws.on('error', err => this.rejectPending(err));
   }
   open() { return new Promise((resolve, reject) => { this.ws.once('open', resolve); this.ws.once('error', reject); }); }
+  rejectPending(error) {
+    for (const { reject, timer } of this.pending.values()) {
+      clearTimeout(timer);
+      reject(error);
+    }
+    this.pending.clear();
+  }
   onMessage(raw) {
     const msg = JSON.parse(raw.toString());
     if (msg.id && this.pending.has(msg.id)) {
-      const { resolve, reject } = this.pending.get(msg.id);
+      const { resolve, reject, timer } = this.pending.get(msg.id);
+      clearTimeout(timer);
       this.pending.delete(msg.id);
       msg.error ? reject(new Error(`${msg.error.message}: ${JSON.stringify(msg.error.data || '')}`)) : resolve(msg.result || {});
     } else {
       this.events.push(msg);
     }
   }
-  send(method, params = {}, sessionId) {
+  send(method, params = {}, sessionId, timeout = 30000) {
     const id = this.nextId++;
     const msg = { id, method, params };
     if (sessionId) msg.sessionId = sessionId;
-    this.ws.send(JSON.stringify(msg));
-    return new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`CDP request timed out: ${method}`));
+      }, timeout);
+      this.pending.set(id, { resolve, reject, timer });
+      try { this.ws.send(JSON.stringify(msg)); }
+      catch (err) { clearTimeout(timer); this.pending.delete(id); reject(err); }
+    });
   }
   close() { try { this.ws.close(); } catch {} }
 }
@@ -3407,18 +3424,25 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       screen.dispatchEvent(new PointerEvent('pointermove', { button: 0, buttons: 1, clientX: x2, clientY: y, bubbles: true, cancelable: true }));
       screen.dispatchEvent(new PointerEvent('pointerup', { button: 0, buttons: 0, clientX: x2, clientY: y, bubbles: true, cancelable: true }));
       const protocolDuringSelection = entry.term._core.coreMouseService.activeProtocol;
+      const selectionDuringDrag = entry.term.getSelection();
+      const dragMouseData = mouseData.splice(0);
       screen.dispatchEvent(new PointerEvent('pointerdown', { button: 0, buttons: 1, clientX: x, clientY: y, bubbles: true, cancelable: true }));
       screen.dispatchEvent(new PointerEvent('pointerup', { button: 0, buttons: 0, clientX: x, clientY: y, bubbles: true, cancelable: true }));
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const clickMouseData = mouseData.splice(0);
       listener.dispose();
       return {
-        mouseData: mouseData.length,
+        dragMouseData: dragMouseData.length,
+        clickMouseData: clickMouseData.length,
+        selectionDuringDrag,
         selection: entry.term.getSelection(),
         protocolDuringSelection,
         mouseProtocol: entry.term._core.coreMouseService.activeProtocol
       };
     })()`);
-    assert.ok(tuiClick.mouseData > 0, `a plain TUI click must still reach Hermes after drag-selection handling: ${JSON.stringify(tuiClick)}`);
+    assert.strictEqual(tuiClick.dragMouseData, 0, `a TUI drag must not leak mouse packets to Hermes: ${JSON.stringify(tuiClick)}`);
+    assert.ok(tuiClick.selectionDuringDrag, `a TUI drag must create a visible copy selection: ${JSON.stringify(tuiClick)}`);
+    assert.ok(tuiClick.clickMouseData > 0, `a plain TUI click must still reach Hermes after drag-selection handling: ${JSON.stringify(tuiClick)}`);
     assert.strictEqual(tuiClick.selection, '', `a click must not leave a one-character terminal selection: ${JSON.stringify(tuiClick)}`);
     assert.strictEqual(tuiClick.protocolDuringSelection, 'NONE', `a drag before a plain click must suspend TUI mouse reporting: ${JSON.stringify(tuiClick)}`);
     assert.strictEqual(tuiClick.mouseProtocol, tuiDragSelection.mouseProtocolBeforeDrag, `a plain click must restore TUI mouse reporting: ${JSON.stringify(tuiClick)}`);
@@ -3486,8 +3510,11 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         writeTerminalOutput,
         saveTerminalSnapshot,
         scheduleTerminalSnapshot,
-        refreshTitleFromTerminal,
+        scheduleTerminalTitleRefresh,
         outputBuffer: entry.outputBuffer,
+        outputBufferChars: entry.outputBufferChars,
+        outputGeneration: entry.outputGeneration,
+        ws: entry.ws,
         outputFlushTimer: entry.outputFlushTimer,
         outputWriteInFlight: entry.outputWriteInFlight,
         outputFrameHandle: entry.outputFrameHandle,
@@ -3511,7 +3538,8 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         state.panePrefs.paneDesktop[id] = state.activeDesktopId;
         state.activeId = id;
         clearTimeout(entry.outputFlushTimer);
-        entry.outputBuffer = '';
+        entry.outputBuffer = [];
+        entry.outputBufferChars = 0;
         entry.outputFlushTimer = null;
         entry.outputWriteInFlight = false;
         entry.outputFrameHandle = null;
@@ -3522,7 +3550,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
           else done?.();
         };
         scheduleTerminalSnapshot = () => { snapshots += 1; };
-        refreshTitleFromTerminal = () => { titles += 1; };
+        scheduleTerminalTitleRefresh = () => { titles += 1; };
         saveTerminalSnapshot(id);
         const stableSnapshotText = JSON.parse(localStorage.getItem(snapshotKey(id)) || '{}').text;
         saveTerminalSnapshot = () => { eagerSnapshots += 1; };
@@ -3541,10 +3569,13 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         firstDone?.();
         await new Promise(resolve => setTimeout(resolve, 40));
         entry.outputWriteInFlight = true;
-        for (let i = 0; i < 5; i += 1) queueTerminalOutput(id, entry.term, 'X'.repeat(OUTPUT_FRAME_LIMIT));
-        const overflowBounded = entry.outputBuffer.length <= TERM_OUTPUT_BUFFER_MAX_CHARS && entry.outputBuffer.startsWith('\x1bc');
+        let backlogClose = null;
+        entry.ws = { close: (code, reason) => { backlogClose = { code, reason }; } };
+        queueTerminalOutput(id, entry.term, 'X'.repeat(TERM_OUTPUT_BUFFER_MAX_CHARS + 1));
+        const overflowResynced = entry.outputBuffer.length === 0 && backlogClose?.code === 4002;
         entry.outputWriteInFlight = false;
-        entry.outputBuffer = '';
+        entry.outputBuffer = [];
+        entry.outputBufferChars = 0;
         return {
           activeDelay,
           visibleDelay,
@@ -3553,7 +3584,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
           stableSnapshotPreserved,
           snapshotBounded,
           serializedBeforeCompletion,
-          overflowBounded,
+          overflowResynced,
           writes,
           eagerSnapshots,
           snapshots,
@@ -3566,6 +3597,9 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       } finally {
         clearTimeout(entry.outputFlushTimer);
         entry.outputBuffer = original.outputBuffer;
+        entry.outputBufferChars = original.outputBufferChars;
+        entry.outputGeneration = original.outputGeneration;
+        entry.ws = original.ws;
         entry.outputFlushTimer = original.outputFlushTimer;
         entry.outputWriteInFlight = original.outputWriteInFlight;
         entry.outputFrameHandle = original.outputFrameHandle;
@@ -3573,7 +3607,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         writeTerminalOutput = original.writeTerminalOutput;
         saveTerminalSnapshot = original.saveTerminalSnapshot;
         scheduleTerminalSnapshot = original.scheduleTerminalSnapshot;
-        refreshTitleFromTerminal = original.refreshTitleFromTerminal;
+        scheduleTerminalTitleRefresh = original.scheduleTerminalTitleRefresh;
         if (original.snapshotRaw === null) localStorage.removeItem(snapshotKey(id));
         else localStorage.setItem(snapshotKey(id), original.snapshotRaw);
         state.activeId = original.activeId;
@@ -3589,12 +3623,12 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       stableSnapshotPreserved: true,
       snapshotBounded: true,
       serializedBeforeCompletion: true,
-      overflowBounded: true,
+      overflowResynced: true,
       writes: ['AB', 'CD'],
       eagerSnapshots: 0,
       snapshots: 1,
       titles: 2,
-      buffer: '',
+      buffer: [],
       frameHandle: null,
       writeInFlight: false,
       timerCleared: true
@@ -3604,7 +3638,9 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const id = '__snapshot-debounce-test__';
       let staleSnapshots = 0;
       const entry = {
-        outputBuffer: '',
+        outputBuffer: [],
+        outputBufferChars: 0,
+        outputGeneration: 0,
         outputFlushTimer: null,
         outputWriteInFlight: true,
         outputCancelled: false,
@@ -3620,7 +3656,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         state.sessions.delete(id);
       }
     })()`);
-    assert.deepStrictEqual(snapshotDebounce, { staleSnapshots: 0, buffer: 'A', snapshotTimer: null }, 'new terminal output must cancel a pending stale snapshot before the next flush');
+    assert.deepStrictEqual(snapshotDebounce, { staleSnapshots: 0, buffer: ['A'], snapshotTimer: null }, 'new terminal output must cancel a pending stale snapshot before the next flush');
 
     const lifecycleSnapshot = await evalExpr(cdp, sid, `(() => {
       const id = '__lifecycle-snapshot-test__';
@@ -3630,7 +3666,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         serialize: { serialize: () => 'stable' },
         session: { meta: { command: '/bin/bash' } },
         outputWriteInFlight: false,
-        outputBuffer: pendingOutput
+        outputBuffer: [pendingOutput]
       };
       const writes = [];
       const restoreTerm = {
@@ -3655,22 +3691,11 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     }, 'lifecycle snapshots must persist and restore queued output after the last stable terminal state');
 
     const chunkedWrite = await evalExpr(cdp, sid, `(async () => {
-      const originalRaf = window.requestAnimationFrame;
       const chunks = [];
-      let rafCount = 0;
-      try {
-        window.requestAnimationFrame = callback => {
-          rafCount += 1;
-          setTimeout(() => callback(performance.now()), 0);
-          return rafCount;
-        };
-        await new Promise(resolve => writeTerminalOutput({ write(chunk, done) { chunks.push(chunk.length); done(); } }, 'X'.repeat(32769), resolve, false));
-        return { chunks, rafCount };
-      } finally {
-        window.requestAnimationFrame = originalRaf;
-      }
+      await new Promise(resolve => writeTerminalOutput({ write(chunk, done) { chunks.push(chunk.length); done(); } }, 'X'.repeat(32769), resolve, false));
+      return chunks;
     })()`);
-    assert.deepStrictEqual(chunkedWrite, { chunks: [32768, 1], rafCount: 1 }, 'chunked output must preserve offsets and complete without a final animation-frame delay');
+    assert.deepStrictEqual(chunkedWrite, [32768, 1], 'chunked output must preserve offsets and progress without animation frames');
 
     const reloadedTuiMouseMode = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];

@@ -1,5 +1,18 @@
 const { randomUUID } = require('crypto');
 const os = require('os');
+const WS_BACKPRESSURE_MAX_BYTES = 1024 * 1024;
+
+function sendJson(ws, message) {
+  if (ws?.readyState !== 1) return false;
+  const payload = typeof message === 'string' ? message : JSON.stringify(message);
+  const bytes = Buffer.byteLength(payload);
+  if ((Number(ws.bufferedAmount) || 0) + bytes > WS_BACKPRESSURE_MAX_BYTES) {
+    try { ws.close(1013, 'websocket backpressure'); } catch {}
+    return false;
+  }
+  try { ws.send(payload); return true; }
+  catch { return false; }
+}
 
 class Session {
   constructor(options = {}) {
@@ -25,9 +38,7 @@ class Session {
 
   broadcast(message) {
     const payload = typeof message === 'string' ? message : JSON.stringify(message);
-    for (const ws of this.clients) {
-      if (ws.readyState === 1) ws.send(payload);
-    }
+    for (const ws of this.clients) sendJson(ws, payload);
   }
 
   toJSON() {
@@ -72,4 +83,4 @@ class SessionManager {
   }
 }
 
-module.exports = { Session, SessionManager };
+module.exports = { Session, SessionManager, WS_BACKPRESSURE_MAX_BYTES, sendJson };

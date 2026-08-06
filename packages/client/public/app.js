@@ -62,12 +62,14 @@ const state = {
   launchBusy: false,
   uploadBusy: false,
   systemMonitorTimer: null,
+  systemMonitorInFlight: false,
   codexLimitsTimer: null,
   socketHeartbeatTimer: null,
   latencyProbeTimer: null,
   resumeTimer: null,
   resumeForceReconnect: false,
   fitFrame: null,
+  fitOptions: null,
   fitTimer: null,
   fitTimerLate: null,
   pointerDrag: null,
@@ -217,11 +219,6 @@ function installTooltips() {
     const target = e.target.closest?.('[data-tooltip]');
     if (target) scheduleTooltip(target);
   }, true);
-  document.addEventListener('pointermove', e => {
-    const target = e.target.closest?.('[data-tooltip]');
-    if (!target) return hideTooltip();
-    if (!document.getElementById('appTooltip')?.hidden) placeTooltip(target);
-  }, true);
   document.addEventListener('pointerout', e => {
     if (e.target.closest?.('[data-tooltip]') && !e.relatedTarget?.closest?.('[data-tooltip]')) hideTooltip();
   }, true);
@@ -304,18 +301,31 @@ function updateSessionIndicator(id) {
 function setSessionWorking(id, working) {
   const entry = state.sessions.get(id);
   if (!entry) return;
-  entry.working = Boolean(working);
+  const next = Boolean(working);
+  if (entry.working === next) return;
+  entry.working = next;
   updateSessionIndicator(id);
 }
 
 function applyHermesEvent(id, message) {
   const entry = state.sessions.get(id);
-  if (!entry || !isHermesEntry(entry)) return;
+  if (!entry) return;
+  if (!isHermesEntry(entry) && !isHermesTuiEntry(entry)) {
+    if (message.type === 'hermes-events') {
+      entry.pendingHermesEvents = [];
+      if (message.connected !== false) entry.pendingHermesEvents.push(message);
+    } else {
+      entry.pendingHermesEvents.push(message);
+      if (entry.pendingHermesEvents.length > 20) entry.pendingHermesEvents.shift();
+    }
+    return;
+  }
   if (message.type === 'hermes-events' && !isHermesTuiEntry(entry)) return;
   if (message.type === 'hermes-events') {
-    entry.hermesEventsConnected = Boolean(message.connected);
-    if (typeof message.running === 'boolean') setSessionWorking(id, message.running);
-    else if (!entry.hermesEventsConnected) syncSessionWorkingFromTerminal(id, entry);
+    const runningKnown = typeof message.running === 'boolean';
+    entry.hermesEventsConnected = Boolean(message.connected && runningKnown);
+    if (runningKnown) setSessionWorking(id, message.running);
+    else syncSessionWorkingFromTerminal(id, entry);
     return;
   }
   const event = message.event || {};
@@ -325,9 +335,14 @@ function applyHermesEvent(id, message) {
   if (event.type === 'session.info' && typeof event.payload?.running === 'boolean') setSessionWorking(id, event.payload.running);
 }
 
-function syncSessionWorkingFromTerminal(id, entry) {
+function syncSessionWorkingFromTerminal(id, entry, viewportRows = null) {
   if (!isHermesTuiEntry(entry)) return;
   if (entry.hermesEventsConnected) return;
+  if (viewportRows) {
+    const working = viewportRows.slice(-2).some(row => terminalLineText(row).includes('Ctrl+C to interrupt'));
+    setSessionWorking(id, working);
+    return;
+  }
   const buffer = entry.term?.buffer?.active;
   if (!buffer) return;
   const viewportY = buffer.viewportY || 0;
@@ -968,21 +983,28 @@ function showDesktopSlotSuggestions(result) {
     wrap.className = 'desktop-slot-suggestions';
     grid.appendChild(wrap);
   }
-  wrap.innerHTML = '';
-  const activeFree = result.type === 'free' ? result.rect : null;
-  for (const slot of slots.free) {
-    const el = document.createElement('div');
-    el.className = `desktop-slot free${activeFree && similarRect(activeFree, slot.rect) ? ' active' : ''}`;
-    el.style.left = `${slot.rect.x}px`;
-    el.style.top = `${slot.rect.y}px`;
-    el.style.width = `${slot.rect.w}px`;
-    el.style.height = `${slot.rect.h}px`;
-    const fraction = Math.max(1, Math.round(grid.clientWidth * grid.clientHeight / (slot.rect.w * slot.rect.h)));
-    const label = document.createElement('span');
-    label.textContent = `Free · 1/${fraction}`;
-    el.appendChild(label);
-    wrap.appendChild(el);
+  const geometrySignature = slots.free.map(({ rect }) => [rect.x, rect.y, rect.w, rect.h].map(Math.round).join(',')).join('|');
+  if (wrap.dataset.geometrySignature !== geometrySignature) {
+    wrap.dataset.geometrySignature = geometrySignature;
+    wrap.replaceChildren();
+    for (const slot of slots.free) {
+      const el = document.createElement('div');
+      el.className = 'desktop-slot free';
+      el.style.left = `${slot.rect.x}px`;
+      el.style.top = `${slot.rect.y}px`;
+      el.style.width = `${slot.rect.w}px`;
+      el.style.height = `${slot.rect.h}px`;
+      const fraction = Math.max(1, Math.round(grid.clientWidth * grid.clientHeight / (slot.rect.w * slot.rect.h)));
+      const label = document.createElement('span');
+      label.textContent = `Free · 1/${fraction}`;
+      el.appendChild(label);
+      wrap.appendChild(el);
+    }
   }
+  const activeFree = result.type === 'free' ? result.rect : null;
+  Array.from(wrap.children).forEach((el, index) => {
+    el.classList.toggle('active', Boolean(activeFree && similarRect(activeFree, slots.free[index]?.rect)));
+  });
 }
 
 function applyFreeSlotSnap(id, rect) {
@@ -1469,7 +1491,7 @@ function setPerformanceMode(enabled, opts = {}) {
   const select = document.getElementById('performanceModeSelect');
   if (select) select.value = state.performanceMode ? 'on' : 'off';
   for (const [id, entry] of state.sessions) {
-    if (!entry.outputFlushTimer || entry.outputWriteInFlight || !entry.outputBuffer) continue;
+    if (!entry.outputFlushTimer || entry.outputWriteInFlight || !entry.outputBuffer.length) continue;
     clearTimeout(entry.outputFlushTimer);
     entry.outputFlushTimer = null;
     scheduleTerminalOutputFlush(id, entry.term);
@@ -1615,11 +1637,15 @@ function formatBytes(bytes) {
 }
 
 async function pollSystemMonitor() {
-  if (!document.body.classList.contains('system-monitor-on')) return;
+  if (!document.body.classList.contains('system-monitor-on') || document.hidden || state.systemMonitorInFlight) return;
+  state.systemMonitorInFlight = true;
   try {
-    updateSystemMonitor(await api('GET', '/api/system-metrics'));
+    const metrics = await api('GET', '/api/system-metrics');
+    if (!document.hidden && document.body.classList.contains('system-monitor-on')) updateSystemMonitor(metrics);
   } catch (err) {
     console.warn('system metrics unavailable', err);
+  } finally {
+    state.systemMonitorInFlight = false;
   }
 }
 
@@ -1802,18 +1828,26 @@ function fitEntry(id, entry, opts = {}) {
 }
 
 function fitAll(opts = {}) {
+  const ids = opts.ids ? new Set(opts.ids) : null;
   for (const [id, entry] of state.sessions) {
+    if (ids && !ids.has(id)) continue;
     try { fitEntry(id, entry, opts); } catch {}
   }
 }
 
 function scheduleTerminalFit(opts = {}) {
-  const options = { allowHeight: true, scrollBottom: true, ...opts };
-  if (state.fitFrame) cancelAnimationFrame(state.fitFrame);
-  if (state.fitTimer) clearTimeout(state.fitTimer);
-  if (state.fitTimerLate) clearTimeout(state.fitTimerLate);
+  const previous = state.fitOptions;
+  const fitAllPending = Boolean(previous && !previous.ids);
+  state.fitOptions = { allowHeight: true, scrollBottom: true, ...opts };
+  if (fitAllPending || !opts.ids) delete state.fitOptions.ids;
+  else if (previous?.ids) state.fitOptions.ids = [...new Set([...previous.ids, ...opts.ids])];
+  if (state.fitTimer) { clearTimeout(state.fitTimer); state.fitTimer = null; }
+  if (state.fitTimerLate) { clearTimeout(state.fitTimerLate); state.fitTimerLate = null; }
+  if (state.fitFrame) return;
   state.fitFrame = requestAnimationFrame(() => {
     state.fitFrame = null;
+    const options = state.fitOptions;
+    state.fitOptions = null;
     fitAll(options);
     if (options.secondPass === false) return;
     state.fitTimer = setTimeout(() => {
@@ -1834,7 +1868,7 @@ function installTerminalDragSelection(termEl, term, session) {
   let origin = null;
   let replaying = false;
   let suspendedMouse = null;
-  const isTui = () => isHermesTuiEntry({ session });
+  const isTui = () => isHermesTuiEntry(state.sessions.get(session.id) || { session });
   const suspendMouse = () => {
     const service = term?._core?.coreMouseService;
     if (!service || service.activeProtocol === 'NONE') return;
@@ -1848,11 +1882,12 @@ function installTerminalDragSelection(termEl, term, session) {
     suspendedMouse = null;
   };
   const cancelInterruptedDrag = () => {
-    if (!start) return;
+    if (!start && !suspendedMouse) return;
     start = origin = null;
     resumeMouse();
   };
   term.__passideckResumeMouse = resumeMouse;
+  term.__passideckClearDragSelection = cancelInterruptedDrag;
   const block = event => {
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -1920,18 +1955,19 @@ function installTerminalDragSelection(termEl, term, session) {
     start = cell(event);
     origin = { target: event.target, clientX: event.clientX, clientY: event.clientY };
     if (start) {
+      selectPanel(session.id);
+      term.focus();
       suspendMouse();
       block(event);
     }
   };
   window.addEventListener('pointerdown', startDrag, true);
   window.addEventListener('mousedown', startDrag, true);
-  window.addEventListener('pointermove', event => {
+  const continueDrag = event => {
     if (start && !replaying) block(event);
-  }, true);
-  window.addEventListener('mousemove', event => {
-    if (start && !replaying) block(event);
-  }, true);
+  };
+  window.addEventListener('pointermove', continueDrag, true);
+  window.addEventListener('mousemove', continueDrag, true);
   const finishDrag = event => {
     if (replaying || !start) return;
     const end = cell(event);
@@ -1972,6 +2008,16 @@ function installTerminalDragSelection(termEl, term, session) {
   window.addEventListener('mouseup', finishDrag, true);
   window.addEventListener('pointercancel', cancelInterruptedDrag, true);
   window.addEventListener('blur', cancelInterruptedDrag, true);
+  return () => {
+    for (const type of ['pointerdown', 'mousedown']) window.removeEventListener(type, startDrag, true);
+    for (const type of ['pointermove', 'mousemove']) window.removeEventListener(type, continueDrag, true);
+    for (const type of ['pointerup', 'mouseup']) window.removeEventListener(type, finishDrag, true);
+    window.removeEventListener('pointercancel', cancelInterruptedDrag, true);
+    window.removeEventListener('blur', cancelInterruptedDrag, true);
+    cancelInterruptedDrag();
+    delete term.__passideckResumeMouse;
+    delete term.__passideckClearDragSelection;
+  };
 }
 
 function declaredTerminalOwner(session) {
@@ -2091,8 +2137,6 @@ function sanitizeTerminalInput(data) {
   return stripTerminalReplyJunk(data);
 }
 
-const OUTPUT_FRAME_LIMIT = 256 * 1024;
-
 function normalizeReplayText(data) {
   return String(data || '')
     .replace(/\x1bc/g, '')
@@ -2105,9 +2149,7 @@ function normalizeReplayText(data) {
 }
 
 function sanitizeTerminalOutput(data) {
-  let text = stripTerminalReplyJunk(data);
-  if (text.length > OUTPUT_FRAME_LIMIT) text = `\r\n[PassiDeck: large replay truncated — last ${OUTPUT_FRAME_LIMIT} chars]\r\n` + text.slice(-OUTPUT_FRAME_LIMIT);
-  return text;
+  return stripTerminalReplyJunk(data);
 }
 
 function writeTerminalOutput(term, data, done, sanitize = true, onFrame = null, shouldContinue = null) {
@@ -2123,7 +2165,7 @@ function writeTerminalOutput(term, data, done, sanitize = true, onFrame = null, 
       if (shouldContinue && !shouldContinue()) return;
       offset = end;
       if (offset < text.length) {
-        const handle = requestAnimationFrame(writeChunk);
+        const handle = setTimeout(writeChunk, 0);
         onFrame?.(handle);
       } else { onFrame?.(null); done?.(); }
     });
@@ -2142,7 +2184,7 @@ function scheduleTerminalOutputFlush(id, term) {
   const entry = state.sessions.get(id);
   if (!entry || entry.outputWriteInFlight || entry.outputFlushTimer) return;
   if (entry.pendingReplay !== null) return flushTerminalReplay(id, term);
-  if (!entry.outputBuffer) return;
+  if (!entry.outputBuffer.length) return;
   entry.outputFlushTimer = setTimeout(() => flushTerminalOutput(id, term), terminalOutputDelay(id));
 }
 
@@ -2152,11 +2194,13 @@ function flushTerminalOutput(id, term) {
   clearTimeout(entry.outputFlushTimer);
   entry.outputFlushTimer = null;
   if (entry.outputWriteInFlight) return;
-  const buffered = entry.outputBuffer;
-  entry.outputBuffer = '';
+  const buffered = entry.outputBuffer.join('');
+  entry.outputBuffer = [];
+  entry.outputBufferChars = 0;
   if (!buffered) return;
   entry.outputWriteInFlight = true;
-  const live = () => !entry.outputCancelled && state.sessions.get(id) === entry;
+  const generation = entry.outputGeneration;
+  const live = () => !entry.outputCancelled && state.sessions.get(id) === entry && entry.outputGeneration === generation;
   writeTerminalOutput(term, buffered, () => {
     if (!live()) return;
     entry.outputFrameHandle = null;
@@ -2165,9 +2209,8 @@ function flushTerminalOutput(id, term) {
       flushTerminalReplay(id, term);
       return;
     }
-    syncSessionWorkingFromTerminal(id, entry);
-    refreshTitleFromTerminal(id);
-    if (entry.outputBuffer) {
+    scheduleTerminalTitleRefresh(id);
+    if (entry.outputBuffer.length) {
       scheduleTerminalOutputFlush(id, term);
       return;
     }
@@ -2177,51 +2220,91 @@ function flushTerminalOutput(id, term) {
   }, live);
 }
 
+function resetTerminalOutputPipeline(entry) {
+  entry.outputGeneration += 1;
+  clearTimeout(entry.outputFlushTimer);
+  clearTimeout(entry.outputFrameHandle);
+  entry.outputFlushTimer = null;
+  entry.outputFrameHandle = null;
+  entry.outputWriteInFlight = false;
+  entry.outputBuffer = [];
+  entry.outputBufferChars = 0;
+  entry.pendingReplay = null;
+  entry.pendingReplayCursor = null;
+  entry.pendingReplayAck = '';
+  entry.pendingReplaySocket = null;
+}
+
 function queueTerminalOutput(id, term, data) {
   const entry = state.sessions.get(id);
   const text = sanitizeTerminalOutput(data);
   if (!entry || !text) return;
   clearTimeout(entry.snapshotTimer);
   entry.snapshotTimer = null;
-  entry.outputBuffer = (entry.outputBuffer || '') + text;
-  if (entry.outputBuffer.length > TERM_OUTPUT_BUFFER_MAX_CHARS) {
-    // passitail: bound client backpressure by resetting parser state; a durable replay protocol is the upgrade path.
-    entry.outputBuffer = '\x1bc\r\n[PassiDeck: output backlog reset]\r\n';
+  entry.outputBuffer.push(text);
+  entry.outputBufferChars += text.length;
+  if (entry.outputBufferChars > TERM_OUTPUT_BUFFER_MAX_CHARS) {
+    resetTerminalOutputPipeline(entry);
+    entry.ws?.close(4002, 'client output backlog');
+    return;
   }
   scheduleTerminalOutputFlush(id, term);
+}
+
+function restoreReplayCursor(term, cursor, done) {
+  const x = Number(cursor?.x);
+  const y = Number(cursor?.y);
+  if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0) return done?.();
+  const col = Math.min(term.cols, x + 1);
+  const row = Math.min(term.rows, y + 1);
+  term.write(`\x1b[${row};${col}H`, done);
 }
 
 function flushTerminalReplay(id, term) {
   const entry = state.sessions.get(id);
   if (!entry || entry.outputCancelled || entry.outputWriteInFlight || entry.pendingReplay === null) return;
   const replay = entry.pendingReplay;
+  const cursor = entry.pendingReplayCursor;
+  const attachId = entry.pendingReplayAck;
+  const replaySocket = entry.pendingReplaySocket;
   entry.pendingReplay = null;
+  entry.pendingReplayCursor = null;
+  entry.pendingReplayAck = '';
+  entry.pendingReplaySocket = null;
   entry.outputWriteInFlight = true;
   try { term.reset(); } catch {}
-  const live = () => !entry.outputCancelled && state.sessions.get(id) === entry;
+  const generation = entry.outputGeneration;
+  const live = () => !entry.outputCancelled && state.sessions.get(id) === entry && entry.outputGeneration === generation && (!replaySocket || entry.ws === replaySocket);
   writeTerminalOutput(term, replay, () => {
     if (!live()) return;
-    entry.outputFrameHandle = null;
-    entry.outputWriteInFlight = false;
-    if (entry.pendingReplay !== null) return flushTerminalReplay(id, term);
-    syncSessionWorkingFromTerminal(id, entry);
-    refreshTitleFromTerminal(id);
-    if (entry.outputBuffer) scheduleTerminalOutputFlush(id, term);
-    else scheduleTerminalSnapshot(id);
+    restoreReplayCursor(term, cursor, () => {
+      if (!live()) return;
+      entry.outputFrameHandle = null;
+      entry.outputWriteInFlight = false;
+      if (attachId && replaySocket?.readyState === WebSocket.OPEN) replaySocket.send(JSON.stringify({ type: 'replay-ack', attachId }));
+      if (entry.pendingReplay !== null) return flushTerminalReplay(id, term);
+      scheduleTerminalTitleRefresh(id);
+      if (entry.outputBuffer.length) scheduleTerminalOutputFlush(id, term);
+      else scheduleTerminalSnapshot(id);
+    });
   }, false, handle => {
     if (live()) entry.outputFrameHandle = handle;
   }, live);
 }
 
-function queueTerminalReplay(id, term, data) {
+function queueTerminalReplay(id, term, data, options = {}) {
   const entry = state.sessions.get(id);
   if (!entry) return;
   clearTimeout(entry.snapshotTimer);
   clearTimeout(entry.outputFlushTimer);
   entry.snapshotTimer = null;
   entry.outputFlushTimer = null;
-  entry.outputBuffer = '';
+  entry.outputBuffer = [];
+  entry.outputBufferChars = 0;
   entry.pendingReplay = normalizeReplayText(data);
+  entry.pendingReplayCursor = { x: options.cursorX, y: options.cursorY };
+  entry.pendingReplayAck = String(options.attachId || '');
+  entry.pendingReplaySocket = options.socket || null;
   flushTerminalReplay(id, term);
 }
 
@@ -2229,19 +2312,18 @@ function snapshotKey(id) {
   return `${TERM_SNAPSHOT_PREFIX}${id}`;
 }
 
-function terminalSnapshot(entry) {
-  const term = entry?.term;
-  if (!term) return '';
-  try {
-    let serialized = entry.serialize?.serialize({ scrollback: TERM_SNAPSHOT_MAX_LINES });
-    if (serialized && isHermesTuiEntry(entry) && /\x1b\[\?(?:9|1000|1002|1003)h/.test(serialized) && !serialized.includes('\x1b[?1006h')) serialized += '\x1b[?1006h';
-    if (serialized) return serialized.slice(-TERM_SNAPSHOT_MAX_CHARS);
-  } catch {}
-  const buffer = term.buffer?.active;
+function trimPlainSnapshotText(text, maxChars) {
+  if (text.length <= maxChars) return text;
+  const boundary = text.indexOf('\r\n', text.length - maxChars);
+  return boundary >= 0 ? text.slice(boundary + 2) : '';
+}
+
+function terminalPlainSnapshot(entry, maxChars = TERM_SNAPSHOT_MAX_CHARS) {
+  if (!entry) return '';
+  entry.snapshotPlain = true;
+  const term = entry.term;
+  const buffer = term?.buffer?.active;
   if (!buffer) return '';
-  // Persist exactly the visible viewport, not scrollback tail. TUI apps (Hermes/Codex)
-  // keep menus in the active viewport; using buffer.length tail can restore a different
-  // slice after reload and make the screen appear to change.
   const rows = Math.max(1, Math.min(TERM_SNAPSHOT_MAX_LINES, term.rows || 30));
   const start = Math.max(0, buffer.viewportY || 0);
   const end = Math.min(buffer.length || 0, start + rows);
@@ -2250,9 +2332,20 @@ function terminalSnapshot(entry) {
     const line = buffer.getLine(i);
     lines.push(line ? line.translateToString(false) : '');
   }
-  let text = lines.join('\r\n').replace(/[\r\n]+$/g, '');
-  if (text.length > TERM_SNAPSHOT_MAX_CHARS) text = text.slice(-TERM_SNAPSHOT_MAX_CHARS);
-  return text;
+  const text = lines.join('\r\n').replace(/[\r\n]+$/g, '');
+  return trimPlainSnapshotText(text, maxChars);
+}
+
+function terminalSnapshot(entry) {
+  const term = entry?.term;
+  if (!term) return '';
+  entry.snapshotPlain = false;
+  try {
+    let serialized = entry.serialize?.serialize({ scrollback: TERM_SNAPSHOT_MAX_LINES });
+    if (serialized && isHermesTuiEntry(entry) && /\x1b\[\?(?:9|1000|1002|1003)h/.test(serialized) && !serialized.includes('\x1b[?1006h')) serialized += '\x1b[?1006h';
+    if (serialized && serialized.length <= TERM_SNAPSHOT_MAX_CHARS) return serialized;
+  } catch {}
+  return terminalPlainSnapshot(entry);
 }
 
 function terminalSnapshotLinks(entry) {
@@ -2300,8 +2393,8 @@ function saveTerminalSnapshot(id) {
   const entry = state.sessions.get(id);
   if (!entry?.term || entry.outputWriteInFlight) return;
   let text = terminalSnapshot(entry);
-  const links = terminalSnapshotLinks(entry);
-  const pendingOutput = String(entry.outputBuffer || '');
+  let links = entry.snapshotPlain ? [] : terminalSnapshotLinks(entry);
+  const pendingOutput = entry.outputBuffer.join('');
   if (!text && !pendingOutput) return;
   // localStorage quotas vary by browser/device. Keep the big snapshot when possible;
   // if quota is full, degrade gracefully instead of losing reload restore entirely.
@@ -2313,8 +2406,14 @@ function saveTerminalSnapshot(id) {
       localStorage.setItem(snapshotKey(id), JSON.stringify(snapshot));
       return;
     } catch {}
+    if (text.includes('\x1b')) {
+      text = terminalPlainSnapshot(entry, Math.floor(text.length * 0.6));
+      if (entry.snapshotPlain) links = [];
+      continue;
+    }
     if (text.length <= 65536) return;
-    text = text.slice(-Math.floor(text.length * 0.6));
+    links = [];
+    text = trimPlainSnapshotText(text, Math.floor(text.length * 0.6));
   }
 }
 
@@ -2716,6 +2815,7 @@ function clearGeneratedTitle(id, opts = {}) {
   if (!entry || state.panePrefs.titles?.[id] && !isPlaceholderTitle(state.panePrefs.titles[id])) return false;
   const source = opts.source;
   if (source && titleSourcePriority(entry.titleSource) > titleSourcePriority(source)) return false;
+  if (!entry.autoTitle && !entry.session.title && !entry.session.meta?.title && !entry.titleSource) return false;
   delete entry.autoTitle;
   delete entry.session.title;
   if (entry.session.meta) {
@@ -2735,6 +2835,7 @@ function applyGeneratedTitle(id, title, opts = {}) {
   if (!entry || !clean || state.panePrefs.titles?.[id] && !isPlaceholderTitle(state.panePrefs.titles[id])) return false;
   const source = opts.source || 'terminal';
   if (titleSourcePriority(entry.titleSource) > titleSourcePriority(source)) return false;
+  if (entry.autoTitle === clean && entry.titleSource === source) return false;
   entry.autoTitle = clean;
   entry.titleSource = source;
   entry.session.meta = { ...(entry.session.meta || {}), title: clean, titleSource: source };
@@ -2759,13 +2860,25 @@ function applySessionMeta(id, session) {
   return clearGeneratedTitle(id, { source });
 }
 
-function refreshTitleFromTerminal(id) {
+function refreshTitleFromTerminal(id, viewportRows = null) {
   const entry = state.sessions.get(id);
   if (!isHermesTuiEntry(entry)) return;
-  const rows = terminalViewportRows(entry?.term);
+  const rows = viewportRows || terminalViewportRows(entry?.term);
   const inferred = inferHermesVisibleTitle(rows) || inferHermesSessionTitle(rows);
   if (inferred) applyGeneratedTitle(id, inferred, { source: 'hermes-session' });
   else if (selectedHermesSessionTitleIsEmpty(rows)) clearGeneratedTitle(id, { source: 'hermes-session' });
+}
+
+function scheduleTerminalTitleRefresh(id) {
+  const entry = state.sessions.get(id);
+  if (!entry || entry.titleRefreshTimer) return;
+  entry.titleRefreshTimer = setTimeout(() => {
+    entry.titleRefreshTimer = null;
+    if (state.sessions.get(id) !== entry || !isHermesTuiEntry(entry)) return;
+    const rows = terminalViewportRows(entry.term);
+    syncSessionWorkingFromTerminal(id, entry, rows);
+    refreshTitleFromTerminal(id, rows);
+  }, 0);
 }
 
 function trySetPointerCapture(el, pointerId) {
@@ -2812,7 +2925,7 @@ function endPointerDrag(event) {
     if (slot?.type === 'free') applyFreeSlotSnap(d.sourceId, slot.rect);
     savePanePrefs();
   } else if (state.saveQueued) saveUiState();
-  scheduleTerminalFit();
+  scheduleTerminalFit({ ids: [d.sourceId] });
   renderSharedResizeHandles();
 }
 
@@ -2838,7 +2951,6 @@ function updatePointerDrag(event) {
   d.activeDesktopSlot = slot?.type === 'none' ? null : slot;
   showDesktopSlotSuggestions(slot);
   applyFreeWindow(d.sourceId);
-  scheduleTerminalFit({ secondPass: false, latePass: false });
 }
 
 function endWindowResize(event) {
@@ -2865,7 +2977,7 @@ function endWindowResize(event) {
   document.getElementById(`panel-${d.sourceId}`)?.classList.remove('resizing');
   if (!canceled) savePanePrefs();
   else if (state.saveQueued) saveUiState();
-  scheduleTerminalFit();
+  scheduleTerminalFit({ ids: [d.sourceId] });
   renderSharedResizeHandles();
 }
 
@@ -2943,7 +3055,7 @@ function updateWindowResize(event) {
   ({ x, y, w, h } = snapWindowResize(d.sourceId, edge, { x, y, w, h }));
   Object.assign(p, { x, y, w, h, z: d.z });
   applyFreeWindow(d.sourceId);
-  scheduleTerminalFit({ secondPass: false, latePass: false });
+  scheduleTerminalFit({ ids: [d.sourceId], secondPass: false, latePass: false });
 }
 
 function startSharedResize(group, event) {
@@ -3000,7 +3112,7 @@ function updateSharedResize(event) {
     d.beforeIds.forEach(id => { const r = d.rects[id]; if (r && prefs[id]) { prefs[id].h = r.h + delta; applyFreeWindow(id); } });
     d.afterIds.forEach(id => { const r = d.rects[id]; if (r && prefs[id]) { prefs[id].y = r.y + delta; prefs[id].h = r.h - delta; applyFreeWindow(id); } });
   }
-  scheduleTerminalFit({ secondPass: false, latePass: false });
+  scheduleTerminalFit({ ids: [...d.beforeIds, ...d.afterIds], secondPass: false, latePass: false });
 }
 
 function endSharedResize(event) {
@@ -3025,7 +3137,7 @@ function endSharedResize(event) {
   state.sharedResizeDrag = null;
   if (!canceled) savePanePrefs();
   else if (state.saveQueued) saveUiState();
-  scheduleTerminalFit();
+  scheduleTerminalFit({ ids: [...d.beforeIds, ...d.afterIds] });
   renderSharedResizeHandles();
 }
 
@@ -3091,6 +3203,7 @@ function startPointerDrag(id, handle, event) {
   p.y = event.clientY - gr.top - p.h * grabRatioY;
   Object.assign(p, clampWindowRect(p));
   applyFreeWindow(id);
+  scheduleTerminalFit({ ids: [id], secondPass: false, latePass: false });
   bringWindowToFront(id, { persist: false });
   state.pointerDrag = { sourceId: id, dx: event.clientX - gr.left - p.x, dy: event.clientY - gr.top - p.y, x: event.clientX, y: event.clientY, z: p.z, activeDesktopSlot: null, preDragRect, cancelRect, cancelZ, cancelZCounter, grabRatioX, grabRatioY };
   state.draggingId = id;
@@ -3226,10 +3339,10 @@ function createPanel(session, opts = {}) {
   const termEl = el.querySelector('.terminal');
   term.open(termEl);
   installTerminalWheelScroll(termEl, term, session);
-  installTerminalDragSelection(termEl, term, session);
+  const dragSelectionCleanup = installTerminalDragSelection(termEl, term, session);
 
   const ro = new ResizeObserver(() => {
-    scheduleTerminalFit();
+    scheduleTerminalFit({ ids: [id] });
   });
   ro.observe(el.querySelector('.terminal'));
   term.onData(data => {
@@ -3243,8 +3356,8 @@ function createPanel(session, opts = {}) {
   });
 
   const hasSnapshot = hasTerminalSnapshot(id);
-  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, arrangeCleanup: dismissArrange, terminalOwner: declaredTerminalOwner(session), hasSnapshot, attachCount: 0, attachId: '', outputSequence: 0, snapshotTimer: null, outputBuffer: '', pendingReplay: null, outputFlushTimer: null, outputWriteInFlight: false, outputFrameHandle: null, outputCancelled: false, titleSource: '', working: false, lastSentCols: 0, lastSentRows: 0 });
-  term.onWriteParsed?.(() => refreshTitleFromTerminal(id));
+  const terminalOwner = declaredTerminalOwner(session);
+  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, arrangeCleanup: dismissArrange, dragSelectionCleanup, terminalOwner, terminalMode: isHermesTuiEntry({ session }) ? 'hermes-tui' : terminalOwner, hasSnapshot, attachCount: 0, attachId: '', outputSequence: 0, snapshotTimer: null, outputBuffer: [], outputBufferChars: 0, outputGeneration: 0, pendingReplay: null, pendingReplayCursor: null, pendingReplayAck: '', pendingReplaySocket: null, pendingHermesEvents: [], outputFlushTimer: null, outputWriteInFlight: false, outputFrameHandle: null, outputCancelled: false, titleRefreshTimer: null, titleSource: '', working: false, lastSentCols: 0, lastSentRows: 0 });
   term.onBell?.(() => notifyResponseComplete(id));
 
   if (state.minimized.has(id)) el.classList.add('minimized');
@@ -3349,11 +3462,26 @@ function handleSocketClose(id, socket, event) {
   }, 1000);
 }
 
-function applyTerminalOwner(id, term, owner) {
+function applyTerminalOwner(id, term, owner, mode = owner) {
   const entry = state.sessions.get(id);
-  if (!entry || !['viewport', 'application'].includes(owner)) return;
+  if (!entry || !['viewport', 'application'].includes(owner) || !['viewport', 'application', 'hermes-tui'].includes(mode)) return;
   const previous = entry.terminalOwner;
+  const previousMode = entry.terminalMode;
   entry.terminalOwner = owner;
+  entry.terminalMode = mode;
+  entry.el.classList.toggle('hermes-tui', entry.terminalMode === 'hermes-tui');
+  if (previousMode === 'hermes-tui' && mode !== 'hermes-tui') {
+    term.__passideckClearDragSelection?.();
+    term.clearSelection();
+    entry.hermesEventsConnected = false;
+    setSessionWorking(id, false);
+    clearGeneratedTitle(id, { source: 'hermes-session' });
+    entry.pendingHermesEvents = [];
+  } else if (mode === 'hermes-tui') {
+    scheduleTerminalTitleRefresh(id);
+    const pendingHermesEvents = entry.pendingHermesEvents.splice(0);
+    for (const message of pendingHermesEvents) applyHermesEvent(id, message);
+  }
   if (owner === 'viewport' && previous === 'application' && term.buffer?.active?.type === 'alternate') {
     queueTerminalOutput(id, term, '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l');
   }
@@ -3373,29 +3501,24 @@ function hydrateLiveTerminal(id, term) {
   finish();
 }
 
-function hydrateTerminalAttach(id, term, msg) {
+function hydrateTerminalAttach(id, term, msg, socket) {
   const entry = state.sessions.get(id);
   if (!entry) return;
   const sequence = Number(msg.sequence);
   if (Number.isFinite(sequence)) entry.outputSequence = sequence;
   if (msg.attachId) entry.attachId = String(msg.attachId);
-  applyTerminalOwner(id, term, msg.owner);
+  applyTerminalOwner(id, term, msg.owner, msg.mode);
   if (msg.kind === 'tmux-history') {
     entry.attachCount += 1;
-    queueTerminalReplay(id, term, msg.data);
-    entry.ws?.send(JSON.stringify({ type: 'replay-ack', attachId: msg.attachId }));
+    queueTerminalReplay(id, term, msg.data, { cursorX: msg.cursorX, cursorY: msg.cursorY, attachId: msg.attachId, socket });
     return;
   }
   if (msg.kind === 'live-only' || msg.kind === 'capture-unavailable') {
     hydrateLiveTerminal(id, term);
     return;
   }
-  if (!msg.kind && String(msg.data || '').includes('output replay disabled')) {
-    hydrateLiveTerminal(id, term);
-    return;
-  }
   entry.attachCount += 1;
-  queueTerminalReplay(id, term, msg.data);
+  queueTerminalReplay(id, term, msg.data, { cursorX: msg.cursorX, cursorY: msg.cursorY, attachId: msg.attachId, socket });
 }
 
 function attachSocket(id, term, el) {
@@ -3422,8 +3545,8 @@ function attachSocket(id, term, el) {
     const entry = state.sessions.get(id);
     if (msg.type === 'hermes-event' || msg.type === 'hermes-events') applyHermesEvent(id, msg);
     if (msg.type === 'meta') applySessionMeta(id, msg.session);
-    if (msg.type === 'terminal-owner') applyTerminalOwner(id, term, msg.owner);
-    if (msg.type === 'replay') hydrateTerminalAttach(id, term, msg);
+    if (msg.type === 'terminal-owner') applyTerminalOwner(id, term, msg.owner, msg.mode);
+    if (msg.type === 'replay') hydrateTerminalAttach(id, term, msg, ws);
     if (msg.type === 'output') {
       const sequence = Number(msg.sequence);
       if (!Number.isFinite(sequence) || sequence > entry.outputSequence) {
@@ -3460,6 +3583,7 @@ function reconnect(id, force = false) {
   if (!entry || entry.el.classList.contains('exited')) return;
   const oldSocket = entry.ws;
   if (!force && oldSocket?.readyState === WebSocket.OPEN) return;
+  resetTerminalOutputPipeline(entry);
   entry.ws = attachSocket(id, entry.term, entry.el);
   if (oldSocket && oldSocket !== entry.ws) {
     try { oldSocket.close(4000, 'superseded'); } catch {}
@@ -3516,10 +3640,13 @@ function resumeAllPanes(forceReconnect = false) {
   const now = Date.now();
   fitAll({ force: true, allowHeight: true, scrollBottom: true });
   for (const [id, entry] of state.sessions) {
-    try { entry.term.refresh(0, Math.max(0, entry.term.rows - 1)); } catch {}
+    const visible = state.panePrefs.paneDesktop[id] === state.activeDesktopId && !state.minimized.has(id) && !entry.el.classList.contains('layout-hidden') && entry.el.offsetParent !== null;
+    if (visible) {
+      try { entry.term.refresh(0, Math.max(0, entry.term.rows - 1)); } catch {}
+    }
     if (forceReconnect) {
       reconnect(id, true);
-    } else if (ensureSocketLive(id, entry, now)) {
+    } else if (ensureSocketLive(id, entry, now) && visible) {
       sendResize(id, entry, true);
       requestTerminalRedraw(entry);
     }
@@ -3566,12 +3693,16 @@ function movePaneToDesktop(id, targetDesktopId) {
   savePanePrefs();
 }
 
-function selectDesktop(id) {
-  if (!state.panePrefs.desktops[id] || id === state.activeDesktopId) return;
+function cancelWindowInteractions() {
   const cancelEvent = { type: 'pointercancel', preventDefault() {} };
   if (state.pointerDrag) endPointerDrag(cancelEvent);
   if (state.resizeDrag) endWindowResize(cancelEvent);
   if (state.sharedResizeDrag) endSharedResize(cancelEvent);
+}
+
+function selectDesktop(id) {
+  if (!state.panePrefs.desktops[id] || id === state.activeDesktopId) return;
+  cancelWindowInteractions();
   const current = activeDesktop();
   current.minimized = persistentMinimizedIds();
   current.windows = windowPrefs();
@@ -3748,15 +3879,14 @@ function discardPanel(id, opts = {}) {
   const entry = state.sessions.get(id);
   if (entry) {
     entry.outputCancelled = true;
-    clearTimeout(entry.outputFlushTimer);
-    if (entry.outputFrameHandle !== null) cancelAnimationFrame(entry.outputFrameHandle);
-    entry.outputFrameHandle = null;
-    entry.outputBuffer = '';
+    resetTerminalOutputPipeline(entry);
     try { entry.ro.disconnect(); } catch {}
+    entry.dragSelectionCleanup?.();
     try { entry.ws.close(); } catch {}
     try { entry.term.dispose(); } catch {}
     window.removeEventListener('blur', entry.arrangeCleanup);
     clearTimeout(entry.snapshotTimer);
+    clearTimeout(entry.titleRefreshTimer);
     try { localStorage.removeItem(snapshotKey(id)); } catch {}
     entry.el.remove();
     state.sessions.delete(id);
@@ -3899,8 +4029,10 @@ async function copyTerminalSelection(entry) {
 
 function handleTerminalCopyShortcut(event) {
   const key = String(event.key || '').toLowerCase();
-  if (key !== 'c' || !(event.ctrlKey || event.metaKey) || event.altKey) return;
-  const entry = terminalEntryForTarget(event.target) || activeTerminalEntry();
+  const copyModifier = event.metaKey || (event.ctrlKey && event.shiftKey);
+  if (key !== 'c' || !copyModifier || event.altKey) return;
+  const terminalTarget = event.target?.closest?.('.terminal, .xterm');
+  const entry = terminalTarget ? terminalEntryForTarget(terminalTarget) : null;
   if (!entry?.term?.getSelection?.()) return;
   event.preventDefault();
   event.stopImmediatePropagation();
@@ -3908,7 +4040,8 @@ function handleTerminalCopyShortcut(event) {
 }
 
 async function handleTerminalContextMenu(event) {
-  const entry = terminalEntryForTarget(event.target);
+  const terminalTarget = event.target?.closest?.('.terminal, .xterm');
+  const entry = terminalTarget ? terminalEntryForTarget(terminalTarget) : null;
   if (!entry || !entry.term?.getSelection?.()) return;
   event.preventDefault();
   event.stopImmediatePropagation();
@@ -3930,6 +4063,7 @@ function isHermesEntry(entry) {
 }
 
 function isHermesTuiEntry(entry) {
+  if (entry?.terminalMode) return entry.terminalMode === 'hermes-tui';
   const meta = entry?.session?.meta || {};
   return isHermesEntry(entry) && /\s--tui\b/i.test(String(meta.command || meta.label || ''));
 }
@@ -4298,8 +4432,8 @@ window.addEventListener('focus', () => {
   scheduleResume();
 });
 window.addEventListener('online', () => scheduleResume(true));
-window.addEventListener('pageshow', scheduleResume);
-window.addEventListener('blur', () => { syncTerminalInputFocus(false); clearLayoutAssist(); });
+window.addEventListener('pageshow', () => scheduleResume());
+window.addEventListener('blur', () => { syncTerminalInputFocus(false); clearLayoutAssist(); cancelWindowInteractions(); });
 document.documentElement.addEventListener('mouseleave', clearLayoutAssist);
 document.addEventListener('focusin', () => syncTerminalInputFocus());
 document.addEventListener('focusout', () => queueMicrotask(() => syncTerminalInputFocus()));

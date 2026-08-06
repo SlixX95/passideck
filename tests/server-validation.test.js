@@ -32,7 +32,7 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
 
 (async () => {
   try {
-    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, isPlainShellCommand, isWheelMouseInput, splitCommand, tmuxOutputClient, parseCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount } = require('../packages/server/src/index');
+    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, acceptHermesEvent, isPlainShellCommand, isWheelMouseInput, splitCommand, parseCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount } = require('../packages/server/src/index');
     assert.strictEqual(
       hermesResumeIdFromArgv(['/venv/bin/python3', '/venv/bin/hermes', '--resume', '20260716_180100_5dbdcf']),
       '20260716_180100_5dbdcf',
@@ -64,6 +64,21 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
       terminalOwnerFromProcesses({ command: '/bin/bash' }, [{ argv: ['/usr/bin/python3', '/usr/local/bin/hermes', '--tui'] }]),
       'application',
       'Hermes TUI launched manually inside a shell must keep application wheel ownership'
+    );
+    assert.deepStrictEqual(
+      terminalStateFromProcesses({ command: '/bin/bash' }, [{ argv: ['/usr/bin/python3', '/usr/local/bin/hermes', '--tui'] }]),
+      { owner: 'application', mode: 'hermes-tui' },
+      'manual Hermes TUI discovery must expose one authoritative dynamic client mode'
+    );
+    assert.deepStrictEqual(
+      terminalStateFromProcesses({ command: '/bin/bash' }, [{ argv: ['/usr/bin/vim', 'notes.txt'] }]),
+      { owner: 'application', mode: 'application' },
+      'generic terminal applications must not inherit Hermes-specific client behavior'
+    );
+    assert.deepStrictEqual(
+      terminalStateFromProcesses({ command: 'hermes --tui' }, [{ argv: ['/bin/bash'] }]),
+      { owner: 'viewport', mode: 'viewport' },
+      'leaving an explicitly launched Hermes TUI must restore normal shell behavior'
     );
     assert.strictEqual(
       terminalOwnerFromProcesses({ command: 'hermes --tui' }, [{ argv: ['/bin/bash'] }]),
@@ -109,6 +124,20 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     assert.strictEqual(isWheelMouseInput('\x1b[100;10;20M'), true, 'modifier-encoded URXVT wheel input must be recognized');
     assert.strictEqual(isWheelMouseInput('\x1b[A'), false, 'ordinary arrow keys must not be mistaken for wheel input');
     assert.strictEqual(isWheelMouseInput('\x1b[M !!'), false, 'ordinary X10 mouse buttons must not be mistaken for wheel input');
+    const eventState = {};
+    assert.strictEqual(acceptHermesEvent(eventState, { type: 'message.start', session_id: 'old' }), true);
+    assert.strictEqual(acceptHermesEvent(eventState, { type: 'message.start', session_id: 'current' }), false, 'a stale publisher generation must not relatch the active lifecycle id');
+    eventState.hermesEventSessionId = null;
+    assert.strictEqual(acceptHermesEvent(eventState, { type: 'message.start', session_id: 'current' }), true, 'a new publisher generation may establish its lifecycle id');
+    assert.strictEqual(acceptHermesEvent(eventState, { type: 'message.complete', session_id: 'old' }), false, 'a stale completion must not clear the current Hermes busy state');
+    assert.strictEqual(acceptHermesEvent(eventState, { type: 'session.title', session_id: 'old', payload: { stored_session_id: 'old' } }), false, 'a stale title must not replace the current Hermes session title');
+    assert.strictEqual(acceptHermesEvent(eventState, { type: 'message.complete', session_id: 'current' }), true, 'the current session completion must remain authoritative');
+    assert.strictEqual(acceptHermesEvent(eventState, { type: 'message.complete' }), false, 'missing lifecycle ids must fail closed after a valid lifecycle id is established');
+    const liveVsStoredEventState = {};
+    assert.strictEqual(acceptHermesEvent(liveVsStoredEventState, { type: 'message.start', session_id: 'live-1' }), true);
+    assert.strictEqual(acceptHermesEvent(liveVsStoredEventState, { type: 'session.info', session_id: 'live-1', payload: { stored_session_id: 'stored-1' } }), true);
+    assert.strictEqual(acceptHermesEvent(liveVsStoredEventState, { type: 'message.complete', session_id: 'live-1' }), true, 'stored session ids must not replace the active lifecycle id');
+    assert.strictEqual(acceptHermesEvent(liveVsStoredEventState, { type: 'session.info', session_id: 'old-live', payload: { stored_session_id: 'old-stored' } }), false, 'stale session info must not replace the active lifecycle id');
     const tuiActiveSessionFile = path.join(home, 'tui-active-session.json');
     fs.writeFileSync(tuiActiveSessionFile, JSON.stringify({ session_id: '20260718_210406_6404d7' }));
     assert.strictEqual(
@@ -250,10 +279,8 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
       name: 'xterm-256color', cols: 80, rows: 24, cwd: home, env: { ...process.env, TERM: 'xterm-256color' }
     });
     await waitFor(() => tmux('list-clients', '-t', persistentTmux, '-F', '#{client_name}').toString().trim().split(/\r?\n/).filter(Boolean).length === 2, 'the multi-client replay fixture must attach a second tmux client');
-    assert.strictEqual(tmuxOutputClient(persistentSession), persistentSession.pty.ptsName, 'replay boundaries must target the exact PassiDeck tmux client when another client is attached');
     const realTmuxClientTty = persistentSession.tmuxClientTty;
     persistentSession.tmuxClientTty = '/dev/pts/not-passideck';
-    assert.strictEqual(tmuxOutputClient(persistentSession), '', 'an unmatched PTY must not fall back to another tmux client');
     const unmatchedSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?session=${persistent.id}`);
     let unmatchedReplay = null;
     unmatchedSocket.on('message', raw => {
@@ -277,8 +304,8 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     });
     await opened(lostCounterSocket);
     persistentSession.tmuxClientTty = '/dev/pts/disappeared';
-    await waitFor(() => lostCounterReplays.some(message => message.reason === 'tmux client counter unavailable'), 'hydration must fail closed when its exact tmux counter disappears');
-    assert.strictEqual(lostCounterReplays.at(-1).kind, 'capture-unavailable', 'lost tmux counters must terminate hydration with a typed fallback');
+    await waitFor(() => lostCounterReplays.some(message => message.kind === 'capture-unavailable'), 'hydration must fail closed when its exact tmux client or counter disappears');
+    assert.strictEqual(lostCounterReplays.at(-1).reason, 'tmux client not found', `a disappeared exact tmux client must produce its precise fallback: ${JSON.stringify(lostCounterReplays)}`);
     lostCounterSocket.close();
     persistentSession.tmuxClientTty = realTmuxClientTty;
     persistentSession.pty.write("for i in $(seq 1 120); do echo shell-history-$i; done; echo '[PassiDeck reconnect: output replay disabled; live session still running]'\r");
@@ -448,7 +475,14 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     await delay(20);
     assert.strictEqual(session.meta.title, 'Dynamic Retitle Wins', 'native Hermes metadata must not replace the refined plugin title for the same session');
     assert.ok(!firstMessages.some(message => message.type === 'hermes-event' && message.event?.type === 'tool.start'), 'unused tool payloads must not leak through the pane bridge');
-    hermesPublisher.close();
+    const replacementPublisher = new WebSocket(`ws://127.0.0.1:${port}/ws?hermesEvents=validation`);
+    await opened(replacementPublisher);
+    await waitFor(() => hermesPublisher.readyState === WebSocket.CLOSED, 'a newer Hermes publisher must supersede the stale publisher generation');
+    replacementPublisher.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: {
+      type: 'session.info', session_id: 'live-2', payload: { running: false, stored_session_id: 'stored-2' }
+    } }));
+    await waitFor(() => session.hermesEventSessionId === 'live-2' && session.hermesRunning === false, 'a replacement publisher must establish a fresh lifecycle id');
+    replacementPublisher.close();
     await waitFor(
       () => firstMessages.some(message => message.type === 'hermes-events' && message.connected === false),
       'the pane must fall back when its last Hermes event publisher disconnects'

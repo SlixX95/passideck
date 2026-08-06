@@ -11,6 +11,8 @@ const database = read('packages/server/src/database.js');
 const config = read('packages/server/src/config.js');
 const html = read('packages/client/public/index.html');
 const style = read('packages/client/public/style.css');
+const browser = read('tests/browser-cdp.test.js');
+const browserScroll = read('tests/browser-scroll-cdp.test.js');
 const installer = read('scripts/install.sh');
 const service = read('scripts/passideck.service');
 const pkg = JSON.parse(read('package.json'));
@@ -44,7 +46,7 @@ for (const needle of [
   'applicationOwnsTouch()',
 ]) assert.ok(app.includes(needle), `missing app guard: ${needle}`);
 
-assert.ok(!app.includes("if (String(msg.data || '').includes('output replay disabled'))"), 'typed replay frames must not be classified by visible terminal text');
+assert.ok(!app.includes("includes('output replay disabled')"), 'typed replay frames must never be classified by visible terminal text');
 assert.ok(!app.includes('if (entry.pendingReplay)') && app.includes('entry.pendingReplay !== null'), 'empty replay revisions must use the null sentinel instead of truthiness');
 
 for (const needle of [
@@ -155,15 +157,15 @@ for (const name of ['desktop-response-pulse', 'switcher-response-pulse', 'pane-r
 assert.ok(app.includes('term.onBell?.(() => notifyResponseComplete(id));'), 'native Hermes terminal completion BEL must drive response attention');
 assert.ok(
   app.includes('function setSessionWorking(id, working)') &&
-  app.includes('function syncSessionWorkingFromTerminal(id, entry)') &&
+  app.includes('function syncSessionWorkingFromTerminal(id, entry, viewportRows = null)') &&
   app.includes('function applyHermesEvent(id, message)') &&
-  app.includes('if (!entry || !isHermesEntry(entry)) return;') &&
+  app.includes('if (!isHermesEntry(entry) && !isHermesTuiEntry(entry))') &&
   app.includes('if (message.type === \'hermes-events\' && !isHermesTuiEntry(entry)) return;') &&
   app.includes('if (entry.hermesEventsConnected) return;') &&
   app.includes("if (msg.type === 'hermes-event' || msg.type === 'hermes-events') applyHermesEvent(id, msg);") &&
   app.includes("isHermesTuiEntry(entry)") &&
   app.includes("line.translateToString(false).includes('Ctrl+C to interrupt')") &&
-  app.includes('syncSessionWorkingFromTerminal(id, entry);') &&
+  app.includes('syncSessionWorkingFromTerminal(id, entry, rows);') &&
   !app.includes('SESSION_WORKING_IDLE_MS') &&
   !app.includes('workingIdleTimer') &&
   !app.includes("isHermesEntry(entry) && clean.includes('\\r')") &&
@@ -171,16 +173,40 @@ assert.ok(
   style.includes('@keyframes session-working-spin'),
   'the working spinner must accept native lifecycle events from normal Hermes CLI and TUI while retaining the TUI rendered-busy fallback'
 );
-assert.ok(app.includes("entry.outputBuffer = '\\x1bc\\r\\n[PassiDeck: output backlog reset]\\r\\n';"), 'terminal output backpressure must bound overload with a parser-safe reset marker');
+assert.ok(
+  session.includes('WS_BACKPRESSURE_MAX_BYTES') && session.includes('(Number(ws.bufferedAmount) || 0) + bytes > WS_BACKPRESSURE_MAX_BYTES') && server.includes('sendJson(ws,') &&
+  app.includes("entry.ws?.close(4002, 'client output backlog')") && !app.includes('output backlog reset'),
+  'terminal output backpressure must reconnect and resynchronize instead of dropping buffered output'
+);
+assert.ok(server.includes("const { execFile, execFileSync } = require('child_process')") && server.includes('async function paneProcesses(session)') && server.includes('async function tmuxCapturePane(session'), 'process-tree discovery and hydration capture must use asynchronous server I/O');
+assert.ok(server.includes('TMUX_COMMAND_TIMEOUT_MS') && server.includes('ws.hydrationDeadlineTimer'), 'tmux discovery and hydration must have process timeouts plus an independent deadline');
+assert.ok(server.includes("const sequence = replay.kind === 'tmux-history' ? replay.clientWritten : ws.hydrationStartSequence") && server.includes('flushHydrationOutput(sequence)') && server.includes('ws.hydrationOutput.push(') && server.includes("ws.finishHydration?.('pty exited during hydration')"), 'hydration must replay from an immutable boundary and flush suppressed output on replay, fallback, or PTY exit');
+assert.ok(server.includes('sendJson(ws,') && session.includes('(Number(ws.bufferedAmount) || 0) + bytes > WS_BACKPRESSURE_MAX_BYTES'), 'all websocket frame paths must share projected-size backpressure');
+assert.ok(server.includes("app.post('/api/sessions/:id/input', async") && server.includes('await queueTerminalInput(session, text)'), 'REST and websocket terminal input must share one ordered queue');
+assert.ok(server.includes('if (processes === null) return terminalOwner(session)') && !server.includes('function tmuxOutputClient(session)'), 'discovery failures must preserve terminal state and obsolete sync tmux matching must be removed');
+assert.ok(server.includes('TMUX_HYDRATION_MAX_ATTEMPTS') && server.includes('ws.hydrationAttempts >='), 'hydration retries must have a bounded backoff before falling back to live output');
+const wheelInputBlock = server.slice(server.indexOf("if (msg.type === 'input' && session.pty)"), server.indexOf("if (msg.type === 'resize'"));
+assert.ok(wheelInputBlock.includes('queueTerminalInput(session,') && server.includes('await refreshTerminalOwner(session, true)') && !wheelInputBlock.includes('execFileSync'), 'wheel routing must refresh process ownership asynchronously without reordering later keyboard input');
 const outputFlushBlock = app.slice(app.indexOf('function flushTerminalOutput'), app.indexOf('function queueTerminalOutput'));
 assert.ok(!outputFlushBlock.includes('saveTerminalSnapshot('), 'terminal output flushes must not synchronously serialize snapshots on the hot path');
 assert.ok(app.includes('if (entry.outputWriteInFlight) return;'), 'mid-write terminal snapshots must keep the last fully parsed state');
-assert.ok(app.includes('const handle = requestAnimationFrame(writeChunk);') && app.includes('cancelAnimationFrame(entry.outputFrameHandle);'), 'chunk scheduling must be unconditional and cancellable when a pane is discarded');
+assert.ok(app.includes('const handle = setTimeout(writeChunk, 0);') && app.includes('clearTimeout(entry.outputFrameHandle);'), 'terminal transport must progress in hidden tabs without depending on requestAnimationFrame');
 assert.ok(app.includes('const text = sanitizeTerminalOutput(data);') && app.includes('}, false,'), 'batched terminal output must sanitize each source frame without truncating the combined flush');
+assert.ok(!app.includes('large replay truncated') && !app.includes('OUTPUT_FRAME_LIMIT'), 'live output frames must never be silently truncated as replay data');
+assert.ok(app.includes('entry.outputBuffer.push(text)') && app.includes("entry.outputBuffer.join('')"), 'terminal output buffering must use a chunk queue instead of repeated whole-string copies');
 assert.ok(app.includes('clearTimeout(entry.outputFlushTimer);'), 'discarding a pane must cancel pending terminal output flushes');
 assert.ok(app.includes('const TERM_SNAPSHOT_DEBOUNCE_MS = 1000;') && app.includes('setTimeout(() => saveTerminalSnapshot(id), TERM_SNAPSHOT_DEBOUNCE_MS)'), 'terminal snapshots must wait for a full second of idle output');
 assert.ok(!app.includes("msg.type === 'response-complete'"), 'PassiDeck must not infer Hermes completion through server database events');
 assert.ok(app.includes("el.classList.toggle('hermes-tui', isHermesTuiEntry({ session }))"), 'Hermes TUI panes must carry a narrow styling hook');
+assert.ok(
+  app.includes("entry.terminalMode === 'hermes-tui'") &&
+  app.includes("entry.el.classList.toggle('hermes-tui', entry.terminalMode === 'hermes-tui')") &&
+  server.includes("mode: 'hermes-tui'") && server.includes('mode: owner') &&
+  server.includes("type: 'terminal-owner', owner: next.owner, mode: next.mode"),
+  'one server-provided terminal mode must drive all dynamic Hermes TUI behavior and styling'
+);
+assert.ok(app.includes('function applyHermesEvent(id, message)') && app.includes('!isHermesEntry(entry) && !isHermesTuiEntry(entry)'), 'native Hermes events must work for dynamically detected TUI sessions launched from a shell');
+assert.ok(app.includes('pendingHermesEvents: []') && app.includes('for (const message of pendingHermesEvents) applyHermesEvent(id, message)'), 'Hermes events arriving before dynamic TUI detection must replay when the mode becomes authoritative');
 assert.ok(style.includes('.term-panel.hermes-tui .xterm-viewport') && style.includes('scrollbar-width: none'), 'Hermes TUI panes must hide xterm scrollbars without disabling TUI scrolling');
 assert.ok(html.includes('id="desktopSwitcher"') && html.includes('id="addDesktop"'), 'multi-desktop controls must be present in the shared browser/Electron renderer');
 assert.ok(app.includes('handleDesktopShortcut') && app.includes('movePaneToDesktop') && app.includes('DESKTOP_VIEW_KEY'), 'desktop switching, pane movement and per-window local selection must stay wired');
@@ -304,7 +330,7 @@ assert.ok(
   app.includes('handleTerminalLink(event, link)'),
   'Hermes TUI selection must support mouse-only browser/desktop input and activate terminal links from the trusted pointer event'
 );
-assert.ok(html.includes('app.js?v=20260803-terminal-owner-v1') && html.includes('style.css?v=20260801-desktop-reload-v1'), 'client cache keys must activate terminal ownership and restored desktop repaint');
+assert.ok(html.includes('app.js?v=20260804-terminal-runtime-v1') && html.includes('style.css?v=20260804-terminal-runtime-v1'), 'client cache keys must activate the corrected terminal runtime and surface styles');
 assert.ok(app.includes("const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v2:'"), 'legacy snapshots without OSC 8 targets must be invalidated');
 assert.ok(app.includes('cols: entry.term.cols') && app.includes('Number.isInteger(snapshot.cols) && snapshot.cols === term.cols'), 'snapshot OSC 8 targets must fail closed after terminal column reflow');
 assert.ok(app.includes('const HERMES_TUI_WHEEL_MULTIPLIER = 3') && app.includes('clean.repeat(HERMES_TUI_WHEEL_MULTIPLIER)'), 'Hermes TUI wheel input must be accelerated at the PTY input boundary');
@@ -314,6 +340,31 @@ assert.ok(app.includes('if (changed) entry.term.__passideckSnapshotLinks = null'
 
 assert.ok(html.includes('id="uploadFileBtn"') && html.includes('id="clipboardImageBtn"') && html.includes('id="fileInput"'), 'upload, clipboard image, and file picker controls must stay available');
 assert.ok(app.includes("document.addEventListener('contextmenu', handleTerminalContextMenu, true)") && app.includes('term.clearSelection()'), 'right-click copy must clear terminal selection in browser and desktop renderers');
+assert.ok(
+  app.includes('event.ctrlKey && event.shiftKey') && !app.includes('terminalEntryForTarget(event.target) || activeTerminalEntry()'),
+  'plain Ctrl+C must reach the PTY while Ctrl+Shift+C remains terminal copy'
+);
+assert.ok(app.includes("event.target?.closest?.('.terminal, .xterm')"), 'terminal copy and context-menu handlers must not capture pane headers or ordinary controls');
+assert.ok(app.includes('restoreReplayCursor(term, cursor') && app.includes('msg.cursorX') && app.includes('msg.cursorY'), 'tmux replay must restore its validated cursor position in the renderer');
+assert.ok(app.includes('entry.pendingReplaySocket') && app.includes('entry.ws === replaySocket') && app.includes('replaySocket.send('), 'replay acknowledgement must stay bound to the socket that delivered the replay');
+assert.ok(app.includes('scheduleTerminalTitleRefresh(id)') && app.includes("entry.autoTitle === clean && entry.titleSource === source"), 'TUI title extraction must coalesce probes and skip identical title renders');
+assert.ok(!app.includes('term.onWriteParsed?.(() => scheduleTerminalTitleRefresh(id))'), 'terminal-derived title scans must run once at output-batch completion, not once per parsed chunk');
+assert.ok(app.includes('entry.snapshotPlain') && app.includes('if (entry.snapshotPlain) links = []') && app.includes("return boundary >= 0 ? text.slice(boundary + 2) : ''") && app.includes('links = [];\n    text = trimPlainSnapshotText'), 'plain snapshot fallback must retain full lines and discard incompatible link-row metadata');
+assert.ok(app.includes("window.addEventListener('pageshow', () => scheduleResume())"), 'pageshow must not pass its event object as forceReconnect');
+assert.ok(app.includes('entry.dragSelectionCleanup?.()'), 'discarding a pane must remove its global drag-selection listeners');
+assert.ok(app.includes('term.__passideckClearDragSelection?.()') && app.includes('if (!start && !suspendedMouse) return'), 'TUI mode exit and blur must restore suspended mouse reporting after a completed drag');
+assert.ok(app.includes('selectPanel(session.id)') && app.includes('term.focus();'), 'drag-selection in an inactive TUI pane must activate and focus that pane');
+assert.ok(app.includes('systemMonitorInFlight') && app.includes('document.hidden'), 'system monitor polling must pause when hidden and prevent overlapping requests');
+assert.ok(!app.includes("document.addEventListener('pointermove', e => {\n    const target = e.target.closest?.('[data-tooltip]')"), 'tooltip placement must not force layout on every pointermove');
+assert.ok(app.includes('opts.ids ? new Set(opts.ids) : null'), 'terminal fits must support targeting only resized panes');
+assert.ok(app.includes('state.fitOptions.ids = [...new Set([...previous.ids, ...opts.ids])]') && !app.includes('cancelAnimationFrame(state.fitFrame)'), 'fit scheduling must merge affected panes without pointermove frame starvation');
+assert.ok(app.includes('wrap.dataset.geometrySignature'), 'desktop slot suggestions must reuse unchanged geometry DOM');
+assert.ok(!cssBlock(style, '.term-panel {').includes('backdrop-filter'), 'terminal surfaces must not use expensive backdrop blur');
+assert.ok(!style.includes('--tg-surface-blur'), 'removed terminal backdrop blur must not leave an unused CSS token');
+for (const source of [browser, browserScroll]) {
+  assert.ok(source.includes('CDP request timed out') && source.includes('rejectPending'), 'CDP harnesses must time out and reject pending requests on close');
+}
+assert.ok(browser.includes('dragMouseData') && browser.includes('clickMouseData'), 'TUI drag and follow-up click mouse packets must be asserted separately');
 assert.ok(installer.includes('PASSIDECK_ROOT=$(quote_env "$ROOT")'), 'installer must persist its actual checkout root for systemd');
 assert.ok(service.includes("ExecStart=/bin/sh -c 'exec node \"$PASSIDECK_ROOT/packages/cli/src/index.js\" --no-open'"), 'user service must exec Node directly from the installed checkout');
 assert.ok(service.includes('Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin'), 'user service must provide PATH for npm and node');

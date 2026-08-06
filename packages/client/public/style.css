@@ -971,7 +971,6 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 1px s
   --tg-panel-radius: 8px;
   --tg-control-radius: 5px;
   --tg-panel-shadow: 0 20px 60px rgba(0,0,0,.62), 0 0 30px var(--tg-glow-soft);
-  --tg-surface-blur: blur(18px) saturate(1.22);
 }
 body[data-skin="neon"] {
   --tg-panel-radius: 8px;
@@ -979,7 +978,6 @@ body[data-skin="neon"] {
   --tg-noise: .16;
   --tg-panel-bg: color-mix(in srgb, var(--tg-surface) 82%, transparent);
   --tg-panel-shadow: 0 22px 64px rgba(0,0,0,.62), 0 0 32px var(--tg-glow-soft);
-  --tg-surface-blur: blur(18px) saturate(1.25);
 }
 body[data-skin="stealth"] {
   --tg-panel-radius: 0px;
@@ -990,7 +988,6 @@ body[data-skin="stealth"] {
   --tg-panel-top: #070a0b;
   --tg-noise: .02;
   --tg-panel-shadow: 0 12px 28px rgba(0,0,0,.72), 0 0 0 1px #141922;
-  --tg-surface-blur: none;
 }
 body[data-skin="prism"] {
   --tg-panel-radius: 2px;
@@ -998,7 +995,6 @@ body[data-skin="prism"] {
   --tg-glow-soft: color-mix(in srgb, var(--tg-accent) 20%, transparent);
   --tg-glow-hard: color-mix(in srgb, var(--tg-accent) 42%, transparent);
   --tg-panel-shadow: 8px 8px 0 color-mix(in srgb, var(--tg-accent-dim) 28%, transparent), 0 22px 52px rgba(0,0,0,.68);
-  --tg-surface-blur: blur(7px) saturate(1.08);
 }
 body::before {
   content: '';
@@ -1056,7 +1052,6 @@ body {
   background: linear-gradient(180deg, var(--tg-panel-top), var(--tg-panel-bg) 22px, color-mix(in srgb, var(--tg-bg) 82%, #000 18%));
   border-color: var(--tg-hairline);
   border-radius: var(--tg-panel-radius);
-  backdrop-filter: var(--tg-surface-blur);
   isolation: isolate;
 }
 .term-panel::before {

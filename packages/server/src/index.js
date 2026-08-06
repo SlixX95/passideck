@@ -5,13 +5,14 @@ const { WebSocketServer } = require('ws');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const { execFileSync } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
+const { promisify } = require('util');
 const https = require('https');
 
 let pty = null;
 try { pty = require('@homebridge/node-pty-prebuilt-multiarch'); } catch {}
 
-const { SessionManager } = require('./session');
+const { SessionManager, WS_BACKPRESSURE_MAX_BYTES, sendJson } = require('./session');
 const { loadConfig, configDir, normalizeTitleGenLlm, writeTitleGenLlm } = require('./config');
 const { version: PASSIDECK_VERSION } = require('../../../package.json');
 
@@ -53,14 +54,17 @@ const TMUX_ARGS = process.env.PASSIDECK_TMUX_SOCKET
   ? ['-L', process.env.PASSIDECK_TMUX_SOCKET]
   : (process.env.PASSIDECK_TMUX_ARGS || '-L passideck').split(/\s+/).filter(Boolean);
 const TMUX_HISTORY_REPLAY_LINES = 2000;
-const TMUX_HISTORY_REPLAY_MAX_BYTES = 2 * 1024 * 1024;
+const TMUX_HISTORY_REPLAY_MAX_BYTES = Math.floor(WS_BACKPRESSURE_MAX_BYTES / 2);
+const TMUX_COMMAND_TIMEOUT_MS = 3000;
 const TMUX_HYDRATION_SETTLE_MS = 100;
 const TMUX_HYDRATION_MAX_MS = 15000;
+const TMUX_HYDRATION_MAX_ATTEMPTS = 20;
 const TERMINAL_OWNER_VIEWPORT = 'viewport';
 const TERMINAL_OWNER_APPLICATION = 'application';
 const TERMINAL_APPLICATION_COMMANDS = new Set(['vi', 'vim', 'nvim', 'nano', 'emacs', 'less', 'more', 'man', 'top', 'htop', 'btop', 'atop', 'glances', 'watch', 'mc', 'nnn', 'ranger', 'lf', 'lazygit', 'fzf', 'tmux', 'screen', 'ssh', 'mosh', 'codex']);
 const TERMINAL_REPLAY_DISABLED = '\r\n[PassiDeck reconnect: output replay disabled; live session still running]\r\n';
 const tmuxArgs = (args) => [...TMUX_ARGS, ...args];
+const execFileAsync = promisify(execFile);
 
 let lastCpuSample = null;
 let lastNetSample = null;
@@ -831,15 +835,16 @@ function hermesActiveSessionIdFromEnv(env) {
   } catch { return null; }
 }
 
-function paneProcesses(session) {
+async function paneProcesses(session) {
   const name = String(session?.tmuxName || '');
   if (!name || process.platform !== 'linux') return [];
 
   let panePid;
   try {
-    panePid = Number(String(execFileSync(TMUX_CMD, tmuxArgs(['list-panes', '-t', name, '-F', '#{pane_pid}']), { encoding: 'utf8' })).trim().split(/\s+/)[0]);
-  } catch { return []; }
-  if (!Number.isInteger(panePid) || panePid < 2) return [];
+    const { stdout } = await execFileAsync(TMUX_CMD, tmuxArgs(['list-panes', '-t', name, '-F', '#{pane_pid}']), { encoding: 'utf8', timeout: TMUX_COMMAND_TIMEOUT_MS });
+    panePid = Number(String(stdout).trim().split(/\s+/)[0]);
+  } catch { return null; }
+  if (!Number.isInteger(panePid) || panePid < 2) return null;
 
   const queue = [panePid];
   const seen = new Set();
@@ -848,29 +853,30 @@ function paneProcesses(session) {
     const pid = queue.shift();
     if (seen.has(pid)) continue;
     seen.add(pid);
-    let env = [];
-    try {
-      env = fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
-    } catch {}
-    let argv = [];
-    try {
-      argv = fs.readFileSync(`/proc/${pid}/cmdline`).toString('utf8').split('\0').filter(Boolean);
-    } catch {}
+    const readProc = async (file) => {
+      try { return await fs.promises.readFile(file, 'utf8'); }
+      catch { return ''; }
+    };
+    const [envText, argvText, stat, childrenText] = await Promise.all([
+      readProc(`/proc/${pid}/environ`),
+      readProc(`/proc/${pid}/cmdline`),
+      readProc(`/proc/${pid}/stat`),
+      readProc(`/proc/${pid}/task/${pid}/children`)
+    ]);
+    const env = envText.split('\0');
+    const argv = argvText.split('\0').filter(Boolean);
     let pgrp = 0;
     let tpgid = 0;
-    try {
-      const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    if (stat) {
       const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
       pgrp = Number(fields[2]) || 0;
       tpgid = Number(fields[5]) || 0;
-    } catch {}
+    }
     processes.push({ pid, argv, env, pgrp, tpgid });
-    try {
-      const children = fs.readFileSync(`/proc/${pid}/task/${pid}/children`, 'utf8').trim().split(/\s+/).filter(Boolean).map(Number);
-      for (const child of children) if (Number.isInteger(child) && child > 1) queue.push(child);
-    } catch {}
+    const children = childrenText.trim().split(/\s+/).filter(Boolean).map(Number);
+    for (const child of children) if (Number.isInteger(child) && child > 1) queue.push(child);
   }
-  return processes;
+  return processes.some(process => process.argv.length) ? processes : null;
 }
 
 function hermesArgvIndex(argv) {
@@ -900,40 +906,67 @@ function argvHasTerminalApplication(argv) {
   return false;
 }
 
-function terminalOwnerFromProcesses(meta = {}, processes = []) {
+function terminalStateFromProcesses(meta = {}, processes = []) {
   const command = String(meta.command || '').trim();
   const records = (Array.isArray(processes) ? processes : []).filter(record => Array.isArray(record?.argv) && record.argv.length);
   const foregroundPgrp = records.find(record => Number(record.tpgid) > 1)?.tpgid;
   const foregroundRecords = foregroundPgrp
     ? records.filter(record => Number(record.pgrp) === foregroundPgrp)
     : records;
-  if (foregroundRecords.some(record => argvHasHermesTui(record.argv))) return TERMINAL_OWNER_APPLICATION;
-  if (foregroundRecords.some(record => argvHasHermes(record.argv))) return TERMINAL_OWNER_VIEWPORT;
+  if (foregroundRecords.some(record => argvHasHermesTui(record.argv))) return { owner: TERMINAL_OWNER_APPLICATION, mode: 'hermes-tui' };
+  if (foregroundRecords.some(record => argvHasHermes(record.argv))) return { owner: TERMINAL_OWNER_VIEWPORT, mode: TERMINAL_OWNER_VIEWPORT };
   const foreground = foregroundRecords.at(-1)?.argv || [];
-  if (foreground.length) return argvHasTerminalApplication(foreground) ? TERMINAL_OWNER_APPLICATION : TERMINAL_OWNER_VIEWPORT;
+  if (foreground.length) {
+    const owner = argvHasTerminalApplication(foreground) ? TERMINAL_OWNER_APPLICATION : TERMINAL_OWNER_VIEWPORT;
+    return { owner, mode: owner };
+  }
   const declaredArgv = command.split(/\s+/).filter(Boolean);
-  if (argvHasHermesTui(declaredArgv)) return TERMINAL_OWNER_APPLICATION;
-  if (argvHasHermes(declaredArgv)) return TERMINAL_OWNER_VIEWPORT;
-  return argvHasTerminalApplication(declaredArgv) ? TERMINAL_OWNER_APPLICATION : TERMINAL_OWNER_VIEWPORT;
+  if (argvHasHermesTui(declaredArgv)) return { owner: TERMINAL_OWNER_APPLICATION, mode: 'hermes-tui' };
+  if (argvHasHermes(declaredArgv)) return { owner: TERMINAL_OWNER_VIEWPORT, mode: TERMINAL_OWNER_VIEWPORT };
+  const owner = argvHasTerminalApplication(declaredArgv) ? TERMINAL_OWNER_APPLICATION : TERMINAL_OWNER_VIEWPORT;
+  return { owner, mode: owner };
+}
+
+function terminalOwnerFromProcesses(meta = {}, processes = []) {
+  return terminalStateFromProcesses(meta, processes).owner;
 }
 
 function terminalOwner(session) {
-  return terminalOwnerFromProcesses(session?.meta, paneProcesses(session));
+  return session?.terminalOwner || terminalOwnerFromProcesses(session?.meta, session?.processSnapshot || []);
 }
 
-function refreshTerminalOwner(session) {
-  const owner = terminalOwner(session);
-  if (session.terminalOwner && session.terminalOwner !== owner) session.broadcast({ type: 'terminal-owner', owner });
-  session.terminalOwner = owner;
-  return owner;
+async function refreshTerminalOwner(session, forceLatest = false) {
+  if (session.terminalStatePromise) {
+    const owner = await session.terminalStatePromise;
+    return forceLatest ? refreshTerminalOwner(session) : owner;
+  }
+  let task;
+  task = (async () => {
+    try {
+      const processes = await paneProcesses(session);
+      if (processes === null) return terminalOwner(session);
+      session.processSnapshot = processes;
+      const next = terminalStateFromProcesses(session?.meta, processes);
+      if (session.terminalOwner !== next.owner || session.terminalMode !== next.mode) {
+        session.broadcast({ type: 'terminal-owner', owner: next.owner, mode: next.mode });
+      }
+      session.terminalOwner = next.owner;
+      session.terminalMode = next.mode;
+      return next.owner;
+    } finally {
+      if (session.terminalStatePromise === task) session.terminalStatePromise = null;
+    }
+  })();
+  session.terminalStatePromise = task;
+  return task;
 }
 
-function scheduleTerminalOwnerRefresh(session) {
+function scheduleTerminalOwnerRefresh(session, delay = 500) {
   if (!session.clients?.size || session.terminalOwnerTimer) return;
   session.terminalOwnerTimer = setTimeout(() => {
     session.terminalOwnerTimer = null;
-    refreshTerminalOwner(session);
-  }, 250);
+    void refreshTerminalOwner(session, true);
+  }, delay);
   session.terminalOwnerTimer.unref?.();
 }
 
@@ -945,17 +978,30 @@ function clearSessionTimers(session) {
     session.tmuxRefreshTimer = null;
     for (const ws of session.clients || []) {
       clearTimeout(ws.hydrationTimer);
+      clearTimeout(ws.hydrationDeadlineTimer);
       ws.hydrationTimer = null;
+      ws.hydrationDeadlineTimer = null;
       ws.hydrating = false;
       ws.hydrationConfirming = false;
       ws.hydrationReplay = null;
       ws.hydrationStartedAt = 0;
+      ws.hydrationAttempts = 0;
+      ws.hydrationBusy = false;
+      ws.hydrationOutput = [];
+      ws.hydrationOutputBytes = 0;
+      ws.finishHydration = null;
     }
+    for (const publisher of session.hermesEventPublishers || []) {
+      try { publisher.close(4000, 'session closed'); } catch {}
+    }
+    session.hermesEventPublishers?.clear();
+    session.hermesEventPublisher = null;
+    session.hermesEventSessionId = null;
   }
 }
 
 function activeHermesResumeId(session) {
-  for (const record of paneProcesses(session)) {
+  for (const record of session?.processSnapshot || []) {
     const activeId = hermesActiveSessionIdFromEnv(record.env);
     if (activeId) return activeId;
     const resumedId = hermesResumeIdFromArgv(record.argv);
@@ -1030,6 +1076,16 @@ function sanitizeHermesEvent(frame) {
   return null;
 }
 
+function acceptHermesEvent(session, event) {
+  const lifecycleId = String(event?.session_id || '').trim();
+  if (!lifecycleId) return !session.hermesEventSessionId;
+  if (!session.hermesEventSessionId) {
+    session.hermesEventSessionId = lifecycleId;
+    return true;
+  }
+  return session.hermesEventSessionId === lifecycleId;
+}
+
 function hermesWorkingEvent(running) {
   const value = Boolean(running);
   return {
@@ -1040,19 +1096,19 @@ function hermesWorkingEvent(running) {
 }
 
 function tmuxHas(name) {
-  try { execFileSync(TMUX_CMD, tmuxArgs(['has-session', '-t', name]), { stdio: 'ignore' }); return true; }
+  try { execFileSync(TMUX_CMD, tmuxArgs(['has-session', '-t', name]), { stdio: 'ignore', timeout: TMUX_COMMAND_TIMEOUT_MS }); return true; }
   catch { return false; }
 }
 
 function tmuxSetDefaults(name = '') {
-  try { execFileSync(TMUX_CMD, tmuxArgs(['set-option', '-g', 'status', 'off']), { stdio: 'ignore' }); } catch {}
+  try { execFileSync(TMUX_CMD, tmuxArgs(['set-option', '-g', 'status', 'off']), { stdio: 'ignore', timeout: TMUX_COMMAND_TIMEOUT_MS }); } catch {}
   try {
-    const features = execFileSync(TMUX_CMD, tmuxArgs(['show-options', '-gv', 'terminal-features']), { encoding: 'utf8' });
+    const features = execFileSync(TMUX_CMD, tmuxArgs(['show-options', '-gv', 'terminal-features']), { encoding: 'utf8', timeout: TMUX_COMMAND_TIMEOUT_MS });
     const hasHyperlinks = features.split(/\r?\n/).some(line => line.startsWith('xterm*:') && line.split(':').includes('hyperlinks'));
-    if (!hasHyperlinks) execFileSync(TMUX_CMD, tmuxArgs(['set-option', '-as', 'terminal-features', ',xterm*:hyperlinks']), { stdio: 'ignore' });
+    if (!hasHyperlinks) execFileSync(TMUX_CMD, tmuxArgs(['set-option', '-as', 'terminal-features', ',xterm*:hyperlinks']), { stdio: 'ignore', timeout: TMUX_COMMAND_TIMEOUT_MS });
   } catch {}
   if (name) {
-    try { execFileSync(TMUX_CMD, tmuxArgs(['set-option', '-t', name, 'status', 'off']), { stdio: 'ignore' }); } catch {}
+    try { execFileSync(TMUX_CMD, tmuxArgs(['set-option', '-t', name, 'status', 'off']), { stdio: 'ignore', timeout: TMUX_COMMAND_TIMEOUT_MS }); } catch {}
   }
 }
 
@@ -1063,61 +1119,72 @@ function tmuxNew(name, cwd, launch, sessionId, config = {}, command = '') {
     ...(bridgeEnv.some(value => value.startsWith('PASSIDECK_WORKING_ENDPOINT=')) ? [] : ['-u', 'PASSIDECK_WORKING_ENDPOINT']),
     ...(bridgeEnv.some(value => value.startsWith('HERMES_TUI_SIDECAR_URL=')) ? [] : ['-u', 'HERMES_TUI_SIDECAR_URL'])
   ];
-  execFileSync(TMUX_CMD, tmuxArgs(['new-session', '-d', '-s', name, '-c', cwd, 'env', ...inheritedEnvCleanup, `PASSIDECK_SESSION=${sessionId}`, `HERMES_SESSION_SOURCE=${hermesSource(sessionId)}`, ...bridgeEnv, 'PROMPT_TOOLKIT_NO_CPR=1', 'PROMPT_TOOLKIT_BELL=false', launch.file, ...launch.args]), { stdio: 'ignore' });
+  execFileSync(TMUX_CMD, tmuxArgs(['new-session', '-d', '-s', name, '-c', cwd, 'env', ...inheritedEnvCleanup, `PASSIDECK_SESSION=${sessionId}`, `HERMES_SESSION_SOURCE=${hermesSource(sessionId)}`, ...bridgeEnv, 'PROMPT_TOOLKIT_NO_CPR=1', 'PROMPT_TOOLKIT_BELL=false', launch.file, ...launch.args]), { stdio: 'ignore', timeout: TMUX_COMMAND_TIMEOUT_MS });
   tmuxSetDefaults(name);
 }
 
 function tmuxKill(name) {
-  try { execFileSync(TMUX_CMD, tmuxArgs(['kill-session', '-t', name]), { stdio: 'ignore' }); } catch {}
+  try { execFileSync(TMUX_CMD, tmuxArgs(['kill-session', '-t', name]), { stdio: 'ignore', timeout: TMUX_COMMAND_TIMEOUT_MS }); } catch {}
 }
 
-function tmuxClients() {
+async function tmuxClientsAsync() {
   try {
-    return execFileSync(TMUX_CMD, tmuxArgs([
+    const { stdout } = await execFileAsync(TMUX_CMD, tmuxArgs([
       'list-clients', '-F', '#{client_name}\t#{client_tty}\t#{client_written}'
-    ]), { encoding: 'utf8' }).trim().split(/\r?\n/).filter(Boolean).map(line => line.split('\t'));
+    ]), { encoding: 'utf8', timeout: TMUX_COMMAND_TIMEOUT_MS });
+    return String(stdout).trim().split(/\r?\n/).filter(Boolean).map(line => line.split('\t'));
   } catch { return []; }
 }
 
-function tmuxOutputClient(session) {
-  const clients = tmuxClients();
+async function tmuxOutputClientAsync(session) {
+  const clients = await tmuxClientsAsync();
   const expectedTty = String(session.tmuxClientTty || '');
   const match = clients.find(([, tty]) => tty === expectedTty);
   return match?.[0] || '';
 }
 
-function captureTmuxHistory(session, start) {
-  let data = execFileSync(TMUX_CMD, tmuxArgs([
-    'capture-pane', '-e', '-p', '-S', start, '-t', session.tmuxName
-  ]), { encoding: 'utf8', maxBuffer: TMUX_HISTORY_REPLAY_MAX_BYTES }).replace(/\r?\n$/, '');
-  const cursor = execFileSync(TMUX_CMD, tmuxArgs([
-    'display-message', '-p', '-t', session.tmuxName, '#{cursor_x}\t#{cursor_y}'
-  ]), { encoding: 'utf8' }).trim().split('\t').map(Number);
+async function captureTmuxHistory(session, start) {
+  const clientWrittenBefore = await tmuxClientWritten(session);
+  if (!Number.isFinite(clientWrittenBefore)) throw Object.assign(new Error('tmux client counter unavailable'), { code: 'tmux client counter unavailable' });
+  const [{ stdout: capture }, { stdout: cursorText }] = await Promise.all([
+    execFileAsync(TMUX_CMD, tmuxArgs([
+      'capture-pane', '-e', '-p', '-S', start, '-t', session.tmuxName
+    ]), { encoding: 'utf8', maxBuffer: TMUX_HISTORY_REPLAY_MAX_BYTES, timeout: TMUX_COMMAND_TIMEOUT_MS }),
+    execFileAsync(TMUX_CMD, tmuxArgs([
+      'display-message', '-p', '-t', session.tmuxName, '#{cursor_x}\t#{cursor_y}'
+    ]), { encoding: 'utf8', timeout: TMUX_COMMAND_TIMEOUT_MS })
+  ]);
+  const clientWritten = await tmuxClientWritten(session);
+  if (!Number.isFinite(clientWritten)) throw Object.assign(new Error('tmux client counter unavailable'), { code: 'tmux client counter unavailable' });
+  const data = String(capture).replace(/\r?\n$/, '');
+  const cursor = String(cursorText).trim().split('\t').map(Number);
   const cursorX = Number.isFinite(cursor[0]) ? cursor[0] : 0;
   const cursorY = Number.isFinite(cursor[1]) ? cursor[1] : 0;
-  return { data, cursorX, cursorY };
+  return { data, cursorX, cursorY, clientWrittenBefore, clientWritten };
 }
 
-function tmuxClientWritten(session) {
+async function tmuxClientWritten(session) {
   const expectedTty = String(session.tmuxClientTty || '');
-  const match = tmuxClients().find(([, tty]) => tty === expectedTty);
+  const match = (await tmuxClientsAsync()).find(([, tty]) => tty === expectedTty);
   const raw = String(match?.[2] || '');
   if (!/^\d+$/.test(raw)) return null;
   const value = Number(raw);
   return Number.isFinite(value) ? value : null;
 }
 
-function tmuxCapturePane(session, owner = terminalOwner(session)) {
-  if (owner !== TERMINAL_OWNER_VIEWPORT) return { kind: 'live-only', owner, data: TERMINAL_REPLAY_DISABLED };
-  if (!session?.tmuxName) return { kind: 'capture-unavailable', owner, data: TERMINAL_REPLAY_DISABLED, reason: 'tmux pane unavailable' };
-  if (!tmuxOutputClient(session)) return { kind: 'capture-unavailable', owner, data: TERMINAL_REPLAY_DISABLED, reason: 'exact tmux client unavailable' };
+async function tmuxCapturePane(session, owner = terminalOwner(session)) {
+  const mode = session?.terminalMode || owner;
+  if (owner !== TERMINAL_OWNER_VIEWPORT) return { kind: 'live-only', owner, mode, data: TERMINAL_REPLAY_DISABLED };
+  if (!session?.tmuxName) return { kind: 'capture-unavailable', owner, mode, data: TERMINAL_REPLAY_DISABLED, reason: 'tmux pane unavailable' };
+  const outputClient = await tmuxOutputClientAsync(session);
+  if (!outputClient) return { kind: 'capture-unavailable', owner, mode, data: TERMINAL_REPLAY_DISABLED, reason: 'tmux client not found' };
   try {
-    return { kind: 'tmux-history', owner, ...captureTmuxHistory(session, '-'), truncated: false };
+    return { kind: 'tmux-history', owner, mode, ...await captureTmuxHistory(session, '-'), truncated: false };
   } catch (err) {
     try {
-      return { kind: 'tmux-history', owner, ...captureTmuxHistory(session, `-${TMUX_HISTORY_REPLAY_LINES}`), truncated: true };
+      return { kind: 'tmux-history', owner, mode, ...await captureTmuxHistory(session, `-${TMUX_HISTORY_REPLAY_LINES}`), truncated: true };
     } catch {
-      return { kind: 'capture-unavailable', owner, data: TERMINAL_REPLAY_DISABLED, reason: String(err?.code || 'capture failed').slice(0, 80) };
+      return { kind: 'capture-unavailable', owner, mode, data: TERMINAL_REPLAY_DISABLED, reason: String(err?.code || 'capture failed').slice(0, 80) };
     }
   }
 }
@@ -1144,20 +1211,32 @@ function isWheelMouseInput(data) {
   return matched;
 }
 
+function queueTerminalInput(session, input, delay = 0) {
+  const write = async () => {
+    if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+    if (isWheelMouseInput(input) && await refreshTerminalOwner(session, true) === TERMINAL_OWNER_VIEWPORT) return;
+    if (!session.pty) throw new Error('Session not available');
+    session.pty.write(input);
+  };
+  const task = (session.inputQueue || Promise.resolve()).then(write);
+  session.inputQueue = task.catch(() => {});
+  return task;
+}
+
 function tmuxRefreshClient(session) {
   if (!session?.tmuxName || session.tmuxRefreshTimer) return;
   const delay = Math.max(0, 100 - (Date.now() - (session.lastTmuxRefreshAt || 0)));
   session.tmuxRefreshTimer = setTimeout(() => {
     session.tmuxRefreshTimer = null;
     session.lastTmuxRefreshAt = Date.now();
-    let clients = [];
-    try {
-      clients = execFileSync(TMUX_CMD, tmuxArgs(['list-clients', '-t', session.tmuxName, '-F', '#{client_name}']), { encoding: 'utf8' })
-        .split(/\r?\n/).filter(Boolean).slice(0, 4);
-    } catch {}
-    for (const client of clients) {
-      try { execFileSync(TMUX_CMD, tmuxArgs(['refresh-client', '-t', client]), { stdio: 'ignore' }); } catch {}
-    }
+    void (async () => {
+      let clients = [];
+      try {
+        const { stdout } = await execFileAsync(TMUX_CMD, tmuxArgs(['list-clients', '-t', session.tmuxName, '-F', '#{client_name}']), { encoding: 'utf8', timeout: TMUX_COMMAND_TIMEOUT_MS });
+        clients = String(stdout).split(/\r?\n/).filter(Boolean).slice(0, 4);
+      } catch {}
+      await Promise.allSettled(clients.map(client => execFileAsync(TMUX_CMD, tmuxArgs(['refresh-client', '-t', client]), { timeout: TMUX_COMMAND_TIMEOUT_MS })));
+    })();
   }, delay);
   session.tmuxRefreshTimer.unref?.();
 }
@@ -1170,26 +1249,50 @@ function startTerminalHydration(session, ws) {
   ws.hydrationConfirming = false;
   ws.hydrationReplay = null;
   ws.hydrationStartedAt = Date.now();
+  ws.hydrationAttempts = 0;
+  ws.hydrationBusy = false;
   ws.shellHistorySent = false;
+  ws.hydrationStartSequence = session.outputBytes;
+  ws.hydrationOutput = [];
+  ws.hydrationOutputBytes = 0;
 
   function finish() {
     clearTimeout(ws.hydrationTimer);
+    clearTimeout(ws.hydrationDeadlineTimer);
     ws.hydrationTimer = null;
+    ws.hydrationDeadlineTimer = null;
     ws.hydrating = false;
     ws.hydrationConfirming = false;
     ws.hydrationReplay = null;
     ws.hydrationStartedAt = 0;
+    ws.hydrationAttempts = 0;
+    ws.hydrationBusy = false;
+    ws.hydrationOutput = [];
+    ws.hydrationOutputBytes = 0;
+    ws.finishHydration = null;
+  }
+
+  function flushHydrationOutput(boundary) {
+    for (const frame of ws.hydrationOutput) {
+      if (frame.sequence > boundary && !sendJson(ws, { type: 'output', data: frame.data, sequence: frame.sequence })) break;
+    }
+    ws.hydrationOutput = [];
+    ws.hydrationOutputBytes = 0;
   }
 
   function sendFrame(replay, sequence) {
     ws.shellHistorySent = replay.kind === 'tmux-history';
-    ws.send(JSON.stringify({ type: 'replay', attachId, sequence, outputBoundary: sequence, ...replay }));
+    const sent = sendJson(ws, { type: 'replay', attachId, sequence, outputBoundary: sequence, ...replay });
+    if (sent) flushHydrationOutput(sequence);
+    return sent;
   }
 
   function fallback(reason) {
-    const sequence = session.outputBytes;
+    if (ws.readyState !== 1) return finish();
+    const sequence = ws.hydrationStartSequence;
+    const owner = terminalOwner(session);
     sendFrame({
-      kind: 'capture-unavailable', owner: refreshTerminalOwner(session), data: TERMINAL_REPLAY_DISABLED,
+      kind: 'capture-unavailable', owner, mode: session.terminalMode || owner, data: TERMINAL_REPLAY_DISABLED,
       reason
     }, sequence);
     finish();
@@ -1197,24 +1300,27 @@ function startTerminalHydration(session, ws) {
 
   function scheduleSettle() {
     clearTimeout(ws.hydrationTimer);
-    ws.hydrationTimer = setTimeout(settle, TMUX_HYDRATION_SETTLE_MS);
+    ws.hydrationTimer = setTimeout(() => void settle(), TMUX_HYDRATION_SETTLE_MS);
     ws.hydrationTimer.unref?.();
   }
 
-  function settle() {
-    if (ws.readyState !== 1) return;
+  async function settle() {
+    if (ws.readyState !== 1 || !ws.hydrating || ws.attachId !== attachId) return;
     if (Date.now() - ws.hydrationStartedAt >= TMUX_HYDRATION_MAX_MS) return fallback('tmux hydration timeout');
-    const written = tmuxClientWritten(session);
+    const written = await tmuxClientWritten(session);
+    if (ws.readyState !== 1 || !ws.hydrating || ws.attachId !== attachId) return;
     if (written === null) return fallback('tmux client counter unavailable');
-    if (session.outputBytes !== ws.hydrationSequence || written !== session.outputBytes) {
+    if (written !== ws.hydrationSequence || session.outputBytes !== ws.hydrationSequence) {
       ws.hydrationConfirming = false;
-      ws.hydrationTimer = setTimeout(hydrate, 10);
+      if (ws.hydrationAttempts >= TMUX_HYDRATION_MAX_ATTEMPTS) return fallback('tmux hydration remained busy');
+      const delay = Math.min(1000, 25 * (2 ** Math.max(0, ws.hydrationAttempts - 1)));
+      ws.hydrationTimer = setTimeout(() => void hydrate(), delay);
       ws.hydrationTimer.unref?.();
       return;
     }
     if (!ws.hydrationConfirming) {
       ws.hydrationConfirming = true;
-      hydrate();
+      void hydrate();
       return;
     }
     if (!ws.hydrationReplay) return fallback('tmux replay unavailable');
@@ -1222,21 +1328,40 @@ function startTerminalHydration(session, ws) {
     finish();
   }
 
-  function hydrate() {
-    if (ws.readyState !== 1) return;
-    const replay = tmuxCapturePane(session, refreshTerminalOwner(session));
-    const sequence = session.outputBytes;
-    ws.hydrationSequence = sequence;
-    if (replay.kind !== 'tmux-history') {
-      sendFrame(replay, sequence);
-      finish();
-      return;
+  async function hydrate() {
+    if (ws.readyState !== 1 || !ws.hydrating || ws.attachId !== attachId || ws.hydrationBusy) return;
+    ws.hydrationBusy = true;
+    try {
+      const owner = ws.hydrationAttempts === 0 ? await refreshTerminalOwner(session, true) : terminalOwner(session);
+      const replay = await tmuxCapturePane(session, owner);
+      if (ws.readyState !== 1 || !ws.hydrating || ws.attachId !== attachId) return;
+      const sequence = replay.kind === 'tmux-history' ? replay.clientWritten : ws.hydrationStartSequence;
+      ws.hydrationSequence = sequence;
+      ws.hydrationAttempts += 1;
+      if (replay.kind !== 'tmux-history') {
+        sendFrame(replay, sequence);
+        finish();
+        return;
+      }
+      if (replay.clientWrittenBefore !== replay.clientWritten) {
+        ws.hydrationConfirming = false;
+        if (ws.hydrationAttempts >= TMUX_HYDRATION_MAX_ATTEMPTS) return fallback('tmux hydration remained busy');
+        const delay = Math.min(1000, 25 * (2 ** Math.max(0, ws.hydrationAttempts - 1)));
+        ws.hydrationTimer = setTimeout(() => void hydrate(), delay);
+        ws.hydrationTimer.unref?.();
+        return;
+      }
+      ws.hydrationReplay = { replay, sequence };
+      scheduleSettle();
+    } finally {
+      ws.hydrationBusy = false;
     }
-    ws.hydrationReplay = { replay, sequence };
-    scheduleSettle();
   }
 
-  hydrate();
+  ws.finishHydration = fallback;
+  ws.hydrationDeadlineTimer = setTimeout(() => fallback('tmux hydration timeout'), TMUX_HYDRATION_MAX_MS);
+  ws.hydrationDeadlineTimer.unref?.();
+  void hydrate();
 }
 
 function attachTmux(session) {
@@ -1261,11 +1386,23 @@ function attachTmux(session) {
     const bytes = Buffer.from(normalized);
     session.outputBytes += bytes.length;
     for (const ws of session.clients) {
-      if (ws.readyState === 1 && !ws.hydrating) ws.send(JSON.stringify({ type: 'output', data: normalized, sequence: session.outputBytes }));
+      if (ws.readyState !== 1) continue;
+      if (ws.hydrating) {
+        ws.hydrationOutput.push({ data: normalized, sequence: session.outputBytes });
+        ws.hydrationOutputBytes += bytes.length;
+        if (ws.hydrationOutputBytes > WS_BACKPRESSURE_MAX_BYTES) {
+          try { ws.close(1013, 'hydration output backlog'); } catch {}
+        }
+        continue;
+      }
+      sendJson(ws, { type: 'output', data: normalized, sequence: session.outputBytes });
     }
     scheduleTerminalOwnerRefresh(session);
   });
   term.onExit(({ exitCode, signal }) => {
+    for (const ws of session.clients) {
+      if (ws.hydrating) ws.finishHydration?.('pty exited during hydration');
+    }
     session.pty = null;
     session.pid = null;
     clearSessionTimers(session);
@@ -1480,23 +1617,24 @@ function createServer(config = loadConfig()) {
       tmuxNew(name, resolvedCwd, launch, session.id, config, command || config.shell || '/bin/bash');
       attachTmux(session);
       if (db && dbModule) dbModule.upsertSession(db, session);
-      if (launch.initialInput) setTimeout(() => session.pty?.write(launch.initialInput), 250);
+      if (launch.initialInput) void queueTerminalInput(session, launch.initialInput, 250).catch(() => {});
       console.log(`[tmux] ${session.id} attach=${session.pid} session=${name} command=${session.meta.command}`);
       res.json(session.toJSON());
     } catch (err) {
       clearSessionTimers(session);
+      tmuxKill(tmuxName(session.id));
       sessions.remove(session.id);
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.post('/api/sessions/:id/input', (req, res) => {
+  app.post('/api/sessions/:id/input', async (req, res) => {
     const session = sessions.get(req.params.id);
     if (!session?.pty) return res.status(404).json({ error: 'Session not found' });
     const text = String(req.body?.text ?? req.body?.data ?? '');
     if (Buffer.byteLength(text) > TERMINAL_MAX_INPUT_BYTES) return res.status(413).json({ error: 'Terminal input too large' });
-    session.pty.write(text);
-    res.json({ ok: true });
+    try { await queueTerminalInput(session, text); res.json({ ok: true }); }
+    catch (err) { res.status(500).json({ error: err.message }); }
   });
 
   app.post('/api/sessions/:id/resize', (req, res) => {
@@ -1532,13 +1670,22 @@ function createServer(config = loadConfig()) {
       const session = sessions.get(publisherSessionId);
       if (!session) return ws.close(4001, 'Session not found');
       if (!session.hermesEventPublishers) session.hermesEventPublishers = new Set();
+      for (const oldPublisher of session.hermesEventPublishers) {
+        try { oldPublisher.close(4000, 'superseded'); } catch {}
+      }
+      session.hermesEventPublishers.clear();
       session.hermesEventPublishers.add(ws);
-      session.broadcast({ type: 'hermes-events', connected: true, running: session.hermesRunning ?? null });
+      session.hermesEventPublisher = ws;
+      session.hermesEventSessionId = null;
+      session.hermesRunning = null;
+      session.broadcast({ type: 'hermes-events', connected: true, running: null });
       ws.on('message', raw => {
+        if (session.hermesEventPublisher !== ws) return;
         let frame;
         try { frame = JSON.parse(raw.toString()); } catch { return; }
         const event = sanitizeHermesEvent(frame);
         if (!event) return;
+        if (!acceptHermesEvent(session, event)) return;
         if (event.type === 'message.start') {
           session.hermesRunning = true;
           session.hermesWorkingTurnId = null;
@@ -1565,7 +1712,9 @@ function createServer(config = loadConfig()) {
       });
       ws.on('close', () => {
         session.hermesEventPublishers.delete(ws);
-        if (!session.hermesEventPublishers.size) {
+        if (session.hermesEventPublisher === ws) {
+          session.hermesEventPublisher = null;
+          session.hermesEventSessionId = null;
           session.hermesRunning = null;
           session.hermesWorkingTurnId = null;
           session.broadcast({ type: 'hermes-events', connected: false });
@@ -1577,23 +1726,21 @@ function createServer(config = loadConfig()) {
     const session = sessions.get(url.searchParams.get('session'));
     if (!session) return ws.close(4001, 'Session not found');
     session.clients.add(ws);
-    ws.send(JSON.stringify({ type: 'meta', session: session.toJSON() }));
-    if (session.hermesEventPublishers?.size) ws.send(JSON.stringify({ type: 'hermes-events', connected: true, running: session.hermesRunning ?? null }));
-    else if (typeof session.hermesRunning === 'boolean') ws.send(JSON.stringify({ type: 'hermes-event', event: hermesWorkingEvent(session.hermesRunning) }));
+    sendJson(ws, { type: 'meta', session: session.toJSON() });
+    if (session.hermesEventPublishers?.size) sendJson(ws, { type: 'hermes-events', connected: true, running: session.hermesRunning ?? null });
+    else if (typeof session.hermesRunning === 'boolean') sendJson(ws, { type: 'hermes-event', event: hermesWorkingEvent(session.hermesRunning) });
     startTerminalHydration(session, ws);
 
     ws.on('message', (raw) => {
       let msg;
       try { msg = JSON.parse(raw.toString()); } catch { return; }
-      if (msg.type === 'ping') return ws.send(JSON.stringify({ type: 'pong' }));
+      if (msg.type === 'ping') return sendJson(ws, { type: 'pong' });
       if (msg.type === 'replay-ack' && msg.attachId === ws.attachId) {
         ws.shellHistorySent = false;
         return;
       }
       if (msg.type === 'input' && session.pty) {
-        const input = String(msg.data || '');
-        if (isWheelMouseInput(input) && refreshTerminalOwner(session) === TERMINAL_OWNER_VIEWPORT) return;
-        session.pty.write(input);
+        void queueTerminalInput(session, String(msg.data || '')).catch(() => {});
       }
       if (msg.type === 'redraw' && session.pty) {
         if (ws.shellHistorySent) {
@@ -1613,11 +1760,18 @@ function createServer(config = loadConfig()) {
 
     ws.on('close', () => {
       clearTimeout(ws.hydrationTimer);
+      clearTimeout(ws.hydrationDeadlineTimer);
       ws.hydrationTimer = null;
+      ws.hydrationDeadlineTimer = null;
       ws.hydrating = false;
       ws.hydrationConfirming = false;
       ws.hydrationReplay = null;
       ws.hydrationStartedAt = 0;
+      ws.hydrationAttempts = 0;
+      ws.hydrationBusy = false;
+      ws.hydrationOutput = [];
+      ws.hydrationOutputBytes = 0;
+      ws.finishHydration = null;
       session.clients.delete(ws);
     });
   });
@@ -1642,7 +1796,7 @@ function createServer(config = loadConfig()) {
   return { app, server, wss, sessions, close };
 }
 
-module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, isPlainShellCommand, isWheelMouseInput, splitCommand, tmuxOutputClient, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings, UPLOAD_MIME_ALLOWLIST };
+module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, acceptHermesEvent, isPlainShellCommand, isWheelMouseInput, splitCommand, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings, UPLOAD_MIME_ALLOWLIST };
 
 if (require.main === module) {
   const config = loadConfig();

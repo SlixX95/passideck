@@ -59,18 +59,35 @@ class CDP {
     this.ws.on('message', raw => {
       const msg = JSON.parse(raw.toString());
       if (!msg.id || !this.pending.has(msg.id)) return;
-      const { resolve, reject } = this.pending.get(msg.id);
+      const { resolve, reject, timer } = this.pending.get(msg.id);
+      clearTimeout(timer);
       this.pending.delete(msg.id);
       msg.error ? reject(new Error(msg.error.message)) : resolve(msg.result || {});
     });
+    this.ws.on('close', () => this.rejectPending(new Error('CDP socket closed')));
+    this.ws.on('error', err => this.rejectPending(err));
   }
   open() { return new Promise((resolve, reject) => { this.ws.once('open', resolve); this.ws.once('error', reject); }); }
-  send(method, params = {}, sessionId) {
-    const id = this.id++;
-    this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
-    return new Promise((resolve, reject) => this.pending.set(id, { resolve, reject }));
+  rejectPending(error) {
+    for (const { reject, timer } of this.pending.values()) {
+      clearTimeout(timer);
+      reject(error);
+    }
+    this.pending.clear();
   }
-  close() { this.ws.close(); }
+  send(method, params = {}, sessionId, timeout = 30000) {
+    const id = this.id++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`CDP request timed out: ${method}`));
+      }, timeout);
+      this.pending.set(id, { resolve, reject, timer });
+      try { this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })); }
+      catch (err) { clearTimeout(timer); this.pending.delete(id); reject(err); }
+    });
+  }
+  close() { try { this.ws.close(); } catch {} }
 }
 async function evaluate(cdp, sid, expression) {
   const result = await cdp.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, sid);
@@ -84,7 +101,7 @@ function bufferExpression(id) {
     const buffer = entry.term.buffer.active;
     const lines = [];
     for (let i = 0; i < buffer.length; i++) lines.push(buffer.getLine(i)?.translateToString(false) || '');
-    return { text: lines.join('\\n'), baseY: buffer.baseY, viewportY: buffer.viewportY, type: buffer.type, owner: entry.terminalOwner, settled: !entry.outputWriteInFlight && entry.pendingReplay === null && !entry.outputBuffer };
+    return { text: lines.join('\\n'), baseY: buffer.baseY, viewportY: buffer.viewportY, type: buffer.type, owner: entry.terminalOwner, settled: !entry.outputWriteInFlight && entry.pendingReplay === null && entry.outputBuffer.length === 0 };
   })()`;
 }
 
@@ -178,9 +195,59 @@ function bufferExpression(id) {
       assert.strictEqual((raceState.text.match(new RegExp(line, 'g')) || []).length, 1, `${line} must cross capture/live boundary exactly once`);
     }
 
+    shellSession.pty.write('CURSOR-REPLAY-CHECK');
+    shellSession.pty.write('\x1b[D\x1b[D\x1b[D\x1b[D\x1b[D');
+    await sleep(100);
+    const cursorBefore = await evaluate(cdp, sid, `(() => { const entry = state.sessions.get(${JSON.stringify(shell.id)}); return { x: entry.term.buffer.active.cursorX, attachCount: entry.attachCount }; })()`);
+    await evaluate(cdp, sid, `state.sessions.get(${JSON.stringify(shell.id)}).ws.close(4000, 'cursor replay test'); true`);
+    await sleep(100);
+    await evaluate(cdp, sid, `reconnect(${JSON.stringify(shell.id)}); true`);
+    const cursorAfter = await waitFor(async () => {
+      const value = await evaluate(cdp, sid, `(() => { const entry = state.sessions.get(${JSON.stringify(shell.id)}); return { x: entry.term.buffer.active.cursorX, attachCount: entry.attachCount, settled: !entry.outputWriteInFlight && entry.pendingReplay === null }; })()`);
+      return value.attachCount > cursorBefore.attachCount && value.settled ? value : null;
+    }, 'replay cursor restoration');
+    assert.strictEqual(cursorAfter.x, cursorBefore.x, JSON.stringify({ cursorBefore, cursorAfter }));
+    shellSession.pty.write('\x03');
+    await sleep(100);
+
     manualSession.pty.write('hermes --tui\r');
-    await waitFor(() => evaluate(cdp, sid, `state.sessions.get(${JSON.stringify(manual.id)})?.terminalOwner === 'application'`), 'manual Hermes TUI owner update');
+    await waitFor(() => evaluate(cdp, sid, `(() => { const entry = state.sessions.get(${JSON.stringify(manual.id)}); return entry?.terminalOwner === 'application' && entry.terminalMode === 'hermes-tui' && entry.el.classList.contains('hermes-tui'); })()`), 'manual Hermes TUI mode update');
     await evaluate(cdp, sid, `new Promise(resolve => state.sessions.get(${JSON.stringify(manual.id)}).term.write('\\x1b[?1049h\\x1b[?1000h\\x1b[?1006hMANUAL-TUI', resolve))`);
+    const copySemantics = await evaluate(cdp, sid, `(async () => {
+      const entry = state.sessions.get(${JSON.stringify(manual.id)});
+      const textarea = entry.el.querySelector('.xterm-helper-textarea');
+      const originalCopy = copyTextToClipboard;
+      copyTextToClipboard = async () => true;
+      try {
+        entry.term.selectAll();
+        const plain = { key: 'c', ctrlKey: true, shiftKey: false, metaKey: false, altKey: false, target: textarea, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopImmediatePropagation() { this.stopped = true; } };
+        handleTerminalCopyShortcut(plain);
+        const plainSelectionRetained = Boolean(entry.term.getSelection());
+        const shifted = { ...plain, shiftKey: true, prevented: false, stopped: false };
+        handleTerminalCopyShortcut(shifted);
+        await new Promise(resolve => setTimeout(resolve, 20));
+        return { plainPrevented: plain.prevented, plainStopped: plain.stopped, plainSelectionRetained, shiftedPrevented: shifted.prevented, shiftedStopped: shifted.stopped, selection: entry.term.getSelection() };
+      } finally {
+        copyTextToClipboard = originalCopy;
+      }
+    })()`);
+    assert.deepStrictEqual(copySemantics, { plainPrevented: false, plainStopped: false, plainSelectionRetained: true, shiftedPrevented: true, shiftedStopped: true, selection: '' });
+    const dynamicHermesEvents = await evaluate(cdp, sid, `(() => {
+      const id = ${JSON.stringify(manual.id)};
+      const entry = state.sessions.get(id);
+      entry.terminalOwner = 'viewport';
+      entry.terminalMode = 'viewport';
+      entry.el.classList.remove('hermes-tui');
+      applyHermesEvent(id, { type: 'hermes-event', event: { type: 'message.start', session_id: 'stale' } });
+      applyHermesEvent(id, { type: 'hermes-events', connected: true, running: null });
+      applyHermesEvent(id, { type: 'hermes-event', event: { type: 'message.start', session_id: 'current' } });
+      const queued = entry.pendingHermesEvents.length === 2 && entry.pendingHermesEvents[0].type === 'hermes-events' && !entry.working;
+      applyTerminalOwner(id, entry.term, 'application', 'hermes-tui');
+      const started = entry.working;
+      applyHermesEvent(id, { type: 'hermes-event', event: { type: 'message.complete' } });
+      return { queued, started, completed: !entry.working, declaredCommand: entry.session.meta.command, mode: entry.terminalMode };
+    })()`);
+    assert.deepStrictEqual(dynamicHermesEvents, { queued: true, started: true, completed: true, declaredCommand: '/bin/bash', mode: 'hermes-tui' });
     const tuiWheel = await waitFor(async () => {
       const value = await evaluate(cdp, sid, `(async () => {
         const entry = state.sessions.get(${JSON.stringify(manual.id)});
@@ -192,13 +259,15 @@ function bufferExpression(id) {
         const event = new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true, clientX: rect.left + 20, clientY: rect.top + 40 });
         target.dispatchEvent(event);
         await new Promise(resolve => setTimeout(resolve, 100));
-        const result = { owner: entry.terminalOwner, type: entry.term.buffer.active.type, before, after: entry.term.buffer.active.viewportY, leaked };
+        const result = { owner: entry.terminalOwner, mode: entry.terminalMode, tuiClass: entry.el.classList.contains('hermes-tui'), type: entry.term.buffer.active.type, before, after: entry.term.buffer.active.viewportY, leaked };
         disposable.dispose();
         return result;
       })()`);
       return value.leaked.length ? value : null;
     }, 'manual Hermes TUI wheel delivery');
     assert.strictEqual(tuiWheel.owner, 'application');
+    assert.strictEqual(tuiWheel.mode, 'hermes-tui');
+    assert.strictEqual(tuiWheel.tuiClass, true);
     assert.strictEqual(tuiWheel.type, 'alternate');
     assert.strictEqual(tuiWheel.after, tuiWheel.before);
     assert.ok(tuiWheel.leaked.every(data => /^\x1b\[<6[45];\d+;\d+M$/.test(data)), JSON.stringify(tuiWheel));
@@ -230,9 +299,35 @@ function bufferExpression(id) {
     assert.strictEqual(tuiTouch.canceled, false, JSON.stringify(tuiTouch));
 
     manualSession.pty.write('\x03');
-    await waitFor(() => evaluate(cdp, sid, `(() => { const entry = state.sessions.get(${JSON.stringify(manual.id)}); return entry?.terminalOwner === 'viewport' && entry.term.buffer.active.type === 'normal'; })()`), 'owner and normal buffer return after TUI exit', 15000);
+    await waitFor(() => evaluate(cdp, sid, `(() => { const entry = state.sessions.get(${JSON.stringify(manual.id)}); return entry?.terminalOwner === 'viewport' && entry.terminalMode === 'viewport' && !entry.el.classList.contains('hermes-tui') && entry.term.buffer.active.type === 'normal'; })()`), 'mode and normal buffer return after TUI exit', 15000);
 
-    const result = { shellBaseY: reconnectState.baseY, shellWheel, normalBaseY: normalState.baseY, tuiWheel, sessions: ids.length };
+    const backlogResync = await evaluate(cdp, sid, `(() => {
+      const id = ${JSON.stringify(manual.id)};
+      const entry = state.sessions.get(id);
+      const original = { ws: entry.ws, outputBuffer: entry.outputBuffer, outputBufferChars: entry.outputBufferChars, outputGeneration: entry.outputGeneration, outputWriteInFlight: entry.outputWriteInFlight, outputFrameHandle: entry.outputFrameHandle };
+      let closed = null;
+      try {
+        entry.ws = { close(code, reason) { closed = { code, reason }; } };
+        entry.outputBuffer = [];
+        entry.outputBufferChars = 0;
+        entry.outputWriteInFlight = true;
+        queueTerminalOutput(id, entry.term, 'X'.repeat(TERM_OUTPUT_BUFFER_MAX_CHARS + 1));
+        return { closed, bufferChars: entry.outputBufferChars, generationDelta: entry.outputGeneration - original.outputGeneration };
+      } finally {
+        entry.ws = original.ws;
+        entry.outputBuffer = original.outputBuffer;
+        entry.outputBufferChars = original.outputBufferChars;
+        entry.outputGeneration = original.outputGeneration;
+        entry.outputWriteInFlight = original.outputWriteInFlight;
+        entry.outputFrameHandle = original.outputFrameHandle;
+        entry.outputFlushTimer = null;
+        entry.snapshotTimer = null;
+        scheduleTerminalSnapshot(id);
+      }
+    })()`);
+    assert.deepStrictEqual(backlogResync, { closed: { code: 4002, reason: 'client output backlog' }, bufferChars: 0, generationDelta: 1 });
+
+    const result = { shellBaseY: reconnectState.baseY, shellWheel, normalBaseY: normalState.baseY, tuiWheel, backlogResync, sessions: ids.length };
     console.log(`browser-scroll-cdp ok ${JSON.stringify(result)}`);
   } finally {
     if (cdp && targetId) {
