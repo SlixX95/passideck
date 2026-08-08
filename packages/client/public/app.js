@@ -3338,6 +3338,11 @@ function createPanel(session, opts = {}) {
   term.loadAddon(new WebLinksAddon.WebLinksAddon(handleTerminalLink));
   const termEl = el.querySelector('.terminal');
   term.open(termEl);
+  term.attachCustomKeyEventHandler(event => {
+    const entry = state.sessions.get(id);
+    if (event.type === 'keydown' && event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === 'z' && isHermesTuiEntry(entry)) return false;
+    return true;
+  });
   installTerminalWheelScroll(termEl, term, session);
   const dragSelectionCleanup = installTerminalDragSelection(termEl, term, session);
 
@@ -3482,8 +3487,11 @@ function applyTerminalOwner(id, term, owner, mode = owner) {
     const pendingHermesEvents = entry.pendingHermesEvents.splice(0);
     for (const message of pendingHermesEvents) applyHermesEvent(id, message);
   }
-  if (owner === 'viewport' && previous === 'application' && term.buffer?.active?.type === 'alternate') {
-    queueTerminalOutput(id, term, '\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l');
+  if (owner === 'viewport' && previous === 'application') {
+    const mouseService = term?._core?.coreMouseService;
+    if (mouseService) mouseService.activeProtocol = 'NONE';
+    const leaveAlternate = term.buffer?.active?.type === 'alternate' ? '\x1b[?1049l' : '';
+    queueTerminalOutput(id, term, `\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l${leaveAlternate}`);
   }
 }
 

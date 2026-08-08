@@ -32,7 +32,7 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
 
 (async () => {
   try {
-    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, acceptHermesEvent, isPlainShellCommand, isWheelMouseInput, splitCommand, parseCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount } = require('../packages/server/src/index');
+    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, parseCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount } = require('../packages/server/src/index');
     assert.strictEqual(
       hermesResumeIdFromArgv(['/venv/bin/python3', '/venv/bin/hermes', '--resume', '20260716_180100_5dbdcf']),
       '20260716_180100_5dbdcf',
@@ -116,14 +116,18 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
       'application',
       'a real foreground child process group must retain application wheel ownership'
     );
-    assert.strictEqual(isWheelMouseInput('\x1b[<64;10;20M'), true, 'SGR wheel input must be recognized');
-    assert.strictEqual(isWheelMouseInput('\x1b[<68;10;20M'), true, 'modifier-encoded SGR wheel input must be recognized');
-    assert.strictEqual(isWheelMouseInput('\x1b[M`!!'), true, 'X10 wheel input must be recognized');
-    assert.strictEqual(isWheelMouseInput('\x1b[Md!!'), true, 'modifier-encoded X10 wheel input must be recognized');
-    assert.strictEqual(isWheelMouseInput('\x1b[96;10;20M'), true, 'URXVT wheel input must be recognized');
-    assert.strictEqual(isWheelMouseInput('\x1b[100;10;20M'), true, 'modifier-encoded URXVT wheel input must be recognized');
-    assert.strictEqual(isWheelMouseInput('\x1b[A'), false, 'ordinary arrow keys must not be mistaken for wheel input');
-    assert.strictEqual(isWheelMouseInput('\x1b[M !!'), false, 'ordinary X10 mouse buttons must not be mistaken for wheel input');
+    assert.strictEqual(isMouseInput('\x1b[<64;10;20M'), true, 'SGR wheel input must be recognized');
+    assert.strictEqual(isMouseInput('\x1b[<35;10;20M'), true, 'SGR motion input must be recognized after a TUI returns to its shell');
+    assert.strictEqual(isMouseInput('\x1b[<0;10;20M'), true, 'SGR button input must be recognized after a TUI returns to its shell');
+    assert.strictEqual(isMouseInput('\x1b[M`!!'), true, 'X10 wheel input must be recognized');
+    assert.strictEqual(isMouseInput('\x1b[M@!!'), true, 'X10 button input must be recognized');
+    assert.strictEqual(isMouseInput('\x1b[96;10;20M'), true, 'URXVT wheel input must be recognized');
+    assert.strictEqual(isMouseInput('\x1b[35;10;20M'), true, 'URXVT motion input must be recognized');
+    assert.strictEqual(isMouseInput('\x1b[A'), false, 'ordinary arrow keys must not be mistaken for mouse input');
+    assert.strictEqual(isMouseInput('text\x1b[<35;10;20M'), false, 'mixed user text and mouse data must not be dropped as a mouse-only packet');
+    assert.strictEqual(isJobControlSuspendInput('\x1a'), true, 'an exact Ctrl+Z must be recognized before it can suspend a managed Hermes TUI');
+    assert.strictEqual(isJobControlSuspendInput('text\x1a'), false, 'pasted text containing SUB must not be treated as a job-control shortcut');
+    assert.strictEqual(isJobControlSuspendInput('\x03'), false, 'Ctrl+C must remain available to Hermes TUI');
     const eventState = {};
     assert.strictEqual(acceptHermesEvent(eventState, { type: 'message.start', session_id: 'old' }), true);
     assert.strictEqual(acceptHermesEvent(eventState, { type: 'message.start', session_id: 'current' }), false, 'a stale publisher generation must not relatch the active lifecycle id');

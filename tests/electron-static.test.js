@@ -263,6 +263,7 @@ assert.ok(main.includes("webContents.on('will-redirect'"), 'backend views must b
 assert.ok(main.includes('setWindowOpenHandler'), 'desktop must handle external links without opening privileged child windows');
 assert.ok(main.includes('setPermissionRequestHandler'), 'remote UI permissions must be handled explicitly');
 assert.ok(main.includes("show: process.env.PASSIDECK_SMOKE_HIDDEN !== '1'"), 'Electron QA must support a truly hidden smoke window');
+assert.ok(main.includes("app.setPath('userData', process.env.PASSIDECK_SMOKE_USER_DATA)"), 'Electron QA must support an explicit isolated app userData path before reading backend settings');
 assert.ok(main.includes("permission === 'notifications'"), 'trusted backends must retain session-exit notifications while other permissions stay denied');
 assert.ok(main.includes('preload.js'), 'backend views should wire the sandboxed preload');
 assert.ok(preload.includes('contextBridge'), 'backend preload should be explicit even if tiny');

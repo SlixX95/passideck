@@ -1189,32 +1189,34 @@ async function tmuxCapturePane(session, owner = terminalOwner(session)) {
   }
 }
 
-function isWheelMouseInput(data) {
+function isMouseInput(data) {
   let input = String(data || '');
   let matched = false;
   while (input) {
-    let packet = input.match(/^\x1b\[<(\d+);\d+;\d+[Mm]/);
-    if (packet) {
-      if ((Number(packet[1]) & 64) === 0) return false;
-    } else {
-      packet = input.match(/^\x1b\[(\d+);\d+;\d+M/);
-      if (packet) {
-        if (((Number(packet[1]) - 32) & 64) === 0) return false;
-      } else {
-        packet = input.match(/^\x1b\[M(.)(.)(.)/su);
-        if (!packet || ((packet[1].codePointAt(0) - 32) & 64) === 0) return false;
-      }
-    }
+    const packet = input.match(/^\x1b\[<\d+;\d+;\d+[Mm]/)
+      || input.match(/^\x1b\[\d+;\d+;\d+M/)
+      || input.match(/^\x1b\[M(.)(.)(.)/su);
+    if (!packet) return false;
     matched = true;
     input = input.slice(packet[0].length);
   }
   return matched;
 }
 
+function isJobControlSuspendInput(data) {
+  return data === '\x1a';
+}
+
 function queueTerminalInput(session, input, delay = 0) {
   const write = async () => {
     if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
-    if (isWheelMouseInput(input) && await refreshTerminalOwner(session, true) === TERMINAL_OWNER_VIEWPORT) return;
+    const mouseInput = isMouseInput(input);
+    const suspendInput = isJobControlSuspendInput(input);
+    if (mouseInput || suspendInput) {
+      const owner = await refreshTerminalOwner(session, true);
+      if (mouseInput && owner === TERMINAL_OWNER_VIEWPORT) return;
+      if (suspendInput && owner === TERMINAL_OWNER_APPLICATION && session.terminalMode === 'hermes-tui') return;
+    }
     if (!session.pty) throw new Error('Session not available');
     session.pty.write(input);
   };
@@ -1796,7 +1798,7 @@ function createServer(config = loadConfig()) {
   return { app, server, wss, sessions, close };
 }
 
-module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, acceptHermesEvent, isPlainShellCommand, isWheelMouseInput, splitCommand, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings, UPLOAD_MIME_ALLOWLIST };
+module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings, UPLOAD_MIME_ALLOWLIST };
 
 if (require.main === module) {
   const config = loadConfig();

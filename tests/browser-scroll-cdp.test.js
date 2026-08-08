@@ -298,6 +298,103 @@ function bufferExpression(id) {
     assert.strictEqual(tuiTouch.calls, 0, JSON.stringify(tuiTouch));
     assert.strictEqual(tuiTouch.canceled, false, JSON.stringify(tuiTouch));
 
+    await evaluate(cdp, sid, `new Promise(resolve => {
+      const entry = state.sessions.get(${JSON.stringify(manual.id)});
+      entry.term.reset();
+      entry.term.write('\\x1b[?1000h\\x1b[?1003h\\x1b[?1006h', resolve);
+    })`);
+    const genericTuiCtrlZ = await evaluate(cdp, sid, `(() => {
+      const entry = state.sessions.get(${JSON.stringify(manual.id)});
+      window.__genericTuiCtrlZ = { ws: entry.ws, sent: [] };
+      entry.terminalOwner = 'application';
+      entry.terminalMode = 'application';
+      entry.ws = { readyState: WebSocket.OPEN, send: raw => window.__genericTuiCtrlZ.sent.push(JSON.parse(raw).data) };
+      entry.term.focus();
+      return true;
+    })()`);
+    assert.strictEqual(genericTuiCtrlZ, true);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'z', code: 'KeyZ', modifiers: 2, windowsVirtualKeyCode: 90, nativeVirtualKeyCode: 90 }, sid);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'z', code: 'KeyZ', modifiers: 2, windowsVirtualKeyCode: 90, nativeVirtualKeyCode: 90 }, sid);
+    const genericTuiCtrlZResult = await evaluate(cdp, sid, `(() => {
+      const entry = state.sessions.get(${JSON.stringify(manual.id)});
+      const sent = window.__genericTuiCtrlZ.sent;
+      entry.ws = window.__genericTuiCtrlZ.ws;
+      entry.terminalOwner = 'application';
+      entry.terminalMode = 'hermes-tui';
+      delete window.__genericTuiCtrlZ;
+      return sent;
+    })()`);
+    assert.deepStrictEqual(genericTuiCtrlZResult, ['\x1a'], 'generic mouse-reporting terminal applications must retain Ctrl+Z');
+
+    const blockedSuspend = await evaluate(cdp, sid, `(() => {
+      const entry = state.sessions.get(${JSON.stringify(manual.id)});
+      const sent = [];
+      entry.term.focus();
+      window.__blockedSuspend = { sent, disposable: entry.term.onData(data => sent.push(data)) };
+      return true;
+    })()`);
+    assert.strictEqual(blockedSuspend, true);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'z', code: 'KeyZ', modifiers: 2, windowsVirtualKeyCode: 90, nativeVirtualKeyCode: 90 }, sid);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'z', code: 'KeyZ', modifiers: 2, windowsVirtualKeyCode: 90, nativeVirtualKeyCode: 90 }, sid);
+    const blockedSuspendResult = await evaluate(cdp, sid, `new Promise(resolve => setTimeout(() => {
+      const entry = state.sessions.get(${JSON.stringify(manual.id)});
+      const result = { sent: window.__blockedSuspend.sent, owner: entry.terminalOwner, mode: entry.terminalMode };
+      window.__blockedSuspend.disposable.dispose();
+      delete window.__blockedSuspend;
+      resolve(result);
+    }, 500))`);
+    assert.deepStrictEqual(blockedSuspendResult, { sent: [], owner: 'application', mode: 'hermes-tui' }, 'Ctrl+Z from a PassiDeck client must not suspend its managed Hermes TUI');
+    const injectedSuspend = await evaluate(cdp, sid, `(() => {
+      const entry = state.sessions.get(${JSON.stringify(manual.id)});
+      entry.ws.send(JSON.stringify({ type: 'input', data: '\\x1a' }));
+      return true;
+    })()`);
+    assert.strictEqual(injectedSuspend, true);
+    await new Promise(resolve => setTimeout(resolve, 500));
+    assert.deepStrictEqual(
+      await evaluate(cdp, sid, `(() => { const entry = state.sessions.get(${JSON.stringify(manual.id)}); return { owner: entry.terminalOwner, mode: entry.terminalMode }; })()`),
+      { owner: 'application', mode: 'hermes-tui' },
+      'the server boundary must also reject an injected Ctrl+Z while Hermes TUI owns the PTY'
+    );
+
+    manualSession.pty.write('\x1a');
+    const stoppedTuiOwner = await waitFor(() => evaluate(cdp, sid, `(() => {
+      const entry = state.sessions.get(${JSON.stringify(manual.id)});
+      return entry?.terminalOwner === 'viewport' && entry.terminalMode === 'viewport'
+        ? { protocol: entry.term._core.coreMouseService.activeProtocol, type: entry.term.buffer.active.type }
+        : null;
+    })()`), 'stopped TUI owner return');
+    assert.deepStrictEqual(stoppedTuiOwner, { protocol: 'NONE', type: 'normal' }, 'stopping Hermes TUI in a normal xterm buffer must disable mouse tracking before the shell receives pointer input');
+    const stoppedTuiMouse = await evaluate(cdp, sid, `(() => {
+      const entry = state.sessions.get(${JSON.stringify(manual.id)});
+      const leaked = [];
+      const disposable = entry.term.onData(data => leaked.push(data));
+      const rect = entry.el.querySelector('.xterm-screen').getBoundingClientRect();
+      window.__stoppedTuiMouse = { leaked, disposable };
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, beforeBaseY: entry.term.buffer.active.baseY, beforeViewportY: entry.term.buffer.active.viewportY };
+    })()`);
+    for (let step = 0; step < 12; step += 1) {
+      await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: stoppedTuiMouse.x + step, y: stoppedTuiMouse.y + step }, sid);
+    }
+    const stoppedTuiMouseResult = await evaluate(cdp, sid, `new Promise(resolve => setTimeout(() => {
+      const entry = state.sessions.get(${JSON.stringify(manual.id)});
+      const result = {
+        leaked: window.__stoppedTuiMouse.leaked,
+        afterBaseY: entry.term.buffer.active.baseY,
+        afterViewportY: entry.term.buffer.active.viewportY
+      };
+      window.__stoppedTuiMouse.disposable.dispose();
+      delete window.__stoppedTuiMouse;
+      resolve(result);
+    }, 250))`);
+    assert.deepStrictEqual(stoppedTuiMouseResult, {
+      leaked: [],
+      afterBaseY: stoppedTuiMouse.beforeBaseY,
+      afterViewportY: stoppedTuiMouse.beforeViewportY
+    }, 'moving the mouse after a stopped TUI must neither emit SGR packets nor push the visible terminal upward');
+
+    manualSession.pty.write('fg\r');
+    await waitFor(() => evaluate(cdp, sid, `(() => { const entry = state.sessions.get(${JSON.stringify(manual.id)}); return entry?.terminalOwner === 'application' && entry.terminalMode === 'hermes-tui'; })()`), 'TUI owner return after foreground resume', 15000);
     manualSession.pty.write('\x03');
     await waitFor(() => evaluate(cdp, sid, `(() => { const entry = state.sessions.get(${JSON.stringify(manual.id)}); return entry?.terminalOwner === 'viewport' && entry.terminalMode === 'viewport' && !entry.el.classList.contains('hermes-tui') && entry.term.buffer.active.type === 'normal'; })()`), 'mode and normal buffer return after TUI exit', 15000);
 

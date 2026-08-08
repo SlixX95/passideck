@@ -19,6 +19,8 @@ let dockBounceTimers = [];
 let dockBounceIds = [];
 const backendViews = new Map();
 
+if (process.env.PASSIDECK_SMOKE_USER_DATA) app.setPath('userData', process.env.PASSIDECK_SMOKE_USER_DATA);
+
 function configPath() {
   return path.join(app.getPath('userData'), 'settings.json');
 }
