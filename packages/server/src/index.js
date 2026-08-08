@@ -879,6 +879,13 @@ async function paneProcesses(session) {
   return processes.some(process => process.argv.length) ? processes : null;
 }
 
+async function paneProcessesWithRetry(session, discover = paneProcesses, retryDelay = 25) {
+  let processes = await discover(session);
+  if (processes !== null) return processes;
+  if (retryDelay > 0) await new Promise(resolve => setTimeout(resolve, retryDelay));
+  return discover(session);
+}
+
 function hermesArgvIndex(argv) {
   const args = Array.isArray(argv) ? argv : [];
   const executable = path.basename(String(args[0] || '')).toLowerCase();
@@ -1230,7 +1237,7 @@ function queueTerminalInput(session, input, delay = 0) {
     if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
     let terminalInput = String(input || '');
     if (isJobControlSuspendInput(terminalInput)) {
-      const processes = await paneProcesses(session);
+      const processes = await paneProcessesWithRetry(session);
       if (processes !== null) session.processSnapshot = processes;
       if (processes !== null && foregroundHasHermes(processes)) terminalInput = terminalInput.replaceAll('\x1a', '');
     }
@@ -1818,7 +1825,7 @@ function createServer(config = loadConfig()) {
   return { app, server, wss, sessions, close };
 }
 
-module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings, UPLOAD_MIME_ALLOWLIST };
+module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, paneProcessesWithRetry, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings, UPLOAD_MIME_ALLOWLIST };
 
 if (require.main === module) {
   const config = loadConfig();

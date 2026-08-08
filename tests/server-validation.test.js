@@ -32,7 +32,7 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
 
 (async () => {
   try {
-    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, parseCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount } = require('../packages/server/src/index');
+    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, paneProcessesWithRetry, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, parseCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount } = require('../packages/server/src/index');
     assert.strictEqual(
       hermesResumeIdFromArgv(['/venv/bin/python3', '/venv/bin/hermes', '--resume', '20260716_180100_5dbdcf']),
       '20260716_180100_5dbdcf',
@@ -145,6 +145,18 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
       false,
       'process records without a valid foreground process group must fail open'
     );
+    let processDiscoveryAttempts = 0;
+    const retriedProcesses = await paneProcessesWithRetry({}, async () => {
+      processDiscoveryAttempts += 1;
+      return processDiscoveryAttempts === 1
+        ? null
+        : [{ argv: ['/usr/local/bin/hermes'], pgrp: 200, tpgid: 200 }];
+    }, 0);
+    assert.strictEqual(processDiscoveryAttempts, 2, 'a transient process-discovery failure must retry exactly once');
+    assert.strictEqual(foregroundHasHermes(retriedProcesses), true, 'the retry must return fresh foreground Hermes evidence');
+    processDiscoveryAttempts = 0;
+    assert.strictEqual(await paneProcessesWithRetry({}, async () => { processDiscoveryAttempts += 1; return null; }, 0), null, 'persistent discovery failure must remain fail-open');
+    assert.strictEqual(processDiscoveryAttempts, 2, 'persistent discovery failure must stop after one retry');
     assert.strictEqual(
       foregroundHasHermes([{ argv: ['/bin/bash'], pgrp: 100, tpgid: 100 }]),
       false,

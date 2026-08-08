@@ -317,6 +317,38 @@ function bufferExpression(id) {
     })()`);
     assert.deepStrictEqual(classicCtrlZResult, [], 'Ctrl+Z from a PassiDeck client must not suspend its managed Hermes CLI');
 
+    const declaredHermesClassifications = await evaluate(cdp, sid, `[
+      isHermesEntry({ session: { meta: { command: 'hermes' } } }),
+      isHermesEntry({ session: { meta: { command: '/opt/hermes --tui' } } }),
+      isHermesEntry({ session: { meta: { command: 'HERMES' } } }),
+      isHermesEntry({ session: { meta: { command: '/opt/Hermes' } } }),
+      isHermesEntry({ session: { meta: { command: ${JSON.stringify('C:\\tools\\hermes')} } } }),
+      isHermesEntry({ session: { meta: { command: "bash -lc 'echo hermes'", label: 'Hermes notes' } } })
+    ]`);
+    assert.deepStrictEqual(declaredHermesClassifications, [true, true, false, false, false, false], 'legacy Hermes classification must require an exact case-sensitive Linux executable token');
+
+    await evaluate(cdp, sid, `(() => {
+      const entry = state.sessions.get(${JSON.stringify(shell.id)});
+      window.__nonHermesWordCtrlZ = { ws: entry.ws, command: entry.session.meta.command, label: entry.session.meta.label, sent: [] };
+      entry.session.meta.command = "bash -lc 'echo hermes'";
+      entry.session.meta.label = 'Hermes notes';
+      delete entry.terminalSuspendProtected;
+      entry.ws = { readyState: WebSocket.OPEN, send: raw => window.__nonHermesWordCtrlZ.sent.push(JSON.parse(raw).data) };
+      entry.term.focus();
+    })()`);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'z', code: 'KeyZ', modifiers: 2, windowsVirtualKeyCode: 90, nativeVirtualKeyCode: 90 }, sid);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'z', code: 'KeyZ', modifiers: 2, windowsVirtualKeyCode: 90, nativeVirtualKeyCode: 90 }, sid);
+    const nonHermesWordCtrlZ = await evaluate(cdp, sid, `(() => {
+      const entry = state.sessions.get(${JSON.stringify(shell.id)});
+      const record = window.__nonHermesWordCtrlZ;
+      entry.ws = record.ws;
+      entry.session.meta.command = record.command;
+      entry.session.meta.label = record.label;
+      delete window.__nonHermesWordCtrlZ;
+      return record.sent;
+    })()`);
+    assert.deepStrictEqual(nonHermesWordCtrlZ, ['\x1a'], 'mentioning Hermes in a non-Hermes command or label must not disable shell job control');
+
     await evaluate(cdp, sid, `(() => {
       const entry = state.sessions.get(${JSON.stringify(normal.id)});
       window.__authoritativeCtrlZ = { ws: entry.ws, sent: [] };

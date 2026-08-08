@@ -4072,8 +4072,9 @@ function readFileAsDataUrl(file) {
 }
 
 function isHermesEntry(entry) {
-  const meta = entry?.session?.meta || {};
-  return /\bhermes\b/i.test(String(meta.command || meta.label || ''));
+  const command = String(entry?.session?.meta?.command || '').trim();
+  const executable = command.split(/\s+/)[0]?.replace(/^["']|["']$/g, '') || '';
+  return /(?:^|\/)hermes$/.test(executable);
 }
 
 function isHermesTuiEntry(entry) {
