@@ -550,6 +550,26 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     assert.deepStrictEqual(resizes, [[1000, 1000]], 'terminal dimensions must be capped before reaching node-pty');
     assert.strictEqual(app.wss.options.maxPayload, 1024 * 1024, 'WebSocket messages must have the same input ceiling');
 
+    const unaffectedSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?session=${persistent.id}`);
+    await opened(unaffectedSocket);
+    const oversizedSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?session=${persistent.id}`);
+    oversizedSocket.on('error', () => {});
+    await opened(oversizedSocket);
+    let oversizedCloseCode;
+    oversizedSocket.once('close', code => { oversizedCloseCode = code; });
+    oversizedSocket.send(JSON.stringify({ type: 'input', data: 'x'.repeat(1024 * 1024) }));
+    await waitFor(() => oversizedCloseCode !== undefined, 'an oversized WebSocket frame must close the offending client');
+    assert.strictEqual(oversizedCloseCode, 1009, 'an oversized WebSocket frame must use the message-too-big close code');
+    assert.strictEqual(unaffectedSocket.readyState, WebSocket.OPEN, 'an oversized WebSocket frame must preserve existing peers');
+    assert.strictEqual(app.sessions.get(persistent.id), persistentSession, 'an oversized WebSocket frame must preserve the tmux-backed terminal session');
+    tmux('has-session', '-t', persistentTmux);
+    const postOversizeSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?session=${persistent.id}`);
+    await opened(postOversizeSocket);
+    postOversizeSocket.close();
+    await waitFor(() => postOversizeSocket.readyState === WebSocket.CLOSED, 'the post-oversize probe must close cleanly');
+    unaffectedSocket.close();
+    await waitFor(() => unaffectedSocket.readyState === WebSocket.CLOSED, 'the unaffected peer must close cleanly after the probe');
+
     const first = new WebSocket(`ws://127.0.0.1:${port}/ws?session=validation`);
     const firstMessages = [];
     first.on('message', raw => {

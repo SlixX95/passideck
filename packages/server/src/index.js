@@ -1703,6 +1703,7 @@ function createServer(config = loadConfig()) {
   app.use(compression(), express.static(path.join(__dirname, '..', '..', 'client', 'public')));
 
   wss.on('connection', (ws, req) => {
+    ws.on('error', err => console.warn(`[ws] client error: ${String(err?.code || 'unknown')}`));
     const url = new URL(req.url, `http://${req.headers.host}`);
     const publisherSessionId = url.searchParams.get('hermesEvents');
     if (publisherSessionId !== null) {
