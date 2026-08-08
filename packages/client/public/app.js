@@ -3340,7 +3340,10 @@ function createPanel(session, opts = {}) {
   term.open(termEl);
   term.attachCustomKeyEventHandler(event => {
     const entry = state.sessions.get(id);
-    if (event.type === 'keydown' && event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === 'z' && isHermesTuiEntry(entry)) return false;
+    const ctrlZ = event.type === 'keydown' && event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === 'z';
+    const legacySuspendProtection = typeof entry?.terminalSuspendProtected !== 'boolean'
+      && (isHermesEntry(entry) || isHermesTuiEntry(entry));
+    if (ctrlZ && legacySuspendProtection) return false;
     return true;
   });
   installTerminalWheelScroll(termEl, term, session);
@@ -3467,13 +3470,15 @@ function handleSocketClose(id, socket, event) {
   }, 1000);
 }
 
-function applyTerminalOwner(id, term, owner, mode = owner) {
+function applyTerminalOwner(id, term, owner, mode = owner, suspendProtected) {
   const entry = state.sessions.get(id);
   if (!entry || !['viewport', 'application'].includes(owner) || !['viewport', 'application', 'hermes-tui'].includes(mode)) return;
   const previous = entry.terminalOwner;
   const previousMode = entry.terminalMode;
   entry.terminalOwner = owner;
   entry.terminalMode = mode;
+  if (typeof suspendProtected === 'boolean') entry.terminalSuspendProtected = suspendProtected;
+  else delete entry.terminalSuspendProtected;
   entry.el.classList.toggle('hermes-tui', entry.terminalMode === 'hermes-tui');
   if (previousMode === 'hermes-tui' && mode !== 'hermes-tui') {
     term.__passideckClearDragSelection?.();
@@ -3515,7 +3520,7 @@ function hydrateTerminalAttach(id, term, msg, socket) {
   const sequence = Number(msg.sequence);
   if (Number.isFinite(sequence)) entry.outputSequence = sequence;
   if (msg.attachId) entry.attachId = String(msg.attachId);
-  applyTerminalOwner(id, term, msg.owner, msg.mode);
+  applyTerminalOwner(id, term, msg.owner, msg.mode, msg.suspendProtected);
   if (msg.kind === 'tmux-history') {
     entry.attachCount += 1;
     queueTerminalReplay(id, term, msg.data, { cursorX: msg.cursorX, cursorY: msg.cursorY, attachId: msg.attachId, socket });
@@ -3553,7 +3558,7 @@ function attachSocket(id, term, el) {
     const entry = state.sessions.get(id);
     if (msg.type === 'hermes-event' || msg.type === 'hermes-events') applyHermesEvent(id, msg);
     if (msg.type === 'meta') applySessionMeta(id, msg.session);
-    if (msg.type === 'terminal-owner') applyTerminalOwner(id, term, msg.owner, msg.mode);
+    if (msg.type === 'terminal-owner') applyTerminalOwner(id, term, msg.owner, msg.mode, msg.suspendProtected);
     if (msg.type === 'replay') hydrateTerminalAttach(id, term, msg, ws);
     if (msg.type === 'output') {
       const sequence = Number(msg.sequence);
@@ -3592,6 +3597,7 @@ function reconnect(id, force = false) {
   const oldSocket = entry.ws;
   if (!force && oldSocket?.readyState === WebSocket.OPEN) return;
   resetTerminalOutputPipeline(entry);
+  delete entry.terminalSuspendProtected;
   entry.ws = attachSocket(id, entry.term, entry.el);
   if (oldSocket && oldSocket !== entry.ws) {
     try { oldSocket.close(4000, 'superseded'); } catch {}

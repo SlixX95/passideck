@@ -32,7 +32,7 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
 
 (async () => {
   try {
-    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, parseCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount } = require('../packages/server/src/index');
+    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, parseCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount } = require('../packages/server/src/index');
     assert.strictEqual(
       hermesResumeIdFromArgv(['/venv/bin/python3', '/venv/bin/hermes', '--resume', '20260716_180100_5dbdcf']),
       '20260716_180100_5dbdcf',
@@ -116,6 +116,45 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
       'application',
       'a real foreground child process group must retain application wheel ownership'
     );
+    assert.strictEqual(
+      foregroundHasHermes([
+        { argv: ['/bin/bash'], pgrp: 100, tpgid: 200 },
+        { argv: ['/usr/bin/python3', '/usr/local/bin/hermes'], pgrp: 200, tpgid: 200 }
+      ]),
+      true,
+      'normal Hermes in the foreground process group must be protected from job-control suspension'
+    );
+    assert.strictEqual(
+      foregroundHasHermes([
+        { argv: ['/bin/bash'], pgrp: 100, tpgid: 100 },
+        { argv: ['/usr/bin/python3', '/usr/local/bin/hermes', '--resume', 'abc'], pgrp: 200, tpgid: 100 }
+      ]),
+      false,
+      'background Hermes jobs must not disable shell job control'
+    );
+    assert.strictEqual(
+      foregroundHasHermes([
+        { argv: ['/usr/bin/cat', '/tmp/hermes.log'], pgrp: 100, tpgid: 100 }
+      ]),
+      false,
+      'ordinary arguments whose names begin with hermes must not disable job control'
+    );
+    assert.strictEqual(foregroundHasHermes([]), false, 'missing process evidence must not be replaced with declared-session metadata');
+    assert.strictEqual(
+      foregroundHasHermes([{ argv: ['/usr/local/bin/hermes'], pgrp: 0, tpgid: 0 }]),
+      false,
+      'process records without a valid foreground process group must fail open'
+    );
+    assert.strictEqual(
+      foregroundHasHermes([{ argv: ['/bin/bash'], pgrp: 100, tpgid: 100 }]),
+      false,
+      'the foreground shell must regain normal Ctrl+Z after Hermes exits'
+    );
+    assert.strictEqual(
+      foregroundHasHermes([{ argv: ['/usr/bin/vim', 'hermes'], pgrp: 200, tpgid: 200 }]),
+      false,
+      'an argument named hermes must not disable job control for another application'
+    );
     assert.strictEqual(isMouseInput('\x1b[<64;10;20M'), true, 'SGR wheel input must be recognized');
     assert.strictEqual(isMouseInput('\x1b[<35;10;20M'), true, 'SGR motion input must be recognized after a TUI returns to its shell');
     assert.strictEqual(isMouseInput('\x1b[<0;10;20M'), true, 'SGR button input must be recognized after a TUI returns to its shell');
@@ -126,7 +165,8 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     assert.strictEqual(isMouseInput('\x1b[A'), false, 'ordinary arrow keys must not be mistaken for mouse input');
     assert.strictEqual(isMouseInput('text\x1b[<35;10;20M'), false, 'mixed user text and mouse data must not be dropped as a mouse-only packet');
     assert.strictEqual(isJobControlSuspendInput('\x1a'), true, 'an exact Ctrl+Z must be recognized before it can suspend a managed Hermes TUI');
-    assert.strictEqual(isJobControlSuspendInput('text\x1a'), false, 'pasted text containing SUB must not be treated as a job-control shortcut');
+    assert.strictEqual(isJobControlSuspendInput('text\x1amore'), true, 'Ctrl+Z inside a batched input payload must be recognized at the final PTY boundary');
+    assert.strictEqual(isJobControlSuspendInput('\x1a\x1a'), true, 'repeated Ctrl+Z bytes must be recognized');
     assert.strictEqual(isJobControlSuspendInput('\x03'), false, 'Ctrl+C must remain available to Hermes TUI');
     const eventState = {};
     assert.strictEqual(acceptHermesEvent(eventState, { type: 'message.start', session_id: 'old' }), true);
@@ -369,6 +409,67 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     }, 'shell must resume after the TUI attach fixture exits');
     persistentSession.meta.command = originalPersistentCommand;
 
+    let classicHermesPid = 0;
+    persistentSession.pty.write("bash -c 'exec -a hermes cat'\r");
+    await waitFor(() => {
+      try {
+        const panePid = Number(tmux('list-panes', '-t', persistentTmux, '-F', '#{pane_pid}').toString().trim());
+        const children = fs.readFileSync(`/proc/${panePid}/task/${panePid}/children`, 'utf8').trim().split(/\s+/).filter(Boolean).map(Number);
+        classicHermesPid = children.find(pid => fs.readFileSync(`/proc/${pid}/cmdline`).toString().split('\0')[0] === 'hermes') || 0;
+        return classicHermesPid > 1;
+      } catch { return false; }
+    }, 'classic Hermes fixture must own the foreground process group');
+    const classicSuspendMessages = [];
+    let classicSuspendReplay = false;
+    let classicSuspendOutput = '';
+    const classicSuspendSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?session=${persistent.id}`);
+    classicSuspendSocket.on('message', raw => {
+      try {
+        const message = JSON.parse(raw.toString());
+        if (message.type === 'terminal-owner') classicSuspendMessages.push(message);
+        if (message.type === 'replay') classicSuspendReplay = true;
+        if (message.type === 'output') classicSuspendOutput += String(message.data || '');
+      } catch {}
+    });
+    await opened(classicSuspendSocket);
+    await waitFor(() => classicSuspendReplay, 'classic Hermes protection test must finish WebSocket hydration before sending input', 3000);
+    await waitFor(
+      () => classicSuspendMessages.some(message => message.suspendProtected === true),
+      'terminal ownership must advertise foreground Hermes suspend protection'
+    );
+    const classicHermesState = () => {
+      const stat = fs.readFileSync(`/proc/${classicHermesPid}/stat`, 'utf8');
+      return stat.slice(stat.lastIndexOf(')') + 2).split(/\s+/)[0];
+    };
+    classicSuspendSocket.send(JSON.stringify({ type: 'input', data: '\x1a' }));
+    await delay(300);
+    assert.notStrictEqual(classicHermesState(), 'T', 'the server boundary must not suspend a foreground Hermes CLI');
+
+    classicSuspendOutput = '';
+    classicSuspendSocket.send(JSON.stringify({ type: 'input', data: 'ws-before\x1aws-after\r' }));
+    await waitFor(() => classicSuspendOutput.includes('ws-beforews-after'), 'WebSocket input must preserve bytes around a filtered Ctrl+Z', 3000);
+    assert.notStrictEqual(classicHermesState(), 'T', 'batched WebSocket input must not suspend foreground Hermes');
+
+    classicSuspendOutput = '';
+    const batchedHttpInput = await fetch(`${base}/api/sessions/${persistent.id}/input`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: 'http-before\x1ahttp-after\r' })
+    });
+    assert.strictEqual(batchedHttpInput.status, 200, 'HTTP terminal input must accept a batched Ctrl+Z payload');
+    await waitFor(() => classicSuspendOutput.includes('http-beforehttp-after'), 'HTTP input must preserve bytes around a filtered Ctrl+Z', 3000);
+    assert.notStrictEqual(classicHermesState(), 'T', 'batched HTTP input must not suspend foreground Hermes');
+
+    persistentSession.pty.write('\x15');
+    persistentSession.pty.write('\x03');
+    await waitFor(() => !fs.existsSync(`/proc/${classicHermesPid}`), 'classic Hermes fixture must exit after the preservation check');
+    await waitFor(
+      () => classicSuspendMessages.some(message => message.suspendProtected === false),
+      'terminal ownership must release suspend protection after Hermes returns to its shell',
+      2000
+    );
+    classicSuspendSocket.close();
+
     persistentSession.meta.command = 'hermes';
     const redrawSocket = new WebSocket(`ws://127.0.0.1:${port}/ws?session=${persistent.id}`);
     let redrawOutput = '';
@@ -434,6 +535,10 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     first.send(JSON.stringify({ type: 'input', data: '\x1b[A' }));
     await delay(20);
     assert.deepStrictEqual(writes, ['first-client', 'second-client', '\x1b[<65;10;5M', '\x1b[A'], 'application-owned wheel and ordinary keyboard arrows must remain exact PTY input');
+    session.meta.command = 'hermes';
+    first.send(JSON.stringify({ type: 'input', data: '\x1a' }));
+    await delay(20);
+    assert.strictEqual(writes.at(-1), '\x1a', 'Ctrl+Z must fail open when no foreground-process evidence is available');
     session.meta.command = '';
 
     const hermesPublisher = new WebSocket(`ws://127.0.0.1:${port}/ws?hermesEvents=validation`);

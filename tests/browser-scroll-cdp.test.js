@@ -298,6 +298,56 @@ function bufferExpression(id) {
     assert.strictEqual(tuiTouch.calls, 0, JSON.stringify(tuiTouch));
     assert.strictEqual(tuiTouch.canceled, false, JSON.stringify(tuiTouch));
 
+    const classicCtrlZ = await evaluate(cdp, sid, `(() => {
+      const entry = state.sessions.get(${JSON.stringify(normal.id)});
+      delete entry.terminalSuspendProtected;
+      const sent = [];
+      entry.term.focus();
+      window.__classicCtrlZ = { sent, disposable: entry.term.onData(data => sent.push(data)) };
+      return true;
+    })()`);
+    assert.strictEqual(classicCtrlZ, true);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'z', code: 'KeyZ', modifiers: 2, windowsVirtualKeyCode: 90, nativeVirtualKeyCode: 90 }, sid);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'z', code: 'KeyZ', modifiers: 2, windowsVirtualKeyCode: 90, nativeVirtualKeyCode: 90 }, sid);
+    const classicCtrlZResult = await evaluate(cdp, sid, `(() => {
+      const sent = window.__classicCtrlZ.sent;
+      window.__classicCtrlZ.disposable.dispose();
+      delete window.__classicCtrlZ;
+      return sent;
+    })()`);
+    assert.deepStrictEqual(classicCtrlZResult, [], 'Ctrl+Z from a PassiDeck client must not suspend its managed Hermes CLI');
+
+    await evaluate(cdp, sid, `(() => {
+      const entry = state.sessions.get(${JSON.stringify(normal.id)});
+      window.__authoritativeCtrlZ = { ws: entry.ws, sent: [] };
+      entry.ws = { readyState: WebSocket.OPEN, send: raw => window.__authoritativeCtrlZ.sent.push(JSON.parse(raw).data) };
+      applyTerminalOwner(entry.session.id, entry.term, 'viewport', 'viewport', false);
+      entry.term.focus();
+    })()`);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'z', code: 'KeyZ', modifiers: 2, windowsVirtualKeyCode: 90, nativeVirtualKeyCode: 90 }, sid);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'z', code: 'KeyZ', modifiers: 2, windowsVirtualKeyCode: 90, nativeVirtualKeyCode: 90 }, sid);
+    const authoritativeFalseCtrlZ = await evaluate(cdp, sid, `(() => {
+      const stateRecord = window.__authoritativeCtrlZ;
+      const sent = [...stateRecord.sent];
+      stateRecord.sent.length = 0;
+      const entry = state.sessions.get(${JSON.stringify(normal.id)});
+      applyTerminalOwner(entry.session.id, entry.term, 'viewport', 'viewport', true);
+      return sent;
+    })()`);
+    assert.deepStrictEqual(authoritativeFalseCtrlZ, ['\x1a'], 'a new server must remain the authoritative Ctrl+Z boundary after releasing Hermes');
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'z', code: 'KeyZ', modifiers: 2, windowsVirtualKeyCode: 90, nativeVirtualKeyCode: 90 }, sid);
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'z', code: 'KeyZ', modifiers: 2, windowsVirtualKeyCode: 90, nativeVirtualKeyCode: 90 }, sid);
+    const authoritativeTrueCtrlZ = await evaluate(cdp, sid, `(() => {
+      const stateRecord = window.__authoritativeCtrlZ;
+      const sent = [...stateRecord.sent];
+      const entry = state.sessions.get(${JSON.stringify(normal.id)});
+      entry.ws = stateRecord.ws;
+      delete entry.terminalSuspendProtected;
+      delete window.__authoritativeCtrlZ;
+      return sent;
+    })()`);
+    assert.deepStrictEqual(authoritativeTrueCtrlZ, ['\x1a'], 'a new server must receive Ctrl+Z even while its last protection state is true');
+
     await evaluate(cdp, sid, `new Promise(resolve => {
       const entry = state.sessions.get(${JSON.stringify(manual.id)});
       entry.term.reset();

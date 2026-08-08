@@ -906,13 +906,24 @@ function argvHasTerminalApplication(argv) {
   return false;
 }
 
-function terminalStateFromProcesses(meta = {}, processes = []) {
-  const command = String(meta.command || '').trim();
+function foregroundProcessRecords(processes = []) {
   const records = (Array.isArray(processes) ? processes : []).filter(record => Array.isArray(record?.argv) && record.argv.length);
   const foregroundPgrp = records.find(record => Number(record.tpgid) > 1)?.tpgid;
-  const foregroundRecords = foregroundPgrp
+  return foregroundPgrp
     ? records.filter(record => Number(record.pgrp) === foregroundPgrp)
     : records;
+}
+
+function foregroundHasHermes(processes = []) {
+  const records = (Array.isArray(processes) ? processes : []).filter(record => Array.isArray(record?.argv) && record.argv.length);
+  const foregroundPgrp = records.find(record => Number(record.tpgid) > 1)?.tpgid;
+  if (!foregroundPgrp) return false;
+  return records.some(record => Number(record.pgrp) === foregroundPgrp && argvHasHermes(record.argv));
+}
+
+function terminalStateFromProcesses(meta = {}, processes = []) {
+  const command = String(meta.command || '').trim();
+  const foregroundRecords = foregroundProcessRecords(processes);
   if (foregroundRecords.some(record => argvHasHermesTui(record.argv))) return { owner: TERMINAL_OWNER_APPLICATION, mode: 'hermes-tui' };
   if (foregroundRecords.some(record => argvHasHermes(record.argv))) return { owner: TERMINAL_OWNER_VIEWPORT, mode: TERMINAL_OWNER_VIEWPORT };
   const foreground = foregroundRecords.at(-1)?.argv || [];
@@ -947,11 +958,17 @@ async function refreshTerminalOwner(session, forceLatest = false) {
       if (processes === null) return terminalOwner(session);
       session.processSnapshot = processes;
       const next = terminalStateFromProcesses(session?.meta, processes);
-      if (session.terminalOwner !== next.owner || session.terminalMode !== next.mode) {
-        session.broadcast({ type: 'terminal-owner', owner: next.owner, mode: next.mode });
+      const suspendProtected = foregroundHasHermes(processes);
+      if (
+        session.terminalOwner !== next.owner ||
+        session.terminalMode !== next.mode ||
+        session.terminalSuspendProtected !== suspendProtected
+      ) {
+        session.broadcast({ type: 'terminal-owner', owner: next.owner, mode: next.mode, suspendProtected });
       }
       session.terminalOwner = next.owner;
       session.terminalMode = next.mode;
+      session.terminalSuspendProtected = suspendProtected;
       return next.owner;
     } finally {
       if (session.terminalStatePromise === task) session.terminalStatePromise = null;
@@ -1174,17 +1191,18 @@ async function tmuxClientWritten(session) {
 
 async function tmuxCapturePane(session, owner = terminalOwner(session)) {
   const mode = session?.terminalMode || owner;
-  if (owner !== TERMINAL_OWNER_VIEWPORT) return { kind: 'live-only', owner, mode, data: TERMINAL_REPLAY_DISABLED };
-  if (!session?.tmuxName) return { kind: 'capture-unavailable', owner, mode, data: TERMINAL_REPLAY_DISABLED, reason: 'tmux pane unavailable' };
+  const suspendProtected = Boolean(session?.terminalSuspendProtected);
+  if (owner !== TERMINAL_OWNER_VIEWPORT) return { kind: 'live-only', owner, mode, suspendProtected, data: TERMINAL_REPLAY_DISABLED };
+  if (!session?.tmuxName) return { kind: 'capture-unavailable', owner, mode, suspendProtected, data: TERMINAL_REPLAY_DISABLED, reason: 'tmux pane unavailable' };
   const outputClient = await tmuxOutputClientAsync(session);
-  if (!outputClient) return { kind: 'capture-unavailable', owner, mode, data: TERMINAL_REPLAY_DISABLED, reason: 'tmux client not found' };
+  if (!outputClient) return { kind: 'capture-unavailable', owner, mode, suspendProtected, data: TERMINAL_REPLAY_DISABLED, reason: 'tmux client not found' };
   try {
-    return { kind: 'tmux-history', owner, mode, ...await captureTmuxHistory(session, '-'), truncated: false };
+    return { kind: 'tmux-history', owner, mode, suspendProtected, ...await captureTmuxHistory(session, '-'), truncated: false };
   } catch (err) {
     try {
-      return { kind: 'tmux-history', owner, mode, ...await captureTmuxHistory(session, `-${TMUX_HISTORY_REPLAY_LINES}`), truncated: true };
+      return { kind: 'tmux-history', owner, mode, suspendProtected, ...await captureTmuxHistory(session, `-${TMUX_HISTORY_REPLAY_LINES}`), truncated: true };
     } catch {
-      return { kind: 'capture-unavailable', owner, mode, data: TERMINAL_REPLAY_DISABLED, reason: String(err?.code || 'capture failed').slice(0, 80) };
+      return { kind: 'capture-unavailable', owner, mode, suspendProtected, data: TERMINAL_REPLAY_DISABLED, reason: String(err?.code || 'capture failed').slice(0, 80) };
     }
   }
 }
@@ -1204,21 +1222,22 @@ function isMouseInput(data) {
 }
 
 function isJobControlSuspendInput(data) {
-  return data === '\x1a';
+  return String(data || '').includes('\x1a');
 }
 
 function queueTerminalInput(session, input, delay = 0) {
   const write = async () => {
     if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
-    const mouseInput = isMouseInput(input);
-    const suspendInput = isJobControlSuspendInput(input);
-    if (mouseInput || suspendInput) {
-      const owner = await refreshTerminalOwner(session, true);
-      if (mouseInput && owner === TERMINAL_OWNER_VIEWPORT) return;
-      if (suspendInput && owner === TERMINAL_OWNER_APPLICATION && session.terminalMode === 'hermes-tui') return;
+    let terminalInput = String(input || '');
+    if (isJobControlSuspendInput(terminalInput)) {
+      const processes = await paneProcesses(session);
+      if (processes !== null) session.processSnapshot = processes;
+      if (processes !== null && foregroundHasHermes(processes)) terminalInput = terminalInput.replaceAll('\x1a', '');
     }
+    if (!terminalInput) return;
+    if (isMouseInput(terminalInput) && await refreshTerminalOwner(session, true) === TERMINAL_OWNER_VIEWPORT) return;
     if (!session.pty) throw new Error('Session not available');
-    session.pty.write(input);
+    session.pty.write(terminalInput);
   };
   const task = (session.inputQueue || Promise.resolve()).then(write);
   session.inputQueue = task.catch(() => {});
@@ -1294,7 +1313,8 @@ function startTerminalHydration(session, ws) {
     const sequence = ws.hydrationStartSequence;
     const owner = terminalOwner(session);
     sendFrame({
-      kind: 'capture-unavailable', owner, mode: session.terminalMode || owner, data: TERMINAL_REPLAY_DISABLED,
+      kind: 'capture-unavailable', owner, mode: session.terminalMode || owner,
+      suspendProtected: Boolean(session.terminalSuspendProtected), data: TERMINAL_REPLAY_DISABLED,
       reason
     }, sequence);
     finish();
@@ -1798,7 +1818,7 @@ function createServer(config = loadConfig()) {
   return { app, server, wss, sessions, close };
 }
 
-module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings, UPLOAD_MIME_ALLOWLIST };
+module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings, UPLOAD_MIME_ALLOWLIST };
 
 if (require.main === module) {
   const config = loadConfig();
