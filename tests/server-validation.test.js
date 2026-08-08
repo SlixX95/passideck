@@ -32,7 +32,7 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
 
 (async () => {
   try {
-    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, paneProcessesWithRetry, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, parseCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount } = require('../packages/server/src/index');
+    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, paneProcessesWithRetry, terminalReplayState, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, parseCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount } = require('../packages/server/src/index');
     assert.strictEqual(
       hermesResumeIdFromArgv(['/venv/bin/python3', '/venv/bin/hermes', '--resume', '20260716_180100_5dbdcf']),
       '20260716_180100_5dbdcf',
@@ -157,6 +157,31 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     processDiscoveryAttempts = 0;
     assert.strictEqual(await paneProcessesWithRetry({}, async () => { processDiscoveryAttempts += 1; return null; }, 0), null, 'persistent discovery failure must remain fail-open');
     assert.strictEqual(processDiscoveryAttempts, 2, 'persistent discovery failure must stop after one retry');
+    const releasedReplayState = terminalReplayState(
+      { terminalOwner: 'viewport', terminalMode: 'viewport', terminalSuspendProtected: false },
+      { kind: 'tmux-history', owner: 'application', mode: 'hermes-tui', suspendProtected: true, data: 'stale' }
+    );
+    assert.deepStrictEqual(
+      releasedReplayState,
+      { kind: 'tmux-history', owner: 'viewport', mode: 'viewport', suspendProtected: false, data: 'stale' },
+      'a delayed replay must not restore stale Hermes protection after a newer live release'
+    );
+    assert.deepStrictEqual(
+      terminalReplayState(
+        { terminalOwner: 'application', terminalMode: 'hermes-tui', terminalSuspendProtected: true },
+        { kind: 'tmux-history', owner: 'viewport', mode: 'viewport', suspendProtected: false, data: 'stale' }
+      ),
+      { kind: 'tmux-history', owner: 'application', mode: 'hermes-tui', suspendProtected: true, data: 'stale' },
+      'a delayed replay must not discard newer foreground Hermes protection'
+    );
+    assert.strictEqual(
+      terminalReplayState(
+        { terminalOwner: 'viewport', terminalMode: 'viewport' },
+        { suspendProtected: true }
+      ).suspendProtected,
+      false,
+      'unknown current process evidence must remain fail-open instead of trusting stale replay metadata'
+    );
     assert.strictEqual(
       foregroundHasHermes([{ argv: ['/bin/bash'], pgrp: 100, tpgid: 100 }]),
       false,

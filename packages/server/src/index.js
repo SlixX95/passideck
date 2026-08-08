@@ -953,6 +953,16 @@ function terminalOwner(session) {
   return session?.terminalOwner || terminalOwnerFromProcesses(session?.meta, session?.processSnapshot || []);
 }
 
+function terminalReplayState(session, replay = {}) {
+  const owner = terminalOwner(session);
+  return {
+    ...replay,
+    owner,
+    mode: session?.terminalMode || owner,
+    suspendProtected: Boolean(session?.terminalSuspendProtected)
+  };
+}
+
 async function refreshTerminalOwner(session, forceLatest = false) {
   if (session.terminalStatePromise) {
     const owner = await session.terminalStatePromise;
@@ -1309,8 +1319,9 @@ function startTerminalHydration(session, ws) {
   }
 
   function sendFrame(replay, sequence) {
-    ws.shellHistorySent = replay.kind === 'tmux-history';
-    const sent = sendJson(ws, { type: 'replay', attachId, sequence, outputBoundary: sequence, ...replay });
+    const currentReplay = terminalReplayState(session, replay);
+    ws.shellHistorySent = currentReplay.kind === 'tmux-history';
+    const sent = sendJson(ws, { type: 'replay', attachId, sequence, outputBoundary: sequence, ...currentReplay });
     if (sent) flushHydrationOutput(sequence);
     return sent;
   }
@@ -1825,7 +1836,7 @@ function createServer(config = loadConfig()) {
   return { app, server, wss, sessions, close };
 }
 
-module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, paneProcessesWithRetry, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings, UPLOAD_MIME_ALLOWLIST };
+module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, paneProcessesWithRetry, terminalReplayState, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings, UPLOAD_MIME_ALLOWLIST };
 
 if (require.main === module) {
   const config = loadConfig();
