@@ -139,6 +139,129 @@ function bufferExpression(id) {
     await cdp.send('Runtime.enable', {}, sid);
     await waitFor(() => evaluate(cdp, sid, `typeof state === 'object' && state.sessions.size === 3`), 'three candidate sessions loaded', 15000);
 
+    const geometrySync = await evaluate(cdp, sid, `(async () => {
+      await new Promise(resolve => setTimeout(resolve, 300));
+      const makeEntry = ({ rows, fallback = false, sentRows = 0 }) => {
+        const messages = [];
+        const term = {
+          cols: 80,
+          rows: 24,
+          buffer: { active: { viewportY: 0, baseY: 0 } },
+          resize(cols, nextRows) { this.cols = cols; this.rows = nextRows; },
+          scrollToBottom() {}
+        };
+        const entry = {
+          el: { classList: { contains: () => false }, offsetParent: {} },
+          term,
+          fit: fallback
+            ? { proposeDimensions: () => null, fit: () => term.resize(80, rows) }
+            : { proposeDimensions: () => ({ cols: 80, rows }) },
+          ws: { readyState: WebSocket.OPEN, send: data => messages.push(JSON.parse(data).type) },
+          lastSentCols: sentRows ? 80 : 0,
+          lastSentRows: sentRows
+        };
+        return { entry, messages, term, setRows: nextRows => { rows = nextRows; } };
+      };
+      const scheduledProbe = async options => {
+        const id = 'geometry-probe';
+        const probe = makeEntry(options);
+        state.sessions.set(id, probe.entry);
+        try {
+          scheduleTerminalFit({ ids: [id], delay: 5, lateDelay: 15 });
+          await new Promise(resolve => setTimeout(resolve, 40));
+          return { messages: probe.messages, cols: probe.term.cols, rows: probe.term.rows };
+        } finally {
+          state.sessions.delete(id);
+        }
+      };
+      const forced = makeEntry({ rows: 24, sentRows: 24 });
+      fitEntry('geometry-probe', forced.entry, { allowHeight: true, force: true });
+      const dragProbe = makeEntry({ rows: 32 });
+      state.sessions.set('geometry-drag-probe', dragProbe.entry);
+      const originalResizeDrag = state.resizeDrag;
+      let dragResize;
+      try {
+        state.resizeDrag = {};
+        scheduleTerminalFit({ ids: ['geometry-drag-probe'], delay: 5, lateDelay: 15 });
+        await new Promise(resolve => setTimeout(resolve, 40));
+        const during = [...dragProbe.messages];
+        state.resizeDrag = null;
+        scheduleTerminalFit({ ids: ['geometry-drag-probe'], delay: 5, lateDelay: 15 });
+        await new Promise(resolve => setTimeout(resolve, 40));
+        dragResize = {
+          during,
+          after: [...dragProbe.messages],
+          dirty: Boolean(dragProbe.entry.geometryChangedSinceRedraw)
+        };
+      } finally {
+        state.resizeDrag = originalResizeDrag;
+        state.sessions.delete('geometry-drag-probe');
+      }
+      const timerDragProbe = makeEntry({ rows: 32 });
+      state.sessions.set('geometry-timer-drag-probe', timerDragProbe.entry);
+      let preScheduledDrag;
+      try {
+        state.resizeDrag = null;
+        scheduleTerminalFit({ ids: ['geometry-timer-drag-probe'], delay: 60, lateDelay: 100 });
+        await new Promise(resolve => setTimeout(resolve, 35));
+        timerDragProbe.setRows(40);
+        state.resizeDrag = {};
+        await new Promise(resolve => setTimeout(resolve, 80));
+        const during = [...timerDragProbe.messages];
+        const dirtyDuring = Boolean(timerDragProbe.entry.geometryChangedSinceRedraw);
+        state.resizeDrag = null;
+        scheduleTerminalFit({ ids: ['geometry-timer-drag-probe'], delay: 5, lateDelay: 15 });
+        await new Promise(resolve => setTimeout(resolve, 40));
+        preScheduledDrag = {
+          during,
+          dirtyDuring,
+          after: [...timerDragProbe.messages],
+          dirtyAfter: Boolean(timerDragProbe.entry.geometryChangedSinceRedraw)
+        };
+      } finally {
+        state.resizeDrag = originalResizeDrag;
+        state.sessions.delete('geometry-timer-drag-probe');
+      }
+      const coalescedA = makeEntry({ rows: 32 });
+      const coalescedB = makeEntry({ rows: 32 });
+      state.sessions.set('geometry-coalesced-a', coalescedA.entry);
+      state.sessions.set('geometry-coalesced-b', coalescedB.entry);
+      let coalescedPanes;
+      try {
+        scheduleTerminalFit({ ids: ['geometry-coalesced-a', 'geometry-coalesced-b'], delay: 20, lateDelay: 60 });
+        await new Promise(resolve => setTimeout(resolve, 35));
+        scheduleTerminalFit({ ids: ['geometry-coalesced-a'], delay: 5, lateDelay: 15 });
+        await new Promise(resolve => setTimeout(resolve, 40));
+        coalescedPanes = {
+          a: [...coalescedA.messages],
+          b: [...coalescedB.messages],
+          dirtyA: Boolean(coalescedA.entry.geometryChangedSinceRedraw),
+          dirtyB: Boolean(coalescedB.entry.geometryChangedSinceRedraw)
+        };
+      } finally {
+        state.sessions.delete('geometry-coalesced-a');
+        state.sessions.delete('geometry-coalesced-b');
+      }
+      return {
+        proposed: await scheduledProbe({ rows: 32 }),
+        fallback: await scheduledProbe({ rows: 32, fallback: true }),
+        unchanged: await scheduledProbe({ rows: 24, sentRows: 24 }),
+        forcedUnchanged: { messages: forced.messages, cols: forced.term.cols, rows: forced.term.rows },
+        dragResize,
+        preScheduledDrag,
+        coalescedPanes
+      };
+    })()`);
+    assert.deepStrictEqual(geometrySync, {
+      proposed: { messages: ['resize', 'redraw'], cols: 80, rows: 32 },
+      fallback: { messages: ['resize', 'redraw'], cols: 80, rows: 32 },
+      unchanged: { messages: [], cols: 80, rows: 24 },
+      forcedUnchanged: { messages: ['resize'], cols: 80, rows: 24 },
+      dragResize: { during: ['resize'], after: ['resize', 'redraw'], dirty: false },
+      preScheduledDrag: { during: ['resize'], dirtyDuring: true, after: ['resize', 'resize', 'redraw'], dirtyAfter: false },
+      coalescedPanes: { a: ['resize', 'redraw'], b: ['resize', 'redraw'], dirtyA: false, dirtyB: false }
+    });
+
     const shellState = await waitFor(async () => {
       const value = await evaluate(cdp, sid, bufferExpression(shell.id));
       return value?.baseY > 0 && value.text.includes('shell-line-160') && value.text.includes('[PassiDeck reconnect: output replay disabled; live session still running]') ? value : null;

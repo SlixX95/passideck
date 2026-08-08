@@ -1798,6 +1798,7 @@ function sendResize(id, entry, force = false) {
 function requestTerminalRedraw(entry) {
   entry.term.__passideckSnapshotLinks = null;
   if (entry.ws?.readyState !== WebSocket.OPEN) return;
+  entry.geometryChangedSinceRedraw = false;
   entry.ws.send(JSON.stringify({ type: 'redraw' }));
 }
 
@@ -1808,7 +1809,9 @@ function fitEntry(id, entry, opts = {}) {
     const oldCols = entry.term.cols;
     const oldRows = entry.term.rows;
     entry.fit.fit();
-    if (entry.term.cols !== oldCols || entry.term.rows !== oldRows) entry.term.__passideckSnapshotLinks = null;
+    const changed = entry.term.cols !== oldCols || entry.term.rows !== oldRows;
+    if (changed) entry.term.__passideckSnapshotLinks = null;
+    if (changed) entry.geometryChangedSinceRedraw = true;
     sendResize(id, entry, opts.force);
     return;
   }
@@ -1824,6 +1827,7 @@ function fitEntry(id, entry, opts = {}) {
   if (changed) entry.term.__passideckSnapshotLinks = null;
   if (changed) entry.term.resize(cols, targetRows);
   if ((opts.scrollBottom || atBottom) && changed) entry.term.scrollToBottom?.();
+  if (changed) entry.geometryChangedSinceRedraw = true;
   sendResize(id, entry, opts.force || changed);
 }
 
@@ -1835,10 +1839,25 @@ function fitAll(opts = {}) {
   }
 }
 
+function terminalGeometryInteractionActive() {
+  return Boolean(state.pointerDrag || state.resizeDrag || state.sharedResizeDrag);
+}
+
+function flushTerminalGeometryRedraws() {
+  for (const [, entry] of state.sessions) {
+    if (!entry.geometryChangedSinceRedraw || entry.el.classList.contains('layout-hidden') || entry.el.offsetParent === null) continue;
+    requestTerminalRedraw(entry);
+  }
+}
+
 function scheduleTerminalFit(opts = {}) {
   const previous = state.fitOptions;
   const fitAllPending = Boolean(previous && !previous.ids);
   state.fitOptions = { allowHeight: true, scrollBottom: true, ...opts };
+  if (terminalGeometryInteractionActive()) {
+    state.fitOptions.secondPass = false;
+    state.fitOptions.latePass = false;
+  }
   if (fitAllPending || !opts.ids) delete state.fitOptions.ids;
   else if (previous?.ids) state.fitOptions.ids = [...new Set([...previous.ids, ...opts.ids])];
   if (state.fitTimer) { clearTimeout(state.fitTimer); state.fitTimer = null; }
@@ -1852,12 +1871,16 @@ function scheduleTerminalFit(opts = {}) {
     if (options.secondPass === false) return;
     state.fitTimer = setTimeout(() => {
       state.fitTimer = null;
+      if (terminalGeometryInteractionActive()) return;
       fitAll(options);
+      if (options.latePass === false) flushTerminalGeometryRedraws();
     }, options.delay ?? 50);
     if (options.latePass !== false) {
       state.fitTimerLate = setTimeout(() => {
         state.fitTimerLate = null;
+        if (terminalGeometryInteractionActive()) return;
         fitAll(options);
+        flushTerminalGeometryRedraws();
       }, options.lateDelay ?? 250);
     }
   });
