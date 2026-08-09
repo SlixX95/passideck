@@ -69,8 +69,13 @@ const execFileAsync = promisify(execFile);
 let lastCpuSample = null;
 let lastNetSample = null;
 let codexLimitsCache = { at: 0, data: null };
+let ollamaUsageCache = { at: 0, data: null };
+let nousBalanceCache = { at: 0, data: null };
 const CODEX_LIMITS_CACHE_MS = 60000;
+const OLLAMA_USAGE_CACHE_MS = 60000;
+const NOUS_BALANCE_CACHE_MS = 5 * 60 * 1000;
 const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
+const OLLAMA_USAGE_URL = 'https://ollama.com/api/usage';
 const CODEX_OAUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token';
 const CODEX_OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 const CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 300;
@@ -538,6 +543,93 @@ function requestJson(url, { method = 'GET', headers = {}, body = null, timeoutMs
     if (body) req.write(body);
     req.end();
   });
+}
+
+function readHermesEnvValue(name) {
+  const direct = String(process.env[name] || '').trim();
+  if (direct) return direct;
+  try {
+    for (const line of fs.readFileSync(path.join(hermesHome(), '.env'), 'utf8').split(/\r?\n/)) {
+      const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
+      if (!match || match[1] !== name) continue;
+      let value = match[2];
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
+      return value.trim();
+    }
+  } catch {}
+  return '';
+}
+
+function parseOllamaUsage(body) {
+  if (!body || typeof body !== 'object') throw new Error('Ollama usage returned invalid JSON');
+  const normalizeWindow = window => {
+    if (!window || typeof window !== 'object' || !Number.isFinite(Number(window.usage))) return null;
+    const models = Array.isArray(window.models) ? window.models.map(model => ({
+      name: String(model?.name || '').slice(0, 160),
+      requestCount: Math.max(0, Math.floor(Number(model?.request_count) || 0))
+    })).filter(model => model.name) : [];
+    return {
+      usedPercent: Math.round(Math.max(0, Math.min(1, Number(window.usage))) * 1000) / 10,
+      models
+    };
+  };
+  const session = normalizeWindow(body.limits?.session);
+  const weekly = normalizeWindow(body.limits?.weekly);
+  if (!session && !weekly) throw new Error('Ollama usage returned no limits');
+  return { ok: true, session, weekly };
+}
+
+async function readOllamaUsage() {
+  const now = Date.now();
+  if (ollamaUsageCache.data && now - ollamaUsageCache.at < OLLAMA_USAGE_CACHE_MS) return { ...ollamaUsageCache.data, cached: true };
+  const apiKey = readHermesEnvValue('OLLAMA_API_KEY');
+  if (!apiKey) throw new Error('OLLAMA_API_KEY is unavailable');
+  try {
+    const data = { ...parseOllamaUsage(await requestJson(OLLAMA_USAGE_URL, {
+      headers: { Authorization: `Bearer ${apiKey}`, Accept: 'application/json', 'User-Agent': 'passideck/0 provider-usage' }
+    })), at: new Date().toISOString(), cached: false };
+    ollamaUsageCache = { at: now, data: { ...data, cached: undefined } };
+    return data;
+  } catch (err) {
+    if (ollamaUsageCache.data) return { ...ollamaUsageCache.data, cached: true, stale: true, error: err.message };
+    throw err;
+  }
+}
+
+function normalizeNousUsage(body) {
+  if (!body || typeof body !== 'object') throw new Error('Nous usage returned invalid JSON');
+  const number = value => value === null || value === undefined || value === '' || !Number.isFinite(Number(value)) ? null : Number(value);
+  const totalSpendableUsd = number(body.total_spendable_usd);
+  if (body.available === true && totalSpendableUsd === null) throw new Error('Nous usage returned no spendable balance');
+  return {
+    ok: true,
+    available: body.available === true,
+    status: String(body.status || 'unavailable'),
+    planName: body.plan_name ? String(body.plan_name).slice(0, 80) : null,
+    renewsAt: body.renews_at || null,
+    subscriptionRemainingUsd: number(body.subscription_remaining_usd),
+    topupRemainingUsd: number(body.topup_remaining_usd),
+    totalSpendableUsd
+  };
+}
+
+function hermesPythonPath() {
+  return process.env.PASSIDECK_HERMES_PYTHON || path.join(hermesHome(), 'hermes-agent', 'venv', 'bin', 'python');
+}
+
+async function readNousBalance() {
+  const now = Date.now();
+  if (nousBalanceCache.data && now - nousBalanceCache.at < NOUS_BALANCE_CACHE_MS) return { ...nousBalanceCache.data, cached: true };
+  try {
+    const script = path.join(__dirname, 'read-nous-balance.py');
+    const { stdout } = await execFileAsync(hermesPythonPath(), [script], { timeout: 20000, maxBuffer: 64 * 1024, env: process.env });
+    const data = { ...normalizeNousUsage(JSON.parse(stdout)), at: new Date().toISOString(), cached: false };
+    nousBalanceCache = { at: now, data: { ...data, cached: undefined } };
+    return data;
+  } catch (err) {
+    if (nousBalanceCache.data) return { ...nousBalanceCache.data, cached: true, stale: true, error: err.message };
+    throw new Error(`Nous balance unavailable: ${err.message}`);
+  }
 }
 
 async function refreshHermesCodexAuth(auth) {
@@ -1608,6 +1700,14 @@ function createServer(config = loadConfig()) {
     try { res.json(await readCodexLimits()); }
     catch (err) { res.status(503).json({ ok: false, error: err.message }); }
   });
+  app.get('/api/ollama-usage', async (_req, res) => {
+    try { res.json(await readOllamaUsage()); }
+    catch (err) { res.status(503).json({ ok: false, error: err.message }); }
+  });
+  app.get('/api/nous-balance', async (_req, res) => {
+    try { res.json(await readNousBalance()); }
+    catch (err) { res.status(503).json({ ok: false, error: err.message }); }
+  });
   app.get('/api/ui-state', (_req, res) => res.json(readUiState()));
   app.get('/api/ui-events', (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
@@ -1837,7 +1937,7 @@ function createServer(config = loadConfig()) {
   return { app, server, wss, sessions, close };
 }
 
-module.exports = { createServer, loadConfig, readCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, paneProcessesWithRetry, terminalReplayState, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings, UPLOAD_MIME_ALLOWLIST };
+module.exports = { createServer, loadConfig, readCodexLimits, readOllamaUsage, readNousBalance, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, parseOllamaUsage, normalizeNousUsage, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, paneProcessesWithRetry, terminalReplayState, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings, UPLOAD_MIME_ALLOWLIST };
 
 if (require.main === module) {
   const config = loadConfig();

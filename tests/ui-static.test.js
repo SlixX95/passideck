@@ -64,11 +64,19 @@ assert.ok(html.includes("location.port === '8792' ? 'PassiDeck Dev' : 'PassiDeck
 assert.ok(
   app.includes('function renderCodexLimitCells') &&
   app.includes("const prefix = indexed ? `#${account.index} ` : ''") &&
-  app.includes("separator.textContent = '/'") &&
-  app.includes("part.dataset.limit = kind") &&
+  app.includes("part.dataset.limit = 'secondary'") &&
   app.includes('data-account-index'),
-  'Codex limit chrome must render one compact 5h / 7d chip per credential index'
+  'Codex limit chrome must render one compact weekly chip per credential index'
 );
+assert.ok(!html.includes('Codex 5h') && !app.includes("['primary', '5h']") && !app.includes("kind === 'primary' ? '5h'"), 'the retired Codex 5h limit must be absent from the UI');
+assert.ok(
+  html.includes('id="ollamaUsage"') && html.includes('id="nousBalance"') &&
+  app.includes("api('GET', '/api/ollama-usage')") && app.includes("api('GET', '/api/nous-balance')") &&
+  app.includes('function updateOllamaUsage') && app.includes('function updateNousBalance') &&
+  server.includes("app.get('/api/ollama-usage'") && server.includes("app.get('/api/nous-balance'"),
+  'the provider strip must expose isolated Ollama limits and Nous dollar balance paths'
+);
+assert.ok(app.includes('Number.isFinite(data.subscriptionRemainingUsd)') && app.includes('Number.isFinite(data.topupRemainingUsd)'), 'missing Nous balance components must stay omitted instead of rendering as $0.00');
 assert.ok(
   app.includes("cell.classList.toggle('active-account', Boolean(account.active))") &&
   app.includes("dot.className = 'codex-active-dot'") &&
@@ -330,7 +338,7 @@ assert.ok(
   app.includes('handleTerminalLink(event, link)'),
   'Hermes TUI selection must support mouse-only browser/desktop input and activate terminal links from the trusted pointer event'
 );
-assert.ok(html.includes('app.js?v=20260808-terminal-geometry-resync-v6') && html.includes('style.css?v=20260808-terminal-geometry-resync-v6'), 'client cache keys must activate terminal geometry resync and surface styling together');
+assert.ok(html.includes('app.js?v=20260809-provider-usage-v1') && html.includes('style.css?v=20260809-provider-usage-v1'), 'client cache keys must activate the provider usage strip');
 assert.ok(app.includes("const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v2:'"), 'legacy snapshots without OSC 8 targets must be invalidated');
 assert.ok(app.includes('cols: entry.term.cols') && app.includes('Number.isInteger(snapshot.cols) && snapshot.cols === term.cols'), 'snapshot OSC 8 targets must fail closed after terminal column reflow');
 assert.ok(app.includes('const HERMES_TUI_WHEEL_MULTIPLIER = 3') && app.includes('clean.repeat(HERMES_TUI_WHEEL_MULTIPLIER)'), 'Hermes TUI wheel input must be accelerated at the PTY input boundary');

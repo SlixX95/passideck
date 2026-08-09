@@ -7,7 +7,7 @@
   <title>PassiDeck</title>
   <script>document.title = location.port === '8792' ? 'PassiDeck Dev' : 'PassiDeck';</script>
   <link rel="stylesheet" href="vendor/xterm.css">
-  <link rel="stylesheet" href="style.css?v=20260808-terminal-geometry-resync-v6">
+  <link rel="stylesheet" href="style.css?v=20260809-provider-usage-v1">
 </head>
 <body data-theme="green">
   <header class="topbar">
@@ -41,10 +41,11 @@
               <span class="monitor-cell" data-metric="ram"><span>RAM</span><b>0%</b></span>
               <span class="monitor-cell" data-metric="disk" aria-label="Disk"><span>DSK</span><b>--%</b></span>
             </section>
-            <section id="codexLimits" class="codex-limits" aria-label="Codex limits">
-              <span class="codex-limit" data-account-index="1" data-limit="primary" data-tooltip="Codex 5h" aria-label="Codex 5h"><span>5h</span><b>--%</b></span>
-              <span class="codex-limit" data-account-index="1" data-limit="secondary" data-tooltip="Codex 7d" aria-label="Codex 7d"><span>7d</span><b>--%</b></span>
+            <section id="codexLimits" class="codex-limits" aria-label="Codex weekly limits">
+              <span class="codex-limit" data-account-index="1" data-limit="secondary" data-tooltip="Codex weekly" aria-label="Codex weekly"><span class="codex-account-label">CX</span><span class="codex-limit-part" data-limit="secondary"><span>7d</span><b>--%</b></span></span>
             </section>
+            <span id="ollamaUsage" class="codex-limit" data-tooltip="Ollama Cloud usage unavailable" aria-label="Ollama Cloud usage unavailable"><span class="codex-account-label">OL</span><span class="codex-limit-part" data-window="session"><span>S</span><b>--%</b></span><span class="codex-limit-separator" aria-hidden="true">/</span><span class="codex-limit-part" data-window="weekly"><span>7d</span><b>--%</b></span></span>
+            <span id="nousBalance" class="codex-limit" data-tooltip="Nous balance unavailable" aria-label="Nous balance unavailable"><span class="codex-account-label">NOUS</span><b>$--</b></span>
             <span class="command-divider"></span>
             <button id="settingsToggle" class="chrome-btn" data-tooltip="Settings" aria-label="Settings" aria-expanded="false" aria-controls="settingsPanel">⚙ settings</button>
             <button id="uploadFileBtn" class="chrome-btn" data-tooltip="Upload file into active terminal" aria-label="Upload file">⇧ upload</button>
@@ -220,6 +221,6 @@
   <script src="vendor/addon-web-links.js"></script>
   <script src="vendor/addon-serialize.js"></script>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="app.js?v=20260808-terminal-geometry-resync-v6" defer></script>
+  <script src="app.js?v=20260809-provider-usage-v1" defer></script>
 </body>
 </html>

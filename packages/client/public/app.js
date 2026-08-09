@@ -63,7 +63,7 @@ const state = {
   uploadBusy: false,
   systemMonitorTimer: null,
   systemMonitorInFlight: false,
-  codexLimitsTimer: null,
+  providerUsageTimer: null,
   socketHeartbeatTimer: null,
   latencyProbeTimer: null,
   resumeTimer: null,
@@ -1685,13 +1685,17 @@ function renderCodexLimitCells(accounts) {
     cell.className = 'codex-limit';
     cell.dataset.accountIndex = String(account.index);
     cell.setAttribute('data-account-index', String(account.index));
-    cell.setAttribute('aria-label', `Codex ${indexed ? `#${account.index}` : ''} limits`);
+    cell.setAttribute('aria-label', `Codex${indexed ? ` #${account.index}` : ''} weekly limit`);
     if (account.active) {
       const dot = document.createElement('i');
       dot.className = 'codex-active-dot';
       dot.setAttribute('aria-hidden', 'true');
       cell.append(dot);
     }
+    const providerLabel = document.createElement('span');
+    providerLabel.className = 'codex-account-label';
+    providerLabel.textContent = 'CX';
+    cell.append(providerLabel);
     const prefix = indexed ? `#${account.index} ` : '';
     if (prefix) {
       const accountLabel = document.createElement('span');
@@ -1699,40 +1703,30 @@ function renderCodexLimitCells(accounts) {
       accountLabel.textContent = prefix.trim();
       cell.append(accountLabel);
     }
-    for (const [kind, labelText] of [['primary', '5h'], ['secondary', '7d']]) {
-      if (kind === 'secondary') {
-        const separator = document.createElement('span');
-        separator.className = 'codex-limit-separator';
-        separator.textContent = '/';
-        separator.setAttribute('aria-hidden', 'true');
-        cell.append(separator);
-      }
-      const part = document.createElement('span');
-      part.className = 'codex-limit-part';
-      part.dataset.limit = kind;
-      const label = document.createElement('span');
-      label.textContent = labelText;
-      const value = document.createElement('b');
-      value.textContent = '--%';
-      part.append(label, value);
-      cell.append(part);
-    }
+    const part = document.createElement('span');
+    part.className = 'codex-limit-part';
+    part.dataset.limit = 'secondary';
+    const label = document.createElement('span');
+    label.textContent = '7d';
+    const value = document.createElement('b');
+    value.textContent = '--%';
+    part.append(label, value);
+    cell.append(part);
     root.append(cell);
   }
 }
 
-function setCodexLimitCell(account, kind, limit) {
+function setCodexLimitCell(account, limit) {
   const cell = document.querySelector(`#codexLimits [data-account-index="${account.index}"]`);
-  const part = cell?.querySelector(`[data-limit="${kind}"]`);
+  const part = cell?.querySelector('[data-limit="secondary"]');
   if (!cell || !part) return;
   cell.classList.toggle('active-account', Boolean(account.active));
   cell.classList.toggle('limit-reached', Boolean(account.rateLimitReachedType));
-  const windowName = kind === 'primary' ? '5h' : '7d';
   const accountName = account.label || `#${account.index}`;
   if (!limit) {
     part.classList.add('unavailable');
     part.querySelector('b').textContent = '--%';
-    setTooltip(part, `Codex ${accountName} ${windowName}${account.active ? ' · currently active' : ''} unavailable${account.error ? ` · ${account.error}` : ''}`);
+    setTooltip(cell, `Codex ${accountName} weekly${account.active ? ' · currently active' : ''} unavailable${account.error ? ` · ${account.error}` : ''}`);
     return;
   }
   const used = Math.max(0, Math.min(100, Math.round(Number(limit.usedPercent) || 0)));
@@ -1740,33 +1734,90 @@ function setCodexLimitCell(account, kind, limit) {
   part.classList.remove('unavailable');
   part.style.setProperty('--v', `${left}%`);
   part.querySelector('b').textContent = `${left}%`;
-  setTooltip(part, `Codex ${accountName} ${windowName}${account.active ? ' · currently active' : ''}: ${left}% left (${used}% used) · ${formatReset(limit.resetsAt)}`);
+  setTooltip(cell, `Codex ${accountName} weekly${account.active ? ' · currently active' : ''}: ${left}% left (${used}% used) · ${formatReset(limit.resetsAt)}`);
 }
 
 function updateCodexLimits(data) {
   const accounts = Array.isArray(data?.accounts) && data.accounts.length
     ? data.accounts
-    : [{ index: 1, label: '#1', primary: data?.primary, secondary: data?.secondary, error: data?.error }];
+    : [{ index: 1, label: '#1', active: true, secondary: data?.secondary, error: data?.error }];
   renderCodexLimitCells(accounts);
-  for (const account of accounts) {
-    setCodexLimitCell(account, 'primary', account.primary);
-    setCodexLimitCell(account, 'secondary', account.secondary);
-  }
+  for (const account of accounts) setCodexLimitCell(account, account.secondary);
 }
 
-async function pollCodexLimits() {
-  try {
-    updateCodexLimits(await api('GET', '/api/codex-limits'));
-  } catch (err) {
-    console.warn('codex limits unavailable', err);
-    updateCodexLimits(null);
-  }
+function compactPercent(value) {
+  const rounded = Math.round(Number(value) * 10) / 10;
+  return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)}%`;
 }
 
-function startCodexLimitsPolling() {
-  if (state.codexLimitsTimer) return;
-  pollCodexLimits();
-  state.codexLimitsTimer = setInterval(pollCodexLimits, 60000);
+function updateOllamaUsage(data) {
+  const cell = document.getElementById('ollamaUsage');
+  if (!cell) return;
+  const session = data?.session;
+  const weekly = data?.weekly;
+  const windows = [['session', session], ['weekly', weekly]];
+  for (const [name, window] of windows) {
+    const part = cell.querySelector(`[data-window="${name}"]`);
+    if (!part) continue;
+    const value = part.querySelector('b');
+    if (!window) {
+      part.classList.add('unavailable');
+      value.textContent = '--%';
+      continue;
+    }
+    part.classList.remove('unavailable');
+    value.textContent = compactPercent(Math.max(0, 100 - Number(window.usedPercent || 0)));
+  }
+  const describe = (name, window) => {
+    if (!window) return `${name} unavailable`;
+    const requests = (window.models || []).reduce((sum, model) => sum + (Number(model.requestCount) || 0), 0);
+    return `${name} ${compactPercent(Math.max(0, 100 - Number(window.usedPercent || 0)))} left (${compactPercent(window.usedPercent || 0)} used, ${requests} requests)`;
+  };
+  const models = [...new Set([...(session?.models || []), ...(weekly?.models || [])].map(model => model.name).filter(Boolean))];
+  const details = `Ollama Cloud: ${describe('session', session)} · ${describe('weekly', weekly)}${models.length ? ` · ${models.join(', ')}` : ''}${data?.stale ? ' · stale' : ''}`;
+  cell.classList.toggle('limit-reached', [session, weekly].some(window => Number(window?.usedPercent || 0) >= 100));
+  setTooltip(cell, details);
+  cell.setAttribute('aria-label', details);
+}
+
+function updateNousBalance(data) {
+  const cell = document.getElementById('nousBalance');
+  const value = cell?.querySelector('b');
+  if (!cell || !value) return;
+  const total = Number(data?.totalSpendableUsd);
+  if (!data?.available || !Number.isFinite(total)) {
+    cell.classList.add('unavailable');
+    value.textContent = '$--';
+    const details = `Nous balance unavailable${data?.error ? ` · ${data.error}` : ''}`;
+    setTooltip(cell, details);
+    cell.setAttribute('aria-label', details);
+    return;
+  }
+  cell.classList.remove('unavailable');
+  cell.classList.toggle('limit-reached', total <= 5);
+  value.textContent = `$${total.toFixed(2)}`;
+  const parts = [`Nous ${data.planName || 'Portal'}: $${total.toFixed(2)} spendable`];
+  if (Number.isFinite(data.subscriptionRemainingUsd)) parts.push(`plan $${data.subscriptionRemainingUsd.toFixed(2)}`);
+  if (Number.isFinite(data.topupRemainingUsd)) parts.push(`top-up $${data.topupRemainingUsd.toFixed(2)}`);
+  if (data.renewsAt) parts.push(formatReset(data.renewsAt).replace(/^reset /, 'renews '));
+  if (data.stale) parts.push('stale');
+  const details = parts.join(' · ');
+  setTooltip(cell, details);
+  cell.setAttribute('aria-label', details);
+}
+
+async function pollProviderUsage() {
+  await Promise.all([
+    api('GET', '/api/codex-limits').then(updateCodexLimits).catch(err => { console.warn('codex limits unavailable', err); updateCodexLimits(null); }),
+    api('GET', '/api/ollama-usage').then(updateOllamaUsage).catch(err => { console.warn('ollama usage unavailable', err); updateOllamaUsage(null); }),
+    api('GET', '/api/nous-balance').then(updateNousBalance).catch(err => { console.warn('nous balance unavailable', err); updateNousBalance(null); })
+  ]);
+}
+
+function startProviderUsagePolling() {
+  if (state.providerUsageTimer) return;
+  pollProviderUsage();
+  state.providerUsageTimer = setInterval(pollProviderUsage, 60000);
 }
 
 function setSystemMonitorVisible(visible, opts = {}) {
@@ -3689,7 +3740,7 @@ function resumeAllPanes(forceReconnect = false) {
     }
   }
   scheduleTerminalFit({ force: true });
-  pollCodexLimits();
+  pollProviderUsage();
   pollSystemMonitor();
 }
 
@@ -4267,7 +4318,7 @@ async function init() {
   setNotifyBlinking(ui?.notifyBlinking !== false, { persist: false });
   setChromeHidden(Boolean(ui?.chromeHidden), { persist: false, resize: false });
   setSystemMonitorVisible(Boolean(ui?.systemMonitor), { persist: false });
-  startCodexLimitsPolling();
+  startProviderUsagePolling();
   installCloseHitLayer();
   sessions.forEach(createPanel);
   restorePanelOrder();

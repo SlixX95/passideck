@@ -32,7 +32,7 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
 
 (async () => {
   try {
-    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, paneProcessesWithRetry, terminalReplayState, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, parseCodexLimits, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount } = require('../packages/server/src/index');
+    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, paneProcessesWithRetry, terminalReplayState, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, parseCodexLimits, parseOllamaUsage, normalizeNousUsage, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount } = require('../packages/server/src/index');
     assert.strictEqual(
       hermesResumeIdFromArgv(['/venv/bin/python3', '/venv/bin/hermes', '--resume', '20260716_180100_5dbdcf']),
       '20260716_180100_5dbdcf',
@@ -233,6 +233,47 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     }, false);
     assert.strictEqual(weeklyOnly.primary, null, 'a weekly-only window must not be shown as the 5h limit');
     assert.strictEqual(weeklyOnly.secondary.windowDurationMins, 10080, 'a seven-day window must be shown as weekly');
+    assert.deepStrictEqual(
+      parseOllamaUsage({
+        limits: {
+          session: { usage: 0.003, models: [{ name: 'deepseek-v4-flash:0731', request_count: 7 }] },
+          weekly: { usage: 0.059, models: [{ name: 'deepseek-v4-flash:0731', request_count: 1092 }] }
+        }
+      }),
+      {
+        ok: true,
+        session: { usedPercent: 0.3, models: [{ name: 'deepseek-v4-flash:0731', requestCount: 7 }] },
+        weekly: { usedPercent: 5.9, models: [{ name: 'deepseek-v4-flash:0731', requestCount: 1092 }] }
+      },
+      'Ollama Cloud fractions and model request counts must normalize for the compact provider display'
+    );
+    assert.deepStrictEqual(
+      normalizeNousUsage({
+        available: true,
+        status: 'healthy',
+        plan_name: 'Plus',
+        renews_at: '2026-09-09T00:00:00Z',
+        subscription_remaining_usd: 21.9598463542,
+        topup_remaining_usd: 35.58012263592,
+        total_spendable_usd: 57.53996899012
+      }),
+      {
+        ok: true,
+        available: true,
+        status: 'healthy',
+        planName: 'Plus',
+        renewsAt: '2026-09-09T00:00:00Z',
+        subscriptionRemainingUsd: 21.9598463542,
+        topupRemainingUsd: 35.58012263592,
+        totalSpendableUsd: 57.53996899012
+      },
+      'Nous usage must expose only the normalized dollar balance fields used by PassiDeck'
+    );
+    assert.deepStrictEqual(
+      normalizeNousUsage({ available: false, status: 'unavailable', subscription_remaining_usd: null, topup_remaining_usd: null, total_spendable_usd: null }),
+      { ok: true, available: false, status: 'unavailable', planName: null, renewsAt: null, subscriptionRemainingUsd: null, topupRemainingUsd: null, totalSpendableUsd: null },
+      'an unavailable Nous account must not turn missing money fields into zero dollars'
+    );
 
     const hermesAuthPath = path.join(home, 'hermes-auth.json');
     const codexAuthPath = path.join(home, 'codex-auth.json');
