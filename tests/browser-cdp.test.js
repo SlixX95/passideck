@@ -212,6 +212,8 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await waitEval(cdp, sid, 'document.readyState === "complete"');
     await waitEval(cdp, sid, 'document.querySelectorAll(".term-panel").length >= 11');
     await waitEval(cdp, sid, '[...state.sessions.values()][0].term.buffer.active.baseY > 0', 10000);
+    const styledReplay = await evalExpr(cdp, sid, `normalizeReplayText('\\x1b[38;5;201mindexed\\x1b[38:2::255:0:127mcolon\\x1b[2J\\x1b[?25m\\x1b[1 m\\x1bM\\x1b7\\x1b8\\x1b=\\x1b>\\x1bXsos-payload\\x1b\\\\\\x01\\x1b')`);
+    assert.strictEqual(styledReplay, '\x1b[38;5;201mindexed\x1b[38:2::255:0:127mcolon', 'tmux replay normalization must preserve valid SGR while removing other controls');
     const shellHistoryWheel = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
       entry.term.scrollToBottom();

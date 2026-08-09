@@ -2215,11 +2215,12 @@ function normalizeReplayText(data) {
   return String(data || '')
     .replace(/\x1bc/g, '')
     .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\)/g, '')
-    .replace(/\x1b[P_^][\s\S]*?\x1b\\/g, '')
-    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-    .replace(/\x1b[@-Z\\-_]/g, '')
+    .replace(/\x1b[PX_^][\s\S]*?\x1b\\/g, '')
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, sequence => /^\x1b\[[0-9;:]*m$/.test(sequence) ? sequence : '')
+    .replace(/\x1b(?!\[)[ -/]*[0-~]/g, '')
+    .replace(/\x1b(?!\[[0-9;:]*m)/g, '')
     .replace(/\r?\n/g, '\r\n')
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1a\x1c-\x1f\x7f]/g, '');
 }
 
 function sanitizeTerminalOutput(data) {
