@@ -1738,6 +1738,10 @@ function setCodexLimitCell(account, limit) {
 }
 
 function updateCodexLimits(data) {
+  const root = document.getElementById('codexLimits');
+  if (!root) return;
+  if (!data?.ok) { root.hidden = true; return; }
+  root.hidden = false;
   const accounts = Array.isArray(data?.accounts) && data.accounts.length
     ? data.accounts
     : [{ index: 1, label: '#1', active: true, secondary: data?.secondary, error: data?.error }];
@@ -1755,6 +1759,8 @@ function updateOllamaUsage(data) {
   if (!cell) return;
   const session = data?.session;
   const weekly = data?.weekly;
+  if (!session && !weekly) { cell.hidden = true; return; }
+  cell.hidden = false;
   const windows = [['session', session], ['weekly', weekly]];
   for (const [name, window] of windows) {
     const part = cell.querySelector(`[data-window="${name}"]`);
@@ -1785,14 +1791,8 @@ function updateNousBalance(data) {
   const value = cell?.querySelector('b');
   if (!cell || !value) return;
   const total = Number(data?.totalSpendableUsd);
-  if (!data?.available || !Number.isFinite(total)) {
-    cell.classList.add('unavailable');
-    value.textContent = '$--';
-    const details = `Nous balance unavailable${data?.error ? ` · ${data.error}` : ''}`;
-    setTooltip(cell, details);
-    cell.setAttribute('aria-label', details);
-    return;
-  }
+  if (!data?.available || !Number.isFinite(total)) { cell.hidden = true; return; }
+  cell.hidden = false;
   cell.classList.remove('unavailable');
   cell.classList.toggle('limit-reached', total <= 5);
   value.textContent = `$${total.toFixed(2)}`;

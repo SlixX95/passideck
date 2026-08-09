@@ -76,6 +76,16 @@ assert.ok(
   server.includes("app.get('/api/ollama-usage'") && server.includes("app.get('/api/nous-balance'"),
   'the provider strip must expose isolated Ollama limits and Nous dollar balance paths'
 );
+assert.ok(
+  html.includes('id="codexLimits" class="codex-limits" hidden') &&
+  html.includes('id="ollamaUsage" class="codex-limit" hidden') &&
+  html.includes('id="nousBalance" class="codex-limit" hidden') &&
+  app.includes('if (!data?.ok) { root.hidden = true; return; }') &&
+  app.includes('if (!session && !weekly) { cell.hidden = true; return; }') &&
+  app.includes('if (!data?.available || !Number.isFinite(total)) { cell.hidden = true; return; }') &&
+  style.includes('.codex-limits[hidden], .codex-limit[hidden] { display: none; }'),
+  'provider chips must stay absent when their provider is not configured'
+);
 assert.ok(app.includes('Number.isFinite(data.subscriptionRemainingUsd)') && app.includes('Number.isFinite(data.topupRemainingUsd)'), 'missing Nous balance components must stay omitted instead of rendering as $0.00');
 assert.ok(
   app.includes("cell.classList.toggle('active-account', Boolean(account.active))") &&
@@ -338,7 +348,7 @@ assert.ok(
   app.includes('handleTerminalLink(event, link)'),
   'Hermes TUI selection must support mouse-only browser/desktop input and activate terminal links from the trusted pointer event'
 );
-assert.ok(html.includes('app.js?v=20260809-provider-usage-v1') && html.includes('style.css?v=20260809-provider-usage-v1'), 'client cache keys must activate the provider usage strip');
+assert.ok(html.includes('app.js?v=20260809-provider-visibility-v2') && html.includes('style.css?v=20260809-provider-visibility-v2'), 'client cache keys must activate the provider usage strip');
 assert.ok(app.includes("const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v2:'"), 'legacy snapshots without OSC 8 targets must be invalidated');
 assert.ok(app.includes('cols: entry.term.cols') && app.includes('Number.isInteger(snapshot.cols) && snapshot.cols === term.cols'), 'snapshot OSC 8 targets must fail closed after terminal column reflow');
 assert.ok(app.includes('const HERMES_TUI_WHEEL_MULTIPLIER = 3') && app.includes('clean.repeat(HERMES_TUI_WHEEL_MULTIPLIER)'), 'Hermes TUI wheel input must be accelerated at the PTY input boundary');

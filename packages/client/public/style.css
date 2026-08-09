@@ -183,6 +183,7 @@ body.notify-blinking .switcher-btn.response-pulse:not(.active) { animation: swit
 .chrome-btn:hover { color: var(--tg-accent); border-color: var(--tg-accent); background: color-mix(in srgb, var(--tg-accent-dim) 40%, transparent); }
 #uploadFileBtn, #clipboardImageBtn { color: var(--tg-accent); }
 .codex-limits { display: flex; align-items: center; gap: 3px; height: 23px; }
+.codex-limits[hidden], .codex-limit[hidden] { display: none; }
 .codex-limit { display: inline-flex; align-items: center; height: 21px; gap: 4px; padding: 0 6px; border: 1px solid var(--tg-border); color: var(--tg-text-dim); background: linear-gradient(180deg, var(--tg-surface-hover), #050909); position: relative; }
 .codex-limit-part { display: inline-flex; align-items: center; gap: 2px; }
 .codex-account-label { font-weight: 800; }
