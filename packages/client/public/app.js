@@ -6,7 +6,7 @@ const PERFORMANCE_MODE_KEY = 'passideck:performance-mode';
 const SOCKET_HEARTBEAT_MS = 15000;
 const SOCKET_STALE_MS = SOCKET_HEARTBEAT_MS * 3;
 const LATENCY_PROBE_MS = 3000;
-const HERMES_TUI_WHEEL_MULTIPLIER = 3;
+const HERMES_TUI_WHEEL_MULTIPLIER = 1.5;
 
 function authToken() {
   const urlToken = new URLSearchParams(window.location.search).get('token') || '';
@@ -2211,6 +2211,34 @@ function sanitizeTerminalInput(data) {
   return stripTerminalReplyJunk(data);
 }
 
+function scaleHermesTuiWheelInput(entry, data) {
+  const input = String(data || '');
+  if (!entry) return input ? [input] : [];
+  const reports = input.match(/\x1b\[<6[45];\d+;\d+M/g);
+  if (!reports || reports.join('') !== input) return input ? [input] : [];
+  let remainder = Number(entry.tuiWheelRemainder) || 0;
+  const chunks = [];
+  let chunk = '';
+  let chunkReports = 0;
+  for (const report of reports) {
+    const total = HERMES_TUI_WHEEL_MULTIPLIER + remainder;
+    const copies = Math.floor(total);
+    remainder = total - copies;
+    for (let copy = 0; copy < copies; copy += 1) {
+      if (chunkReports === 2) {
+        chunks.push(chunk);
+        chunk = '';
+        chunkReports = 0;
+      }
+      chunk += report;
+      chunkReports += 1;
+    }
+  }
+  if (chunk) chunks.push(chunk);
+  entry.tuiWheelRemainder = remainder;
+  return chunks;
+}
+
 function normalizeReplayText(data) {
   return String(data || '')
     .replace(/\x1bc/g, '')
@@ -3431,16 +3459,16 @@ function createPanel(session, opts = {}) {
   term.onData(data => {
     clearResponseAttention(id);
     const entry = state.sessions.get(id);
-    let clean = sanitizeTerminalInput(data);
-    if (isHermesTuiEntry(entry) && /^(?:\x1b\[<6[45];\d+;\d+M)+$/.test(clean)) clean = clean.repeat(HERMES_TUI_WHEEL_MULTIPLIER);
+    const clean = sanitizeTerminalInput(data);
     if (clean && entry?.ws?.readyState === WebSocket.OPEN) {
-      entry.ws.send(JSON.stringify({ type: 'input', data: clean }));
+      const inputChunks = isHermesTuiEntry(entry) ? scaleHermesTuiWheelInput(entry, clean) : [clean];
+      for (const chunk of inputChunks) entry.ws.send(JSON.stringify({ type: 'input', data: chunk }));
     }
   });
 
   const hasSnapshot = hasTerminalSnapshot(id);
   const terminalOwner = declaredTerminalOwner(session);
-  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, arrangeCleanup: dismissArrange, dragSelectionCleanup, terminalOwner, terminalMode: isHermesTuiEntry({ session }) ? 'hermes-tui' : terminalOwner, hasSnapshot, attachCount: 0, attachId: '', outputSequence: 0, snapshotTimer: null, outputBuffer: [], outputBufferChars: 0, outputGeneration: 0, pendingReplay: null, pendingReplayCursor: null, pendingReplayAck: '', pendingReplaySocket: null, pendingHermesEvents: [], outputFlushTimer: null, outputWriteInFlight: false, outputFrameHandle: null, outputCancelled: false, titleRefreshTimer: null, titleSource: '', working: false, lastSentCols: 0, lastSentRows: 0 });
+  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, arrangeCleanup: dismissArrange, dragSelectionCleanup, terminalOwner, terminalMode: isHermesTuiEntry({ session }) ? 'hermes-tui' : terminalOwner, tuiWheelRemainder: 0, hasSnapshot, attachCount: 0, attachId: '', outputSequence: 0, snapshotTimer: null, outputBuffer: [], outputBufferChars: 0, outputGeneration: 0, pendingReplay: null, pendingReplayCursor: null, pendingReplayAck: '', pendingReplaySocket: null, pendingHermesEvents: [], outputFlushTimer: null, outputWriteInFlight: false, outputFrameHandle: null, outputCancelled: false, titleRefreshTimer: null, titleSource: '', working: false, lastSentCols: 0, lastSentRows: 0 });
   term.onBell?.(() => notifyResponseComplete(id));
 
   if (state.minimized.has(id)) el.classList.add('minimized');
@@ -3550,6 +3578,7 @@ function applyTerminalOwner(id, term, owner, mode = owner, suspendProtected) {
   if (!entry || !['viewport', 'application'].includes(owner) || !['viewport', 'application', 'hermes-tui'].includes(mode)) return;
   const previous = entry.terminalOwner;
   const previousMode = entry.terminalMode;
+  if (previous !== owner || previousMode !== mode) entry.tuiWheelRemainder = 0;
   entry.terminalOwner = owner;
   entry.terminalMode = mode;
   if (typeof suspendProtected === 'boolean') entry.terminalSuspendProtected = suspendProtected;

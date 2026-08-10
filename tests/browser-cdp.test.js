@@ -3027,7 +3027,13 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     const altScreenWheel = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
       const oldCommand = entry.session.meta.command;
+      const oldTerminalOwner = entry.terminalOwner;
+      const oldTerminalMode = entry.terminalMode;
+      const oldTuiWheelRemainder = entry.tuiWheelRemainder;
       entry.session.meta.command = 'hermes --tui';
+      entry.terminalOwner = 'application';
+      entry.terminalMode = 'hermes-tui';
+      entry.tuiWheelRemainder = 0;
       let scrollCalls = 0;
       const mouseData = [];
       const acceleratedInput = [];
@@ -3054,14 +3060,20 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const baseAfterFirst = entry.term.buffer.active.baseY;
       await new Promise(resolve => entry.term.write(Array.from({ length: entry.term.rows + 5 }, (_, i) => 'resumed-response-' + i + '\\r\\n').join(''), resolve));
       const baseBeforeSecond = entry.term.buffer.active.baseY;
-      const second = new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 });
+      const second = new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 });
       const secondDispatched = target.dispatchEvent(second);
       const baseAfterSecond = entry.term.buffer.active.baseY;
       await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const acceleratedPerInput = acceleratedInput.map(data => (data.match(/\\x1b\\[<6[45];\\d+;\\d+M/g) || []).length);
+      const groupedReport = '\\x1b[<64;1;1M';
+      const groupedPerInput = scaleHermesTuiWheelInput({ tuiWheelRemainder: 0 }, groupedReport + groupedReport)
+        .map(data => (data.match(/\\x1b\\[<64;1;1M/g) || []).length);
       const out = {
         scrollCalls,
         mouseEvents: mouseData.filter(data => data.includes('\\x1b[<')).length,
-        acceleratedMouseEvents: (acceleratedInput.join('').match(/\\x1b\\[<6[45];\\d+;\\d+M/g) || []).length,
+        acceleratedMouseEvents: acceleratedPerInput.reduce((sum, count) => sum + count, 0),
+        acceleratedPerInput,
+        groupedPerInput,
         wheelStable: baseBeforeFirst === baseAfterFirst && baseBeforeSecond === baseAfterSecond,
         canceled: !firstDispatched || first.defaultPrevented || !secondDispatched || second.defaultPrevented,
         capturePrevented
@@ -3071,14 +3083,19 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       socket.send = originalSend;
       entry.term.scrollLines = oldScrollLines;
       entry.session.meta.command = oldCommand;
+      entry.terminalOwner = oldTerminalOwner;
+      entry.terminalMode = oldTerminalMode;
+      entry.tuiWheelRemainder = oldTuiWheelRemainder;
       return out;
     })()`);
-    assert.deepStrictEqual(altScreenWheel, { scrollCalls: 0, mouseEvents: 2, acceleratedMouseEvents: 6, wheelStable: true, canceled: true, capturePrevented: false }, 'Hermes TUI wheel must reach the TUI at accelerated speed before and after resumed-session output without scrolling xterm/browser chrome');
+    assert.deepStrictEqual(altScreenWheel, { scrollCalls: 0, mouseEvents: 2, acceleratedMouseEvents: 3, acceleratedPerInput: [1, 2], groupedPerInput: [2, 1], wheelStable: true, canceled: true, capturePrevented: false }, 'Hermes TUI wheel must average 1.5 reports per physical event without forwarding more than two reports per WebSocket input');
 
     const resizedNormalBufferTuiWheel = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
       const oldCommand = entry.session.meta.command;
+      const oldTuiWheelRemainder = entry.tuiWheelRemainder;
       entry.session.meta.command = 'hermes --tui';
+      entry.tuiWheelRemainder = 0;
       const mouseData = [];
       let scrollCalls = 0;
       const dataListener = entry.term.onData(data => mouseData.push(data));
@@ -3105,6 +3122,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       dataListener.dispose();
       entry.term.scrollLines = oldScrollLines;
       entry.session.meta.command = oldCommand;
+      entry.tuiWheelRemainder = oldTuiWheelRemainder;
       return out;
     })()`);
     assert.deepStrictEqual(resizedNormalBufferTuiWheel, { bufferType: 'normal', hadScrollback: true, mouseEvents: 1, scrollCalls: 0, viewportStable: true, canceled: true }, 'resized Hermes TUI in a normal xterm buffer must keep wheel routed to the TUI even when baseY is nonzero');

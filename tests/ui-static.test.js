@@ -350,10 +350,10 @@ assert.ok(
 );
 const replayNormalizer = app.slice(app.indexOf('function normalizeReplayText'), app.indexOf('function sanitizeTerminalOutput'));
 assert.ok(!replayNormalizer.includes(".replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '')"), 'tmux replay normalization must not strip SGR with every CSI control');
-assert.ok(html.includes('app.js?v=20260809-provider-visibility-sgr-v3') && html.includes('style.css?v=20260809-provider-visibility-sgr-v3'), 'client cache keys must activate provider visibility and terminal replay SGR preservation');
+assert.ok(html.includes('app.js?v=20260810-tui-wheel-smoothing-v1') && html.includes('style.css?v=20260810-tui-wheel-smoothing-v1'), 'client cache keys must activate smoother half-speed Hermes TUI wheel input');
 assert.ok(app.includes("const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v2:'"), 'legacy snapshots without OSC 8 targets must be invalidated');
 assert.ok(app.includes('cols: entry.term.cols') && app.includes('Number.isInteger(snapshot.cols) && snapshot.cols === term.cols'), 'snapshot OSC 8 targets must fail closed after terminal column reflow');
-assert.ok(app.includes('const HERMES_TUI_WHEEL_MULTIPLIER = 3') && app.includes('clean.repeat(HERMES_TUI_WHEEL_MULTIPLIER)'), 'Hermes TUI wheel input must be accelerated at the PTY input boundary');
+assert.ok(app.includes('const HERMES_TUI_WHEEL_MULTIPLIER = 1.5') && app.includes('scaleHermesTuiWheelInput(entry, clean)') && app.includes('for (const chunk of inputChunks)'), 'Hermes TUI wheel input must average 1.5 reports per event and cap each PTY input frame at two reports');
 assert.ok(app.includes("JSON.stringify({ type: 'redraw' })") && app.includes('requestTerminalRedraw(entry)') && app.includes("msg.kind === 'live-only'") && app.includes("type: 'replay-ack'"), 'live-only attach must redraw while authoritative history acknowledges its typed replay');
 assert.ok(!app.includes('redrawPending'), 'removed initial-redraw state must not leave dead writes behind');
 assert.ok(app.includes('if (changed) entry.term.__passideckSnapshotLinks = null'), 'later terminal resize must invalidate restored OSC 8 target coordinates');
