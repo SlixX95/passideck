@@ -12,7 +12,8 @@ const files = [
   ['node_modules/@xterm/xterm/lib/xterm.js', 'xterm.js'],
   ['node_modules/@xterm/addon-fit/lib/addon-fit.js', 'addon-fit.js'],
   ['node_modules/@xterm/addon-web-links/lib/addon-web-links.js', 'addon-web-links.js'],
-  ['node_modules/@xterm/addon-serialize/lib/addon-serialize.js', 'addon-serialize.js']
+  ['node_modules/@xterm/addon-serialize/lib/addon-serialize.js', 'addon-serialize.js'],
+  ['node_modules/xterm-zerolag-input/dist/index.global.js', 'xterm-zerolag-input.js']
 ];
 
 for (const [srcRel, dst] of files) {

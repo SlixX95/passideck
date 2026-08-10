@@ -3090,6 +3090,146 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.deepStrictEqual(altScreenWheel, { scrollCalls: 0, mouseEvents: 2, acceleratedMouseEvents: 3, acceleratedPerInput: [1, 2], groupedPerInput: [2, 1], wheelStable: true, canceled: true, capturePrevented: false }, 'Hermes TUI wheel must average 1.5 reports per physical event without forwarding more than two reports per WebSocket input');
 
+    const predictiveEcho = await evalExpr(cdp, sid, `(async () => {
+      const entry = [...state.sessions.values()][0];
+      const saved = {
+        command: entry.session.meta.command,
+        owner: entry.terminalOwner,
+        mode: entry.terminalMode,
+        working: entry.working,
+        composing: entry.terminalComposing,
+        snapshot: entry.serialize.serialize({ scrollback: 20000 }),
+        socket: entry.ws
+      };
+      const sent = [];
+      const spans = () => [...entry.el.querySelectorAll('[data-predictive-echo] span')].map(node => node.textContent).join('');
+      const primePrediction = async char => {
+        entry.predictiveEcho.clearPredictions();
+        entry.term.reset();
+        await new Promise(resolve => entry.term.write('❯ ', resolve));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        entry.term.input(char, true);
+        return spans();
+      };
+      try {
+        entry.session.meta.command = 'hermes --tui';
+        entry.terminalOwner = 'application';
+        entry.terminalMode = 'hermes-tui';
+        entry.working = false;
+        entry.terminalComposing = false;
+        entry.predictiveEcho.clearPredictions();
+        entry.ws = { readyState: WebSocket.OPEN, send: raw => {
+          const message = JSON.parse(raw);
+          if (message.type === 'input') sent.push(message.data);
+        } };
+        entry.term.reset();
+        await new Promise(resolve => entry.term.write('❯ ', resolve));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        entry.term.input('x', true);
+        const immediate = { spans: spans(), sent: [...sent] };
+        await new Promise(resolve => entry.term.write('x', resolve));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const confirmed = spans();
+
+        entry.predictiveEcho.clearPredictions();
+        entry.term.reset();
+        await new Promise(resolve => entry.term.write('› ', resolve));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const customStart = sent.length;
+        entry.term.input('c', true);
+        const customPrompt = { spans: spans(), sent: sent.slice(customStart) };
+
+        entry.predictiveEcho.clearPredictions();
+        entry.term.reset();
+        await new Promise(resolve => entry.term.write('❯ ' + 'x'.repeat(entry.term.cols - 1), resolve));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const wrappedStart = sent.length;
+        const wrappedLine = entry.term.buffer.active.getLine(entry.term.buffer.active.baseY + entry.term.buffer.active.cursorY)?.isWrapped;
+        entry.term.input('w', true);
+        const wrappedPrompt = { wrapped: wrappedLine, spans: spans(), sent: sent.slice(wrappedStart) };
+
+        const busyStart = sent.length;
+        const busyBefore = await primePrediction('b');
+        setSessionWorking(entry.session.id, true);
+        const busy = { before: busyBefore, after: spans(), sent: sent.slice(busyStart) };
+        setSessionWorking(entry.session.id, false);
+
+        const backspaceStart = sent.length;
+        const backspaceBefore = await primePrediction('k');
+        entry.term.input('\x7f', true);
+        const backspace = { before: backspaceBefore, after: spans(), sent: sent.slice(backspaceStart) };
+
+        entry.terminalComposing = true;
+        const imeStart = sent.length;
+        const ime = { spans: await primePrediction('i'), sent: sent.slice(imeStart) };
+        entry.terminalComposing = false;
+
+        const pasteStart = sent.length;
+        const pasteBefore = await primePrediction('p');
+        insertIntoTerminalEntry(entry, 'paste');
+        const paste = { before: pasteBefore, after: spans(), sent: sent.slice(pasteStart) };
+
+        const uploadStart = sent.length;
+        const uploadBefore = await primePrediction('u');
+        sendUploadToEntry(entry, { path: '/tmp/test.txt', type: 'text/plain' });
+        const upload = { before: uploadBefore, after: spans(), sent: sent.slice(uploadStart) };
+
+        const selectionStart = sent.length;
+        const selectionBefore = await primePrediction('s');
+        clearHermesTuiSelection(entry);
+        const selection = { before: selectionBefore, after: spans(), sent: sent.slice(selectionStart) };
+
+        const modalStart = sent.length;
+        entry.term.reset();
+        await new Promise(resolve => entry.term.write('Press enter to continue', resolve));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        entry.term.input('m', true);
+        const modal = { spans: spans(), sent: sent.slice(modalStart) };
+
+        entry.terminalMode = 'viewport';
+        entry.term.reset();
+        await new Promise(resolve => entry.term.write('❯ ', resolve));
+        await new Promise(resolve => setTimeout(resolve, 0));
+        entry.term.input('q', true);
+        const nonTui = { spans: spans(), sent: sent.slice(-1) };
+
+        entry.terminalMode = 'hermes-tui';
+        entry.ws = { readyState: WebSocket.CLOSED, send: () => { throw new Error('offline input must not send'); } };
+        const offline = { spans: await primePrediction('n') };
+        return { available: Boolean(entry.predictiveEcho), immediate, confirmed, customPrompt, wrappedPrompt, busy, backspace, ime, paste, upload, selection, modal, nonTui, offline };
+      } finally {
+        entry.predictiveEcho?.clearPredictions();
+        entry.ws = saved.socket;
+        entry.session.meta.command = saved.command;
+        entry.terminalOwner = saved.owner;
+        entry.terminalMode = saved.mode;
+        entry.working = saved.working;
+        entry.terminalComposing = saved.composing;
+        entry.term.reset();
+        await new Promise(resolve => entry.term.write(saved.snapshot, resolve));
+      }
+    })()`);
+    assert.deepStrictEqual(
+      predictiveEcho,
+      {
+        available: true,
+        immediate: { spans: 'x', sent: ['x'] },
+        confirmed: '',
+        customPrompt: { spans: 'c', sent: ['c'] },
+        wrappedPrompt: { wrapped: true, spans: 'w', sent: ['w'] },
+        busy: { before: 'b', after: '', sent: ['b'] },
+        backspace: { before: 'k', after: '', sent: ['k', '\x7f'] },
+        ime: { spans: '', sent: ['i'] },
+        paste: { before: 'p', after: '', sent: ['p', '\x1b[200~paste\x1b[201~'] },
+        upload: { before: 'u', after: '', sent: ['u', '\x1b[200~/tmp/test.txt \x1b[201~'] },
+        selection: { before: 's', after: '', sent: ['s', '\x1b'] },
+        modal: { spans: '', sent: ['m'] },
+        nonTui: { spans: '', sent: ['q'] },
+        offline: { spans: '' }
+      },
+      `Hermes predictive echo must paint locally without changing WebSocket input bytes: ${JSON.stringify(predictiveEcho)}`
+    );
+
     const resizedNormalBufferTuiWheel = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
       const oldCommand = entry.session.meta.command;

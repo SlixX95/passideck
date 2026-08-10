@@ -15,6 +15,7 @@ const browser = read('tests/browser-cdp.test.js');
 const browserScroll = read('tests/browser-scroll-cdp.test.js');
 const installer = read('scripts/install.sh');
 const service = read('scripts/passideck.service');
+const prepareAssets = read('scripts/prepare-assets.js');
 const pkg = JSON.parse(read('package.json'));
 
 function cssBlock(source, marker) {
@@ -60,6 +61,13 @@ for (const needle of [
 
 assert.ok(session.includes('randomUUID()'), 'session ids should use stdlib crypto.randomUUID');
 assert.ok(html.includes('vendor/xterm.js') && !html.includes('cdn.jsdelivr.net'), 'client assets must stay local');
+assert.strictEqual(pkg.dependencies['xterm-zerolag-input'], '0.3.0', 'predictive echo must use the reviewed exact zero-lag package release');
+assert.ok(
+  prepareAssets.includes("node_modules/xterm-zerolag-input/dist/index.global.js") &&
+  prepareAssets.includes("'xterm-zerolag-input.js'") &&
+  html.includes('<script src="vendor/xterm-zerolag-input.js"></script>'),
+  'predictive echo must be prepared and served as a local vendor asset'
+);
 assert.ok(html.includes("location.port === '8792' ? 'PassiDeck Dev' : 'PassiDeck'"), 'browser tab title must distinguish dev port 8792 from normal/live');
 assert.ok(
   app.includes('function renderCodexLimitCells') &&
@@ -350,10 +358,32 @@ assert.ok(
 );
 const replayNormalizer = app.slice(app.indexOf('function normalizeReplayText'), app.indexOf('function sanitizeTerminalOutput'));
 assert.ok(!replayNormalizer.includes(".replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '')"), 'tmux replay normalization must not strip SGR with every CSI control');
-assert.ok(html.includes('app.js?v=20260810-tui-wheel-smoothing-v1') && html.includes('style.css?v=20260810-tui-wheel-smoothing-v1'), 'client cache keys must activate smoother half-speed Hermes TUI wheel input');
+assert.ok(html.includes('app.js?v=20260810-hermes-predictive-echo-v1') && html.includes('style.css?v=20260810-hermes-predictive-echo-v1'), 'client cache keys must activate Hermes predictive local echo');
 assert.ok(app.includes("const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v2:'"), 'legacy snapshots without OSC 8 targets must be invalidated');
 assert.ok(app.includes('cols: entry.term.cols') && app.includes('Number.isInteger(snapshot.cols) && snapshot.cols === term.cols'), 'snapshot OSC 8 targets must fail closed after terminal column reflow');
 assert.ok(app.includes('const HERMES_TUI_WHEEL_MULTIPLIER = 1.5') && app.includes('scaleHermesTuiWheelInput(entry, clean)') && app.includes('for (const chunk of inputChunks)'), 'Hermes TUI wheel input must average 1.5 reports per event and cap each PTY input frame at two reports');
+const sessionWorkingBlock = app.slice(app.indexOf('function setSessionWorking'), app.indexOf('function applyHermesEvent'));
+const selectionClearBlock = app.slice(app.indexOf('function clearHermesTuiSelection'), app.indexOf('async function copyTerminalSelection'));
+const uploadSendBlock = app.slice(app.indexOf('function sendUploadToEntry'), app.indexOf('async function uploadFile'));
+const pasteSendBlock = app.slice(app.indexOf('function insertIntoTerminalEntry'), app.indexOf('function shouldLetBrowserHandlePaste'));
+assert.ok(
+  app.includes('function updateHermesPredictiveEcho(entry, data)') &&
+  app.includes('entry.predictiveEcho.predictChar') &&
+  app.includes('entry.predictiveEcho.predictBackspace()') &&
+  app.includes('entry.predictiveEcho.clearPredictions()') &&
+  app.includes('new PredictiveEchoAddon({') &&
+  app.includes('allowProposedApi: true') &&
+  app.includes('while (line?.isWrapped && row > 0)') &&
+  app.includes("[^\\p{L}\\p{N}\\s]{1,4}") &&
+  app.includes('updateHermesPredictiveEcho(entry, clean);') &&
+  (app.match(/entry\.predictiveEcho\?\.refreshFont\(\)/g) || []).length === 2 &&
+  sessionWorkingBlock.includes('entry.predictiveEcho?.clearPredictions()') &&
+  selectionClearBlock.includes('entry.predictiveEcho?.clearPredictions()') &&
+  uploadSendBlock.includes('entry.predictiveEcho?.clearPredictions()') &&
+  pasteSendBlock.includes('entry.predictiveEcho?.clearPredictions()') &&
+  browser.includes('Hermes predictive echo must paint locally without changing WebSocket input bytes'),
+  'Hermes TUI typing must use visual-only predictive echo with browser regression coverage'
+);
 assert.ok(app.includes("JSON.stringify({ type: 'redraw' })") && app.includes('requestTerminalRedraw(entry)') && app.includes("msg.kind === 'live-only'") && app.includes("type: 'replay-ack'"), 'live-only attach must redraw while authoritative history acknowledges its typed replay');
 assert.ok(!app.includes('redrawPending'), 'removed initial-redraw state must not leave dead writes behind');
 assert.ok(app.includes('if (changed) entry.term.__passideckSnapshotLinks = null'), 'later terminal resize must invalidate restored OSC 8 target coordinates');

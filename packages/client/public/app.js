@@ -303,6 +303,7 @@ function setSessionWorking(id, working) {
   if (!entry) return;
   const next = Boolean(working);
   if (entry.working === next) return;
+  entry.predictiveEcho?.clearPredictions();
   entry.working = next;
   updateSessionIndicator(id);
 }
@@ -1338,7 +1339,10 @@ function setFontSize(size, opts = {}) {
   fontSizePreviewTimer = null;
   size = Math.max(10, Math.min(24, Number(size) || 13));
   state.fontSize = size;
-  for (const [, entry] of state.sessions) entry.term.options.fontSize = size;
+  for (const [, entry] of state.sessions) {
+    entry.term.options.fontSize = size;
+    entry.predictiveEcho?.refreshFont();
+  }
   scheduleTerminalFit();
   const select = document.getElementById('fontSizeSelect');
   const label = document.getElementById('fontSizeLabel');
@@ -1395,6 +1399,7 @@ function setTheme(theme, opts = {}) {
   if (select) select.value = theme;
   for (const entry of state.sessions.values()) {
     entry.term.options.theme = terminalTheme(theme);
+    entry.predictiveEcho?.refreshFont();
   }
   if (opts.persist !== false) saveUiState();
 }
@@ -2211,6 +2216,39 @@ function sanitizeTerminalInput(data) {
   return stripTerminalReplyJunk(data);
 }
 
+function isHermesComposerCursor(term) {
+  const buffer = term?.buffer?.active;
+  if (!buffer || typeof buffer.cursorX !== 'number' || typeof buffer.cursorY !== 'number') return false;
+  const cursorRow = buffer.baseY + buffer.cursorY;
+  let row = cursorRow;
+  let line = buffer.getLine(row);
+  while (line?.isWrapped && row > 0) {
+    line = buffer.getLine(--row);
+  }
+  const text = line?.translateToString(false) || '';
+  const prompt = text.match(/^(?:[\p{L}\p{N}_.-]+ )?[^\p{L}\p{N}\s]{1,4} /u);
+  return Boolean(prompt && (row < cursorRow || buffer.cursorX >= prompt[0].length));
+}
+
+function updateHermesPredictiveEcho(entry, data) {
+  if (!entry?.predictiveEcho) return;
+  if (!isHermesTuiEntry(entry) || entry.working || entry.terminalComposing) {
+    entry.predictiveEcho.clearPredictions();
+    return;
+  }
+  if (data === '\x7f') {
+    entry.predictiveEcho.predictBackspace();
+    return;
+  }
+  const chars = Array.from(String(data || ''));
+  const codePoint = chars.length === 1 ? chars[0].codePointAt(0) : 0;
+  if (chars.length === 1 && codePoint >= 0x20 && codePoint !== 0x7f) {
+    entry.predictiveEcho.predictChar(chars[0]);
+  } else {
+    entry.predictiveEcho.clearPredictions();
+  }
+}
+
 function scaleHermesTuiWheelInput(entry, data) {
   const input = String(data || '');
   if (!entry) return input ? [input] : [];
@@ -2398,6 +2436,7 @@ function flushTerminalReplay(id, term) {
 function queueTerminalReplay(id, term, data, options = {}) {
   const entry = state.sessions.get(id);
   if (!entry) return;
+  entry.predictiveEcho?.clearPredictions();
   clearTimeout(entry.snapshotTimer);
   clearTimeout(entry.outputFlushTimer);
   entry.snapshotTimer = null;
@@ -3424,6 +3463,7 @@ function createPanel(session, opts = {}) {
   });
 
   const term = new Terminal({
+    allowProposedApi: true,
     fontFamily: "'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', Consolas, monospace",
     fontSize: state.fontSize,
     lineHeight: 1.2,
@@ -3441,6 +3481,14 @@ function createPanel(session, opts = {}) {
   term.loadAddon(new WebLinksAddon.WebLinksAddon(handleTerminalLink));
   const termEl = el.querySelector('.terminal');
   term.open(termEl);
+  const PredictiveEchoAddon = window.PredictiveEchoAddon;
+  const predictiveEcho = typeof PredictiveEchoAddon === 'function' ? new PredictiveEchoAddon({
+    predictWhen: candidate => {
+      const entry = state.sessions.get(id);
+      return Boolean(isHermesTuiEntry(entry) && !entry.working && !entry.terminalComposing && isHermesComposerCursor(candidate));
+    }
+  }) : null;
+  if (predictiveEcho) term.loadAddon(predictiveEcho);
   term.attachCustomKeyEventHandler(event => {
     const entry = state.sessions.get(id);
     const ctrlZ = event.type === 'keydown' && event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.key.toLowerCase() === 'z';
@@ -3461,14 +3509,31 @@ function createPanel(session, opts = {}) {
     const entry = state.sessions.get(id);
     const clean = sanitizeTerminalInput(data);
     if (clean && entry?.ws?.readyState === WebSocket.OPEN) {
+      updateHermesPredictiveEcho(entry, clean);
       const inputChunks = isHermesTuiEntry(entry) ? scaleHermesTuiWheelInput(entry, clean) : [clean];
       for (const chunk of inputChunks) entry.ws.send(JSON.stringify({ type: 'input', data: chunk }));
     }
   });
 
+  term.textarea?.addEventListener('compositionstart', () => {
+    const entry = state.sessions.get(id);
+    if (!entry) return;
+    clearTimeout(entry.compositionTimer);
+    entry.terminalComposing = true;
+    entry.predictiveEcho?.clearPredictions();
+  });
+  term.textarea?.addEventListener('compositionend', () => {
+    const entry = state.sessions.get(id);
+    if (!entry) return;
+    clearTimeout(entry.compositionTimer);
+    entry.compositionTimer = setTimeout(() => {
+      if (state.sessions.get(id) === entry) entry.terminalComposing = false;
+    }, 0);
+  });
+
   const hasSnapshot = hasTerminalSnapshot(id);
   const terminalOwner = declaredTerminalOwner(session);
-  state.sessions.set(id, { session, el, term, fit, serialize, ws: null, ro, arrangeCleanup: dismissArrange, dragSelectionCleanup, terminalOwner, terminalMode: isHermesTuiEntry({ session }) ? 'hermes-tui' : terminalOwner, tuiWheelRemainder: 0, hasSnapshot, attachCount: 0, attachId: '', outputSequence: 0, snapshotTimer: null, outputBuffer: [], outputBufferChars: 0, outputGeneration: 0, pendingReplay: null, pendingReplayCursor: null, pendingReplayAck: '', pendingReplaySocket: null, pendingHermesEvents: [], outputFlushTimer: null, outputWriteInFlight: false, outputFrameHandle: null, outputCancelled: false, titleRefreshTimer: null, titleSource: '', working: false, lastSentCols: 0, lastSentRows: 0 });
+  state.sessions.set(id, { session, el, term, fit, serialize, predictiveEcho, terminalComposing: false, compositionTimer: null, ws: null, ro, arrangeCleanup: dismissArrange, dragSelectionCleanup, terminalOwner, terminalMode: isHermesTuiEntry({ session }) ? 'hermes-tui' : terminalOwner, tuiWheelRemainder: 0, hasSnapshot, attachCount: 0, attachId: '', outputSequence: 0, snapshotTimer: null, outputBuffer: [], outputBufferChars: 0, outputGeneration: 0, pendingReplay: null, pendingReplayCursor: null, pendingReplayAck: '', pendingReplaySocket: null, pendingHermesEvents: [], outputFlushTimer: null, outputWriteInFlight: false, outputFrameHandle: null, outputCancelled: false, titleRefreshTimer: null, titleSource: '', working: false, lastSentCols: 0, lastSentRows: 0 });
   term.onBell?.(() => notifyResponseComplete(id));
 
   if (state.minimized.has(id)) el.classList.add('minimized');
@@ -3559,6 +3624,7 @@ function notifySessionExit(title, exitCode) {
 function handleSocketClose(id, socket, event) {
   const entry = state.sessions.get(id);
   if (!entry || entry.ws !== socket) return;
+  entry.predictiveEcho?.clearPredictions();
   if (event.code === 4000) {
     setConnectionStatus(id, 'offline');
     return;
@@ -3578,7 +3644,10 @@ function applyTerminalOwner(id, term, owner, mode = owner, suspendProtected) {
   if (!entry || !['viewport', 'application'].includes(owner) || !['viewport', 'application', 'hermes-tui'].includes(mode)) return;
   const previous = entry.terminalOwner;
   const previousMode = entry.terminalMode;
-  if (previous !== owner || previousMode !== mode) entry.tuiWheelRemainder = 0;
+  if (previous !== owner || previousMode !== mode) {
+    entry.tuiWheelRemainder = 0;
+    entry.predictiveEcho?.clearPredictions();
+  }
   entry.terminalOwner = owner;
   entry.terminalMode = mode;
   if (typeof suspendProtected === 'boolean') entry.terminalSuspendProtected = suspendProtected;
@@ -3700,6 +3769,7 @@ function reconnect(id, force = false) {
   if (!entry || entry.el.classList.contains('exited')) return;
   const oldSocket = entry.ws;
   if (!force && oldSocket?.readyState === WebSocket.OPEN) return;
+  entry.predictiveEcho?.clearPredictions();
   resetTerminalOutputPipeline(entry);
   delete entry.terminalSuspendProtected;
   entry.ws = attachSocket(id, entry.term, entry.el);
@@ -3997,6 +4067,8 @@ function discardPanel(id, opts = {}) {
   const entry = state.sessions.get(id);
   if (entry) {
     entry.outputCancelled = true;
+    clearTimeout(entry.compositionTimer);
+    entry.predictiveEcho?.clearPredictions();
     resetTerminalOutputPipeline(entry);
     try { entry.ro.disconnect(); } catch {}
     entry.dragSelectionCleanup?.();
@@ -4134,6 +4206,7 @@ function clearCopiedSelection(entry) {
 
 function clearHermesTuiSelection(entry) {
   if (!isHermesTuiEntry(entry) || entry.ws?.readyState !== WebSocket.OPEN) return;
+  entry.predictiveEcho?.clearPredictions();
   entry.ws.send(JSON.stringify({ type: 'input', data: '\x1b' }));
 }
 
@@ -4195,6 +4268,7 @@ function uploadInsertion(upload, entry) {
 
 function sendUploadToEntry(entry, upload) {
   if (!entry?.ws || entry.ws.readyState !== WebSocket.OPEN) throw new Error('active terminal is offline');
+  entry.predictiveEcho?.clearPredictions();
   entry.ws.send(JSON.stringify({ type: 'input', data: uploadInsertion(upload, entry) }));
   entry.term.focus();
 }
@@ -4247,6 +4321,7 @@ function bracketedPastePayload(text) {
 
 function insertIntoTerminalEntry(entry, text) {
   if (!entry?.ws || entry.ws.readyState !== WebSocket.OPEN || !text) return false;
+  entry.predictiveEcho?.clearPredictions();
   entry.ws.send(JSON.stringify({ type: 'input', data: bracketedPastePayload(text) }));
   entry.term.focus();
   return true;
