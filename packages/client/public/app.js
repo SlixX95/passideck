@@ -1947,6 +1947,7 @@ function installTerminalDragSelection(termEl, term, session) {
   let origin = null;
   let replaying = false;
   let suspendedMouse = null;
+  let suppressMouseUntil = 0;
   const isTui = () => isHermesTuiEntry(state.sessions.get(session.id) || { session });
   const suspendMouse = () => {
     const service = term?._core?.coreMouseService;
@@ -2026,6 +2027,15 @@ function installTerminalDragSelection(termEl, term, session) {
     return '';
   };
   const startDrag = event => {
+    if (event.type.startsWith('pointer') && event.pointerType !== 'mouse') {
+      if (event.pointerType === 'touch' && termEl.contains(event.target) && isTui()) suppressMouseUntil = performance.now() + 1000;
+      return;
+    }
+    if (event.type === 'mousedown' && termEl.contains(event.target) && isTui() &&
+        (event.sourceCapabilities?.firesTouchEvents || performance.now() < suppressMouseUntil)) {
+      block(event);
+      return;
+    }
     if (replaying || event.button !== 0 || !termEl.contains(event.target) || !isTui()) return;
     if (start) {
       block(event);
@@ -2108,7 +2118,19 @@ function installTerminalWheelScroll(termEl, term, session = null) {
   let wheelRemainder = 0;
   let touchY = null;
   let touchRemainder = 0;
-  const applicationOwnsTouch = () => state.sessions.get(session?.id)?.terminalOwner === 'application';
+  let touchStartX = null;
+  let touchStartY = null;
+  let touchDistance = 0;
+  let touchApplication = false;
+  const applicationOwnsTouch = () => state.sessions.get(session?.id)?.terminalMode === 'hermes-tui';
+  const sendApplicationMouse = (button, touch, release = false) => {
+    const screen = termEl.querySelector('.xterm-screen');
+    const rect = screen?.getBoundingClientRect();
+    if (!rect?.width || !rect?.height) return;
+    const col = Math.max(1, Math.min(term.cols, Math.floor((touch.clientX - rect.left) / (rect.width / term.cols)) + 1));
+    const row = Math.max(1, Math.min(term.rows, Math.floor((touch.clientY - rect.top) / (rect.height / term.rows)) + 1));
+    term.input(`\x1b[<${button};${col};${row}${release ? 'm' : 'M'}`, true);
+  };
   term.attachCustomWheelEventHandler?.(e => {
     const entry = state.sessions.get(session?.id);
     if (e.ctrlKey) return true;
@@ -2163,30 +2185,72 @@ function installTerminalWheelScroll(termEl, term, session = null) {
   }, { capture: true, passive: false });
   termEl.addEventListener('touchstart', e => {
     const buffer = term.buffer?.active;
-    if (applicationOwnsTouch() || e.touches.length !== 1 || buffer?.type === 'alternate' || !buffer || buffer.baseY <= 0) {
+    if (e.touches.length !== 1) {
+      touchY = touchStartX = touchStartY = null;
+      touchRemainder = touchDistance = 0;
+      touchApplication = false;
+      return;
+    }
+    const touch = e.touches[0];
+    touchApplication = applicationOwnsTouch();
+    touchStartX = touch.clientX;
+    touchStartY = touch.clientY;
+    touchDistance = 0;
+    if (touchApplication) {
+      selectPanel(session.id);
+      term.focus();
+      term.clearSelection();
+      term.__passideckClearDragSelection?.();
+      touchY = touch.clientY;
+      touchRemainder = 0;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      return;
+    }
+    if (buffer?.type === 'alternate' || !buffer || buffer.baseY <= 0) {
       touchY = null;
       return;
     }
     touchY = e.touches[0].clientY;
     touchRemainder = 0;
-  }, { capture: true, passive: true });
+  }, { capture: true, passive: false });
   termEl.addEventListener('touchmove', e => {
-    if (applicationOwnsTouch()) { touchY = null; touchRemainder = 0; return; }
-    if (touchY === null || e.touches.length !== 1) return;
+    if (e.touches.length !== 1) {
+      resetTouchScroll();
+      return;
+    }
+    if (touchY === null) return;
     const y = e.touches[0].clientY;
+    touchDistance = Math.max(touchDistance, Math.hypot(e.touches[0].clientX - touchStartX, y - touchStartY));
     touchRemainder += (touchY - y) / Math.max(8, state.fontSize * 1.2);
     touchY = y;
     const lines = Math.trunc(touchRemainder);
     if (lines) {
       touchRemainder -= lines;
-      term.scrollLines(lines);
+      if (touchApplication) {
+        sendApplicationMouse(lines < 0 ? 64 : 65, e.touches[0]);
+      } else {
+        term.scrollLines(lines);
+      }
     }
     e.preventDefault();
     e.stopImmediatePropagation();
   }, { capture: true, passive: false });
-  const endTouchScroll = () => { touchY = null; touchRemainder = 0; };
+  const resetTouchScroll = () => {
+    touchY = touchStartX = touchStartY = null;
+    touchRemainder = touchDistance = 0;
+    touchApplication = false;
+  };
+  const endTouchScroll = () => {
+    if (touchApplication && touchDistance < 8 && touchStartX !== null && touchStartY !== null) {
+      const touch = { clientX: touchStartX, clientY: touchStartY };
+      sendApplicationMouse(0, touch);
+      sendApplicationMouse(0, touch, true);
+    }
+    resetTouchScroll();
+  };
   termEl.addEventListener('touchend', endTouchScroll, true);
-  termEl.addEventListener('touchcancel', endTouchScroll, true);
+  termEl.addEventListener('touchcancel', resetTouchScroll, true);
 }
 
 function updateEmpty() {

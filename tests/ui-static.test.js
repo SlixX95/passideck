@@ -358,7 +358,22 @@ assert.ok(
 );
 const replayNormalizer = app.slice(app.indexOf('function normalizeReplayText'), app.indexOf('function sanitizeTerminalOutput'));
 assert.ok(!replayNormalizer.includes(".replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '')"), 'tmux replay normalization must not strip SGR with every CSI control');
-assert.ok(html.includes('app.js?v=20260810-hermes-predictive-echo-v1') && html.includes('style.css?v=20260810-hermes-predictive-echo-v1'), 'client cache keys must activate Hermes predictive local echo');
+assert.ok(html.includes('app.js?v=20260812-mobile-tui-touch-v1') && html.includes('style.css?v=20260812-mobile-tui-touch-v1'), 'client cache keys must activate mobile Hermes TUI touch scrolling');
+const terminalDragBlock = app.slice(app.indexOf('function installTerminalDragSelection'), app.indexOf('function declaredTerminalOwner'));
+const terminalTouchBlock = app.slice(app.indexOf('function installTerminalWheelScroll'), app.indexOf('function updateEmpty'));
+assert.ok(
+  terminalDragBlock.includes("event.type.startsWith('pointer') && event.pointerType !== 'mouse'") &&
+  terminalDragBlock.includes("performance.now() < suppressMouseUntil") &&
+  terminalDragBlock.includes('termEl.contains(event.target) && isTui()') &&
+  terminalDragBlock.includes('block(event);') &&
+  terminalTouchBlock.includes("terminalMode === 'hermes-tui'") &&
+  terminalTouchBlock.includes('if (e.touches.length !== 1) {') &&
+  terminalTouchBlock.includes('resetTouchScroll();') &&
+  terminalTouchBlock.includes('selectPanel(session.id);') &&
+  terminalTouchBlock.includes("sendApplicationMouse(lines < 0 ? 64 : 65, e.touches[0])") &&
+  terminalTouchBlock.includes("sendApplicationMouse(0, touch, true)"),
+  'Hermes TUI touch gestures must bypass text drag-selection and enter xterm through its wheel owner'
+);
 assert.ok(app.includes("const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v2:'"), 'legacy snapshots without OSC 8 targets must be invalidated');
 assert.ok(app.includes('cols: entry.term.cols') && app.includes('Number.isInteger(snapshot.cols) && snapshot.cols === term.cols'), 'snapshot OSC 8 targets must fail closed after terminal column reflow');
 assert.ok(app.includes('const HERMES_TUI_WHEEL_MULTIPLIER = 1.5') && app.includes('scaleHermesTuiWheelInput(entry, clean)') && app.includes('for (const chunk of inputChunks)'), 'Hermes TUI wheel input must average 1.5 reports per event and cap each PTY input frame at two reports');

@@ -2979,12 +2979,43 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.ok(touchSwipe.after < touchSwipe.before, `a vertical touch swipe must scroll PassiDeck terminal history: ${JSON.stringify(touchSwipe)}`);
 
-    const tuiTouchSetup = await evalExpr(cdp, sid, `(async () => {
+    let tuiTouchSetup;
+    let tuiTouch;
+    try {
+      tuiTouchSetup = await evalExpr(cdp, sid, `(async () => {
       const entry = state.sessions.get(state.activeId);
       const mouseData = [];
       const listener = entry.term.onData(data => mouseData.push(data));
-      window.__tuiTouchRestore = { entry, command: entry.session.meta.command, snapshot: entry.serialize.serialize({ scrollback: 20000 }), mouseData, listener };
+      const mouseProbeState = { reached: false };
+      const mouseProbe = () => { mouseProbeState.reached = true; };
+      entry.el.querySelector('.terminal').addEventListener('mousedown', mouseProbe);
+      const socket = entry.ws;
+      const originalSend = socket.send;
+      const sentInput = [];
+      socket.send = function(raw) {
+        const message = JSON.parse(raw);
+        if (message.type === 'input') sentInput.push(message.data);
+        else return originalSend.call(this, raw);
+      };
+      window.__tuiTouchRestore = {
+        entry,
+        command: entry.session.meta.command,
+        terminalOwner: entry.terminalOwner,
+        terminalMode: entry.terminalMode,
+        tuiWheelRemainder: entry.tuiWheelRemainder,
+        snapshot: entry.serialize.serialize({ scrollback: 20000 }),
+        mouseData,
+        listener,
+        mouseProbe,
+        mouseProbeState,
+        socket,
+        originalSend,
+        sentInput
+      };
       entry.session.meta.command = 'hermes --tui';
+      entry.terminalOwner = 'application';
+      entry.terminalMode = 'hermes-tui';
+      entry.term.clearSelection();
       entry.term.reset();
       await new Promise(resolve => entry.term.write('\\x1b[?1049h\\x1b[?1000h\\x1b[?1006h', resolve));
       const screen = entry.el.querySelector('.xterm-screen');
@@ -2997,28 +3028,74 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         height: rect.height,
         bufferType: entry.term.buffer.active.type
       };
-    })()`);
-    assert.ok(tuiTouchSetup.width > 0 && tuiTouchSetup.height > 0 && tuiTouchSetup.bufferType === 'alternate',
-      `Hermes TUI touch regression must use the visible alternate-screen terminal: ${JSON.stringify(tuiTouchSetup)}`);
-    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: tuiTouchSetup.x, y: tuiTouchSetup.startY, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
-    for (let step = 1; step <= 6; step++) {
-      const y = tuiTouchSetup.startY + (tuiTouchSetup.endY - tuiTouchSetup.startY) * step / 6;
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: tuiTouchSetup.x, y, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
+      })()`);
+      assert.ok(tuiTouchSetup.width > 0 && tuiTouchSetup.height > 0 && tuiTouchSetup.bufferType === 'alternate',
+        `Hermes TUI touch regression must use the visible alternate-screen terminal: ${JSON.stringify(tuiTouchSetup)}`);
+      const tuiTapY = tuiTouchSetup.startY + (tuiTouchSetup.endY - tuiTouchSetup.startY) / 2;
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: tuiTouchSetup.x, y: tuiTapY, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, sid);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: tuiTouchSetup.x, y: tuiTouchSetup.startY, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
+      for (let step = 1; step <= 6; step++) {
+        const y = tuiTouchSetup.startY + (tuiTouchSetup.endY - tuiTouchSetup.startY) * step / 6;
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: tuiTouchSetup.x, y, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
+      }
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, sid);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x: tuiTouchSetup.x, y: tuiTapY, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [
+        { id: 1, x: tuiTouchSetup.x - 8, y: tuiTapY, radiusX: 1, radiusY: 1, force: 1 },
+        { id: 2, x: tuiTouchSetup.x + 8, y: tuiTapY, radiusX: 1, radiusY: 1, force: 1 }
+      ] }, sid);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, sid);
+      tuiTouch = await evalExpr(cdp, sid, `(async () => {
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const { entry, mouseData, mouseProbeState, sentInput } = window.__tuiTouchRestore;
+        const screen = entry.el.querySelector('.xterm-screen');
+        const rect = screen.getBoundingClientRect();
+        const compatibilityMouse = new MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true, clientX: rect.left + 20, clientY: rect.top + 20 });
+        const compatibilityMouseDispatched = screen.dispatchEvent(compatibilityMouse);
+        const chromeTarget = document.querySelector('.term-panel .term-actions button');
+        const chromeMouse = new MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true });
+        const chromeMouseDispatched = chromeTarget.dispatchEvent(chromeMouse);
+        return {
+          tapEvents: mouseData.filter(data => /^\\x1b\[<0;\\d+;\\d+[Mm]$/.test(data)).length,
+          wheelEvents: mouseData.filter(data => /^\\x1b\[<6[45];\\d+;\\d+M$/.test(data)).length,
+          ptyInputs: sentInput.filter(data => data.includes('\\x1b[<')).length,
+          selected: entry.term.hasSelection(),
+          compatibilityMouseCanceled: !compatibilityMouseDispatched && compatibilityMouse.defaultPrevented,
+          compatibilityMouseReachedTarget: mouseProbeState.reached,
+          chromeMouseAllowed: chromeMouseDispatched && !chromeMouse.defaultPrevented
+        };
+      })()`);
+      assert.strictEqual(tuiTouch.tapEvents, 2, `Hermes TUI touch taps must become one terminal mouse press and release while multi-touch emits no phantom tap: ${JSON.stringify(tuiTouch)}`);
+      assert.ok(tuiTouch.wheelEvents > 0, `Hermes TUI touch swipes must become terminal mouse-wheel input: ${JSON.stringify(tuiTouch)}`);
+      assert.ok(tuiTouch.ptyInputs > 0, `Hermes TUI touch input must reach the isolated PTY input seam: ${JSON.stringify(tuiTouch)}`);
+      assert.strictEqual(tuiTouch.selected, false, `Hermes TUI touch swipes must not select terminal text: ${JSON.stringify(tuiTouch)}`);
+      assert.deepStrictEqual(
+        { canceled: tuiTouch.compatibilityMouseCanceled, reachedTarget: tuiTouch.compatibilityMouseReachedTarget, chromeAllowed: tuiTouch.chromeMouseAllowed },
+        { canceled: true, reachedTarget: false, chromeAllowed: true },
+        `compatibility mousedown after TUI touch must be consumed before xterm: ${JSON.stringify(tuiTouch)}`
+      );
+    } finally {
+      await evalExpr(cdp, sid, `(async () => {
+        const restore = window.__tuiTouchRestore;
+        if (!restore) return;
+        const { entry, command, terminalOwner, terminalMode, tuiWheelRemainder, snapshot, listener, mouseProbe, socket, originalSend } = restore;
+        listener.dispose();
+        entry.el.querySelector('.terminal').removeEventListener('mousedown', mouseProbe);
+        socket.send = originalSend;
+        try {
+          await new Promise(resolve => entry.term.write('\\x1b[?1000l\\x1b[?1006l\\x1b[?1049l', resolve));
+          entry.term.reset();
+          await new Promise(resolve => entry.term.write(snapshot, resolve));
+        } finally {
+          entry.session.meta.command = command;
+          entry.terminalOwner = terminalOwner;
+          entry.terminalMode = terminalMode;
+          entry.tuiWheelRemainder = tuiWheelRemainder;
+          delete window.__tuiTouchRestore;
+        }
+      })()`);
     }
-    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, sid);
-    const tuiTouch = await evalExpr(cdp, sid, `(async () => {
-      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-      const { entry, command, snapshot, mouseData, listener } = window.__tuiTouchRestore;
-      const mouseEvents = mouseData.filter(data => data.includes('\\x1b[<')).length;
-      listener.dispose();
-      await new Promise(resolve => entry.term.write('\\x1b[?1000l\\x1b[?1006l\\x1b[?1049l', resolve));
-      entry.term.reset();
-      await new Promise(resolve => entry.term.write(snapshot, resolve));
-      entry.session.meta.command = command;
-      delete window.__tuiTouchRestore;
-      return { mouseEvents };
-    })()`);
-    assert.ok(tuiTouch.mouseEvents > 0, `Hermes TUI touch swipes must become terminal mouse-wheel input: ${JSON.stringify(tuiTouch)}`);
 
     await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false }, sid);
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720, deviceScaleFactor: 1, mobile: false }, sid);
@@ -3047,46 +3124,51 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       };
       const oldScrollLines = entry.term.scrollLines.bind(entry.term);
       entry.term.scrollLines = n => { scrollCalls += 1; return oldScrollLines(n); };
-      await new Promise(resolve => entry.term.write('\\x1b[?1049h\\x1b[?1000h\\x1b[?1006h', resolve));
-      const target = entry.el.querySelector('.xterm-viewport') || entry.el.querySelector('.terminal');
-      const termEl = entry.el.querySelector('.terminal');
-      let capturePrevented = null;
-      const captureProbe = e => { capturePrevented = e.defaultPrevented; };
-      termEl.addEventListener('wheel', captureProbe, { capture: true, once: true });
-      const r = target.getBoundingClientRect();
-      const baseBeforeFirst = entry.term.buffer.active.baseY;
-      const first = new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 });
-      const firstDispatched = target.dispatchEvent(first);
-      const baseAfterFirst = entry.term.buffer.active.baseY;
-      await new Promise(resolve => entry.term.write(Array.from({ length: entry.term.rows + 5 }, (_, i) => 'resumed-response-' + i + '\\r\\n').join(''), resolve));
-      const baseBeforeSecond = entry.term.buffer.active.baseY;
-      const second = new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 });
-      const secondDispatched = target.dispatchEvent(second);
-      const baseAfterSecond = entry.term.buffer.active.baseY;
-      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-      const acceleratedPerInput = acceleratedInput.map(data => (data.match(/\\x1b\\[<6[45];\\d+;\\d+M/g) || []).length);
-      const groupedReport = '\\x1b[<64;1;1M';
-      const groupedPerInput = scaleHermesTuiWheelInput({ tuiWheelRemainder: 0 }, groupedReport + groupedReport)
-        .map(data => (data.match(/\\x1b\\[<64;1;1M/g) || []).length);
-      const out = {
-        scrollCalls,
-        mouseEvents: mouseData.filter(data => data.includes('\\x1b[<')).length,
-        acceleratedMouseEvents: acceleratedPerInput.reduce((sum, count) => sum + count, 0),
-        acceleratedPerInput,
-        groupedPerInput,
-        wheelStable: baseBeforeFirst === baseAfterFirst && baseBeforeSecond === baseAfterSecond,
-        canceled: !firstDispatched || first.defaultPrevented || !secondDispatched || second.defaultPrevented,
-        capturePrevented
-      };
-      await new Promise(resolve => entry.term.write('\\x1b[?1000l\\x1b[?1006l\\x1b[?1049l', resolve));
-      dataListener.dispose();
-      socket.send = originalSend;
-      entry.term.scrollLines = oldScrollLines;
-      entry.session.meta.command = oldCommand;
-      entry.terminalOwner = oldTerminalOwner;
-      entry.terminalMode = oldTerminalMode;
-      entry.tuiWheelRemainder = oldTuiWheelRemainder;
-      return out;
+      try {
+        await new Promise(resolve => entry.term.write('\\x1b[?1049h\\x1b[?1000h\\x1b[?1006h', resolve));
+        const target = entry.el.querySelector('.xterm-viewport') || entry.el.querySelector('.terminal');
+        const termEl = entry.el.querySelector('.terminal');
+        let capturePrevented = null;
+        const captureProbe = e => { capturePrevented = e.defaultPrevented; };
+        termEl.addEventListener('wheel', captureProbe, { capture: true, once: true });
+        const r = target.getBoundingClientRect();
+        const baseBeforeFirst = entry.term.buffer.active.baseY;
+        const first = new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 });
+        const firstDispatched = target.dispatchEvent(first);
+        const baseAfterFirst = entry.term.buffer.active.baseY;
+        await new Promise(resolve => entry.term.write(Array.from({ length: entry.term.rows + 5 }, (_, i) => 'resumed-response-' + i + '\\r\\n').join(''), resolve));
+        const baseBeforeSecond = entry.term.buffer.active.baseY;
+        const second = new WheelEvent('wheel', { deltaY: -120, bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.top + 40 });
+        const secondDispatched = target.dispatchEvent(second);
+        const baseAfterSecond = entry.term.buffer.active.baseY;
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const acceleratedPerInput = acceleratedInput.map(data => (data.match(/\\x1b\\[<6[45];\\d+;\\d+M/g) || []).length);
+        const groupedReport = '\\x1b[<64;1;1M';
+        const groupedPerInput = scaleHermesTuiWheelInput({ tuiWheelRemainder: 0 }, groupedReport + groupedReport)
+          .map(data => (data.match(/\\x1b\\[<64;1;1M/g) || []).length);
+        return {
+          scrollCalls,
+          mouseEvents: mouseData.filter(data => data.includes('\\x1b[<')).length,
+          acceleratedMouseEvents: acceleratedPerInput.reduce((sum, count) => sum + count, 0),
+          acceleratedPerInput,
+          groupedPerInput,
+          wheelStable: baseBeforeFirst === baseAfterFirst && baseBeforeSecond === baseAfterSecond,
+          canceled: !firstDispatched || first.defaultPrevented || !secondDispatched || second.defaultPrevented,
+          capturePrevented
+        };
+      } finally {
+        try {
+          await new Promise(resolve => entry.term.write('\\x1b[?1000l\\x1b[?1006l\\x1b[?1049l', resolve));
+        } finally {
+          dataListener.dispose();
+          socket.send = originalSend;
+          entry.term.scrollLines = oldScrollLines;
+          entry.session.meta.command = oldCommand;
+          entry.terminalOwner = oldTerminalOwner;
+          entry.terminalMode = oldTerminalMode;
+          entry.tuiWheelRemainder = oldTuiWheelRemainder;
+        }
+      }
     })()`);
     assert.deepStrictEqual(altScreenWheel, { scrollCalls: 0, mouseEvents: 2, acceleratedMouseEvents: 3, acceleratedPerInput: [1, 2], groupedPerInput: [2, 1], wheelStable: true, canceled: true, capturePrevented: false }, 'Hermes TUI wheel must average 1.5 reports per physical event without forwarding more than two reports per WebSocket input');
 
