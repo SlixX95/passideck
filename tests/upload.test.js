@@ -27,11 +27,12 @@ try {
   });
   assert.strictEqual(pasted.type, 'image/png', 'generic clipboard MIME must be replaced only by detected media type');
   assert.deepStrictEqual(fs.readFileSync(pasted.path), png);
-  assert.throws(
-    () => saveUploadedBlob({ name: 'fake.png', type: 'application/octet-stream', data: 'bm90LWEtcG5n' }),
-    /Upload type not allowed: application\/octet-stream/,
-    'generic MIME must stay rejected when the bytes are not a supported media signature'
-  );
+  const archive = saveUploadedBlob({ name: 'bundle.zip', type: 'application/zip', data: 'UEsDBA==' });
+  assert.strictEqual(archive.type, 'application/zip', 'non-image file MIME must be preserved');
+  assert.deepStrictEqual(fs.readFileSync(archive.path), Buffer.from('PK\x03\x04'));
+  const unknown = saveUploadedBlob({ name: 'unknown.bin', type: 'application/octet-stream', data: 'YmluYXJ5' });
+  assert.strictEqual(unknown.type, 'application/octet-stream', 'generic binary files must be accepted');
+  assert.strictEqual(fs.readFileSync(unknown.path, 'utf8'), 'binary');
   console.log('upload ok');
 } finally {
   fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });

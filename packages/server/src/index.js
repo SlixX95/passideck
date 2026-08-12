@@ -40,15 +40,7 @@ const UPLOAD_MAX_BYTES = 50 * 1024 * 1024;
 const UPLOAD_JSON_LIMIT = '72mb';
 const TERMINAL_MAX_INPUT_BYTES = 1024 * 1024;
 const TERMINAL_MAX_DIMENSION = 1000;
-const UPLOAD_MIME_ALLOWLIST = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/gif',
-  'image/webp',
-  'image/bmp',
-  'text/plain',
-  'application/pdf'
-]);
+
 const TMUX_CMD = process.env.PASSIDECK_TMUX_CMD || 'tmux';
 const TMUX_ARGS = process.env.PASSIDECK_TMUX_SOCKET
   ? ['-L', process.env.PASSIDECK_TMUX_SOCKET]
@@ -217,10 +209,6 @@ function detectedUploadMime(buffer) {
   return null;
 }
 
-function requireAllowedUploadMime(mime) {
-  if (!UPLOAD_MIME_ALLOWLIST.has(mime)) throw new Error(`Upload type not allowed: ${mime}`);
-}
-
 function setUploadHeaders(res, filePath) {
   const name = safeFileName(path.basename(filePath));
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -267,7 +255,6 @@ function saveUploadedBlob(input) {
   const raw = String(src.data || src.base64 || '');
   const match = raw.match(/^data:([^;,]+)?;base64,(.*)$/);
   let mime = normalizeMime(src.type || (match && match[1]) || 'application/octet-stream');
-  if (mime !== 'application/octet-stream') requireAllowedUploadMime(mime);
   const b64 = match ? match[2] : raw;
   if (b64.length > Math.ceil(UPLOAD_MAX_BYTES / 3) * 4 || !/^(?:[a-zA-Z0-9+/]{4})*(?:[a-zA-Z0-9+/]{2}==|[a-zA-Z0-9+/]{3}=)?$/.test(b64)) {
     throw new Error('Invalid base64 upload');
@@ -277,7 +264,6 @@ function saveUploadedBlob(input) {
   if (buffer.length > UPLOAD_MAX_BYTES) throw new Error('Upload too large');
   if (mime === 'application/octet-stream') {
     mime = detectedUploadMime(buffer) || mime;
-    requireAllowedUploadMime(mime);
   }
 
   const day = new Date().toISOString().slice(0, 10);
@@ -1937,7 +1923,7 @@ function createServer(config = loadConfig()) {
   return { app, server, wss, sessions, close };
 }
 
-module.exports = { createServer, loadConfig, readCodexLimits, readOllamaUsage, readNousBalance, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, parseOllamaUsage, normalizeNousUsage, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, paneProcessesWithRetry, terminalReplayState, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings, UPLOAD_MIME_ALLOWLIST };
+module.exports = { createServer, loadConfig, readCodexLimits, readOllamaUsage, readNousBalance, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, parseOllamaUsage, normalizeNousUsage, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, paneProcessesWithRetry, terminalReplayState, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings };
 
 if (require.main === module) {
   const config = loadConfig();

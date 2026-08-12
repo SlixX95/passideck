@@ -55,9 +55,9 @@ for (const needle of [
   'function requestGuard',
   'function saveUiStateHandler',
   "type: 'replay'",
-  'const UPLOAD_MIME_ALLOWLIST = new Set',
   'const UPLOAD_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000',
 ]) assert.ok(server.includes(needle), `missing server guard: ${needle}`);
+assert.ok(!server.includes('UPLOAD_MIME_ALLOWLIST') && !server.includes('Upload type not allowed'), 'uploads must accept arbitrary file types');
 
 assert.ok(session.includes('randomUUID()'), 'session ids should use stdlib crypto.randomUUID');
 assert.ok(html.includes('vendor/xterm.js') && !html.includes('cdn.jsdelivr.net'), 'client assets must stay local');
