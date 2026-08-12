@@ -2949,35 +2949,55 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, configuration: 'mobile' }, sid);
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 3, mobile: true }, sid);
     await waitEval(cdp, sid, 'innerWidth === 390 && innerHeight === 844');
-    const touchSwipeSetup = await evalExpr(cdp, sid, `(async () => {
-      const entry = state.sessions.get(state.activeId);
-      window.__touchScrollRestore = { entry, command: entry.session.meta.command, snapshot: entry.serialize.serialize({ scrollback: 20000 }) };
-      entry.session.meta.command = 'hermes';
-      entry.term.reset();
-      await new Promise(resolve => entry.term.write(Array.from({ length: 100 }, (_, i) => 'touch-' + i + '\\r\\n').join(''), resolve));
-      entry.term.scrollToBottom();
-      const screen = entry.el.querySelector('.xterm-screen');
-      const rect = screen.getBoundingClientRect();
-      return { x: rect.left + rect.width / 2, startY: rect.top + rect.height * .35, endY: rect.top + rect.height * .75, width: rect.width, height: rect.height, before: entry.term.buffer.active.viewportY, baseY: entry.term.buffer.active.baseY };
-    })()`);
-    assert.ok(touchSwipeSetup.width > 0 && touchSwipeSetup.height > 0 && touchSwipeSetup.baseY > 0 && touchSwipeSetup.before === touchSwipeSetup.baseY, `touch swipe regression setup must use the visible active terminal at scrollback bottom: ${JSON.stringify(touchSwipeSetup)}`);
-    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: touchSwipeSetup.x, y: touchSwipeSetup.startY, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
-    for (let step = 1; step <= 6; step++) {
-      const y = touchSwipeSetup.startY + (touchSwipeSetup.endY - touchSwipeSetup.startY) * step / 6;
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: touchSwipeSetup.x, y, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
+    let touchSwipeSetup;
+    let touchSwipeError;
+    try {
+      touchSwipeSetup = await evalExpr(cdp, sid, `(async () => {
+        const entry = state.sessions.get(state.activeId);
+        window.__touchScrollRestore = { entry, command: entry.session.meta.command, snapshot: entry.serialize.serialize({ scrollback: 20000 }) };
+        entry.session.meta.command = 'hermes';
+        entry.term.reset();
+        await new Promise(resolve => entry.term.write(Array.from({ length: 100 }, (_, i) => 'touch-' + i + '\\r\\n').join(''), resolve));
+        entry.term.scrollToBottom();
+        const screen = entry.el.querySelector('.xterm-screen');
+        const rect = screen.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, startY: rect.top + rect.height * .35, endY: rect.top + rect.height * .75, width: rect.width, height: rect.height, before: entry.term.buffer.active.viewportY, baseY: entry.term.buffer.active.baseY };
+      })()`);
+      assert.ok(touchSwipeSetup.width > 0 && touchSwipeSetup.height > 0 && touchSwipeSetup.baseY > 0 && touchSwipeSetup.before === touchSwipeSetup.baseY, `touch swipe regression setup must use the visible active terminal at scrollback bottom: ${JSON.stringify(touchSwipeSetup)}`);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: touchSwipeSetup.x, y: touchSwipeSetup.startY, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
+      for (let step = 1; step <= 6; step++) {
+        const y = touchSwipeSetup.startY + (touchSwipeSetup.endY - touchSwipeSetup.startY) * step / 6;
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: touchSwipeSetup.x, y, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
+      }
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, sid);
+      const touchSwipe = await evalExpr(cdp, sid, `(async () => {
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const entry = window.__touchScrollRestore.entry;
+        return { before: ${touchSwipeSetup.before}, after: entry.term.buffer.active.viewportY };
+      })()`);
+      assert.ok(touchSwipe.after < touchSwipe.before, `a vertical touch swipe must scroll PassiDeck terminal history: ${JSON.stringify(touchSwipe)}`);
+    } catch (error) {
+      touchSwipeError = error;
+      throw error;
+    } finally {
+      try {
+        await evalExpr(cdp, sid, `(async () => {
+          const restore = window.__touchScrollRestore;
+          if (!restore) return;
+          const { entry, command, snapshot } = restore;
+          try {
+            entry.term.reset();
+            await new Promise(resolve => entry.term.write(snapshot, resolve));
+          } finally {
+            entry.session.meta.command = command;
+            delete window.__touchScrollRestore;
+          }
+        })()`);
+      } catch (cleanupError) {
+        if (!touchSwipeError) throw cleanupError;
+        if (typeof touchSwipeError === 'object' && touchSwipeError && !touchSwipeError.cause) touchSwipeError.cause = cleanupError;
+      }
     }
-    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, sid);
-    const touchSwipe = await evalExpr(cdp, sid, `(async () => {
-      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-      const { entry, command, snapshot } = window.__touchScrollRestore;
-      const after = entry.term.buffer.active.viewportY;
-      entry.term.reset();
-      await new Promise(resolve => entry.term.write(snapshot, resolve));
-      entry.session.meta.command = command;
-      delete window.__touchScrollRestore;
-      return { before: ${touchSwipeSetup.before}, after };
-    })()`);
-    assert.ok(touchSwipe.after < touchSwipe.before, `a vertical touch swipe must scroll PassiDeck terminal history: ${JSON.stringify(touchSwipe)}`);
 
     let tuiTouchSetup;
     let tuiTouch;
