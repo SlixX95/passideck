@@ -454,6 +454,19 @@ function isCompactViewport() {
   return width <= 1024 || height <= 419 || (width <= 1200 && window.matchMedia?.('(pointer: coarse)').matches);
 }
 
+function touchGeneratedClick(event) {
+  return event?.pointerType === 'touch' || event?.sourceCapabilities?.firesTouchEvents;
+}
+
+function syncVisualViewportHeight() {
+  const viewport = window.visualViewport;
+  if (!viewport || navigator.maxTouchPoints === 0) return;
+  document.documentElement.style.setProperty('--passideck-viewport-height', `${Math.round(viewport.height)}px`);
+  responsiveMinimizeForViewport();
+  applyLayoutVisibility();
+  scheduleTerminalFit();
+}
+
 function responsiveMinimizeForViewport() {
   if (!isCompactViewport()) {
     for (const id of state.responsiveMinimized) {
@@ -1372,7 +1385,7 @@ function minimizePanel(id) {
   scheduleTerminalFit();
 }
 
-function restorePanel(id) {
+function restorePanel(id, opts = {}) {
   const entry = state.sessions.get(id);
   if (!entry || state.panePrefs.paneDesktop[id] !== state.activeDesktopId) return;
   entry.el.classList.remove('minimized');
@@ -1381,7 +1394,7 @@ function restorePanel(id) {
   ensureFreeWindow(id);
   renderSwitcher();
   applyLayoutVisibility();
-  selectPanel(id, { persist: false });
+  selectPanel(id, { ...opts, persist: false });
   savePanePrefs();
   responsiveMinimizeForViewport();
   applyLayoutVisibility();
@@ -2197,8 +2210,7 @@ function installTerminalWheelScroll(termEl, term, session = null) {
     touchStartY = touch.clientY;
     touchDistance = 0;
     if (touchApplication) {
-      selectPanel(session.id);
-      term.focus();
+      selectPanel(session.id, { focus: false });
       term.clearSelection();
       term.__passideckClearDragSelection?.();
       touchY = touch.clientY;
@@ -2244,6 +2256,8 @@ function installTerminalWheelScroll(termEl, term, session = null) {
   const endTouchScroll = () => {
     if (touchApplication && touchDistance < 8 && touchStartX !== null && touchStartY !== null) {
       const touch = { clientX: touchStartX, clientY: touchStartY };
+      term.focus();
+      syncTerminalInputFocus(true);
       sendApplicationMouse(0, touch);
       sendApplicationMouse(0, touch, true);
     }
@@ -3514,7 +3528,7 @@ function createPanel(session, opts = {}) {
   closeBtn.addEventListener('mousedown', e => e.stopPropagation());
   closeBtn.addEventListener('mouseup', e => e.stopPropagation());
   // Only select panel when clicking on terminal area, not header (buttons/title/drag)
-  el.querySelector('.terminal').addEventListener('mousedown', () => selectPanel(id));
+  el.querySelector('.terminal').addEventListener('mousedown', event => selectPanel(id, { focus: !touchGeneratedClick(event) || !isHermesTuiEntry(state.sessions.get(id)) }));
   const startHeaderDrag = e => {
     if (e.target.closest('.term-actions, button')) return;
     if (e.target.closest('.term-title') && titleEl.dataset.editing === '1') return;
@@ -4081,11 +4095,12 @@ function renderSwitcher() {
     close.setAttribute('aria-label', `Close ${title}`);
     close.textContent = '×';
     close.onclick = e => { e.preventDefault(); e.stopPropagation(); requestClosePanel(id); };
-    const activate = () => {
+    const activate = event => {
+      const focus = !touchGeneratedClick(event);
       clearResponseAttention(id);
-      if (state.minimized.has(id)) restorePanel(id);
+      if (state.minimized.has(id)) restorePanel(id, { focus });
       else if (id === state.activeId) minimizePanel(id);
-      else selectPanel(id);
+      else selectPanel(id, { focus });
     };
     btn.onclick = activate;
     wrapper.append(btn, close);
@@ -4103,7 +4118,7 @@ function syncTerminalInputFocus(hasDocumentFocus = document.hasFocus()) {
 
 function focusActiveTerminalOnWindowActivation() {
   const entry = state.sessions.get(state.activeId);
-  if (document.hidden || document.getElementById('closeModal')?.classList.contains('open') || !entry || state.minimized.has(entry.session.id) || entry.el.classList.contains('layout-hidden')) {
+  if (window.matchMedia?.('(pointer: coarse)').matches || document.hidden || document.getElementById('closeModal')?.classList.contains('open') || !entry || state.minimized.has(entry.session.id) || entry.el.classList.contains('layout-hidden')) {
     syncTerminalInputFocus();
     return;
   }
@@ -4114,13 +4129,16 @@ function focusActiveTerminalOnWindowActivation() {
 function selectPanel(id, opts = {}) {
   const entry = state.sessions.get(id);
   if (!entry || state.panePrefs.paneDesktop[id] !== state.activeDesktopId) return;
+  const changed = state.activeId !== id;
   state.activeId = id;
   renderBackendLatency();
   document.querySelectorAll('.term-panel').forEach(p => p.classList.remove('active'));
   entry.el.classList.add('active');
   applyLayoutVisibility();
   if (!state.minimized.has(id)) bringWindowToFront(id, { persist: false });
-  entry.term.focus();
+  const focus = opts.focus ?? navigator.maxTouchPoints === 0;
+  if (focus) entry.term.focus();
+  else if (changed && document.activeElement?.closest?.('.xterm')) document.activeElement.blur();
   syncTerminalInputFocus();
   scheduleTerminalFit();
   renderSwitcher();
@@ -4696,6 +4714,8 @@ document.documentElement.addEventListener('mouseleave', clearLayoutAssist);
 document.addEventListener('focusin', () => syncTerminalInputFocus());
 document.addEventListener('focusout', () => queueMicrotask(() => syncTerminalInputFocus()));
 window.addEventListener('resize', () => { responsiveMinimizeForViewport(); applyLayoutVisibility(); scheduleTerminalFit(); });
+window.visualViewport?.addEventListener('resize', syncVisualViewportHeight);
+syncVisualViewportHeight();
 window.addEventListener('beforeunload', saveAllTerminalSnapshots);
 window.addEventListener('pagehide', flushUiState);
 document.addEventListener('visibilitychange', () => {
@@ -4734,7 +4754,7 @@ document.addEventListener('keydown', e => {
   if (e.altKey && /^[1-9]$/.test(e.key)) {
     e.preventDefault();
     const id = state.order[Number(e.key) - 1];
-    if (id) state.minimized.has(id) ? restorePanel(id) : selectPanel(id);
+    if (id) state.minimized.has(id) ? restorePanel(id, { focus: true }) : selectPanel(id, { focus: true });
   }
   if (e.altKey && e.key === '0') {
     e.preventDefault();

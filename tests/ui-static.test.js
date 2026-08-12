@@ -336,7 +336,7 @@ assert.ok(app.includes('entry.term.options.fontSize = size') && !app.includes("t
 assert.ok(!app.includes("setProperty('--settings-font-size'" ) && style.includes('font-size: 12px') && style.includes('width: min(29em'), 'settings typography and panel geometry must stay fixed at 12px');
 assert.ok(app.includes("'X-PassiDeck-Token': token") && app.includes('keepalive: true'), 'authenticated unload persistence must retain its auth header');
 
-assert.ok(app.includes("state.minimized.has(id) ? restorePanel(id) : selectPanel(id)"), 'Alt+number must restore minimized panes');
+assert.ok(app.includes("state.minimized.has(id) ? restorePanel(id, { focus: true }) : selectPanel(id, { focus: true })"), 'Alt+number must restore and focus minimized panes');
 assert.ok(app.includes("document.addEventListener('paste', handleTerminalPaste, true)") && app.includes("document.addEventListener('keydown', letBrowserOwnTerminalPasteShortcut, true)") && app.includes("document.addEventListener('drop', handleUploadDrop, true)"), 'text/file paste and file drop terminal bridges must stay enabled');
 assert.ok(
   app.includes('new WebLinksAddon.WebLinksAddon(handleTerminalLink)') &&
@@ -358,9 +358,19 @@ assert.ok(
 );
 const replayNormalizer = app.slice(app.indexOf('function normalizeReplayText'), app.indexOf('function sanitizeTerminalOutput'));
 assert.ok(!replayNormalizer.includes(".replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '')"), 'tmux replay normalization must not strip SGR with every CSI control');
-assert.ok(html.includes('app.js?v=20260812-mobile-tui-touch-v1') && html.includes('style.css?v=20260812-mobile-tui-touch-v1'), 'client cache keys must activate mobile Hermes TUI touch scrolling');
+assert.ok(html.includes('app.js?v=20260812-mobile-tui-keyboard-v1') && html.includes('style.css?v=20260812-mobile-tui-keyboard-v1'), 'client cache keys must activate mobile Hermes TUI keyboard handling');
+assert.ok(html.includes('interactive-widget=resizes-content'), 'mobile soft keyboards must resize PassiDeck content instead of covering the TUI composer');
+assert.ok(
+  style.includes('height: var(--passideck-viewport-height, 100dvh)') &&
+  app.includes("document.documentElement.style.setProperty('--passideck-viewport-height', `${Math.round(viewport.height)}px`)") &&
+  app.includes("window.visualViewport?.addEventListener('resize', syncVisualViewportHeight)"),
+  'Safari visual viewport changes must resize the app and refit terminals above the soft keyboard'
+);
 const terminalDragBlock = app.slice(app.indexOf('function installTerminalDragSelection'), app.indexOf('function declaredTerminalOwner'));
 const terminalTouchBlock = app.slice(app.indexOf('function installTerminalWheelScroll'), app.indexOf('function updateEmpty'));
+const terminalTouchStartBlock = terminalTouchBlock.slice(terminalTouchBlock.indexOf("termEl.addEventListener('touchstart'"), terminalTouchBlock.indexOf("termEl.addEventListener('touchmove'"));
+const terminalTouchEndBlock = terminalTouchBlock.slice(terminalTouchBlock.indexOf('const endTouchScroll'), terminalTouchBlock.indexOf("termEl.addEventListener('touchend'"));
+const selectPanelBlock = app.slice(app.indexOf('function selectPanel'), app.indexOf('function discardPanel'));
 assert.ok(
   terminalDragBlock.includes("event.type.startsWith('pointer') && event.pointerType !== 'mouse'") &&
   terminalDragBlock.includes("performance.now() < suppressMouseUntil") &&
@@ -369,10 +379,23 @@ assert.ok(
   terminalTouchBlock.includes("terminalMode === 'hermes-tui'") &&
   terminalTouchBlock.includes('if (e.touches.length !== 1) {') &&
   terminalTouchBlock.includes('resetTouchScroll();') &&
-  terminalTouchBlock.includes('selectPanel(session.id);') &&
+  terminalTouchBlock.includes("selectPanel(session.id, { focus: false })") &&
   terminalTouchBlock.includes("sendApplicationMouse(lines < 0 ? 64 : 65, e.touches[0])") &&
   terminalTouchBlock.includes("sendApplicationMouse(0, touch, true)"),
   'Hermes TUI touch gestures must bypass text drag-selection and enter xterm through its wheel owner'
+);
+assert.ok(
+  !terminalTouchStartBlock.includes('term.focus()') &&
+  terminalTouchEndBlock.includes('term.focus()') &&
+  app.includes("event?.pointerType === 'touch'") &&
+  app.includes('event?.sourceCapabilities?.firesTouchEvents') &&
+  terminalTouchStartBlock.includes("selectPanel(session.id, { focus: false })") &&
+  app.includes("addEventListener('mousedown', event => selectPanel(id, { focus: !touchGeneratedClick(event) || !isHermesTuiEntry(state.sessions.get(id)) }))") &&
+  selectPanelBlock.includes('opts.focus ?? navigator.maxTouchPoints === 0') &&
+  app.includes("window.matchMedia?.('(pointer: coarse)').matches || document.hidden") &&
+  selectPanelBlock.includes("document.activeElement?.closest?.('.xterm')") &&
+  selectPanelBlock.includes('document.activeElement.blur()'),
+  'mobile pane selection and TUI swipes must stay keyboard-free while a completed terminal tap focuses xterm'
 );
 assert.ok(app.includes("const TERM_SNAPSHOT_PREFIX = 'passideck:term-snapshot:v2:'"), 'legacy snapshots without OSC 8 targets must be invalidated');
 assert.ok(app.includes('cols: entry.term.cols') && app.includes('Number.isInteger(snapshot.cols) && snapshot.cols === term.cols'), 'snapshot OSC 8 targets must fail closed after terminal column reflow');

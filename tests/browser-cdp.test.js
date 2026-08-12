@@ -3051,21 +3051,94 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       })()`);
       assert.ok(tuiTouchSetup.width > 0 && tuiTouchSetup.height > 0 && tuiTouchSetup.bufferType === 'alternate',
         `Hermes TUI touch regression must use the visible alternate-screen terminal: ${JSON.stringify(tuiTouchSetup)}`);
-      const tuiTapY = tuiTouchSetup.startY + (tuiTouchSetup.endY - tuiTouchSetup.startY) / 2;
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: tuiTouchSetup.x, y: tuiTapY, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, sid);
+      const mobileSelectionFocused = await evalExpr(cdp, sid, `(() => {
+        const entry = window.__tuiTouchRestore.entry;
+        document.getElementById('settingsToggle').focus();
+        selectPanel(entry.session.id, { persist: false, focus: false });
+        return document.activeElement === entry.el.querySelector('.xterm-helper-textarea');
+      })()`);
+      const windowActivationFocus = await evalExpr(cdp, sid, `(() => {
+        const entry = window.__tuiTouchRestore.entry;
+        document.getElementById('settingsToggle').focus();
+        focusActiveTerminalOnWindowActivation();
+        const coarse = document.activeElement === entry.el.querySelector('.xterm-helper-textarea');
+        const originalMatchMedia = window.matchMedia;
+        try {
+          window.matchMedia = query => query === '(pointer: coarse)' ? { matches: false } : originalMatchMedia(query);
+          focusActiveTerminalOnWindowActivation();
+          return { coarse, hybridFine: document.activeElement === entry.el.querySelector('.xterm-helper-textarea') };
+        } finally {
+          window.matchMedia = originalMatchMedia;
+        }
+      })()`);
+      const normalShellTouchFocused = await evalExpr(cdp, sid, `(() => {
+        const entry = window.__tuiTouchRestore.entry;
+        const mode = entry.terminalMode;
+        try {
+          entry.terminalMode = 'viewport';
+          document.getElementById('settingsToggle').focus();
+          const event = new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0 });
+          Object.defineProperty(event, 'sourceCapabilities', { value: { firesTouchEvents: true } });
+          entry.el.querySelector('.terminal').dispatchEvent(event);
+          return document.activeElement === entry.el.querySelector('.xterm-helper-textarea');
+        } finally {
+          entry.terminalMode = mode;
+        }
+      })()`);
+      await evalExpr(cdp, sid, "document.getElementById('settingsToggle').focus()");
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: tuiTouchSetup.x, y: tuiTouchSetup.startY, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
+      const swipeStartFocused = await evalExpr(cdp, sid, `document.activeElement === window.__tuiTouchRestore.entry.el.querySelector('.xterm-helper-textarea')`);
       for (let step = 1; step <= 6; step++) {
         const y = tuiTouchSetup.startY + (tuiTouchSetup.endY - tuiTouchSetup.startY) * step / 6;
         await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: tuiTouchSetup.x, y, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
       }
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, sid);
-      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x: tuiTouchSetup.x, y: tuiTapY, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
+      const swipeEndFocused = await evalExpr(cdp, sid, `document.activeElement === window.__tuiTouchRestore.entry.el.querySelector('.xterm-helper-textarea')`);
+      const tuiTapPoint = await evalExpr(cdp, sid, `(() => {
+        const rect = window.__tuiTouchRestore.entry.el.querySelector('.xterm-screen').getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      })()`);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: tuiTapPoint.x, y: tuiTapPoint.y, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
+      const tapStartFocused = await evalExpr(cdp, sid, `document.activeElement === window.__tuiTouchRestore.entry.el.querySelector('.xterm-helper-textarea')`);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, sid);
+      const tapEndFocused = await evalExpr(cdp, sid, `document.activeElement === window.__tuiTouchRestore.entry.el.querySelector('.xterm-helper-textarea')`);
+      const keyboardLayouts = [];
+      for (const metrics of [
+        { label: 'phone', width: 390, height: 500, deviceScaleFactor: 3 },
+        { label: 'fold', width: 884, height: 680, deviceScaleFactor: 2 }
+      ]) {
+        await cdp.send('Emulation.setDeviceMetricsOverride', { ...metrics, mobile: true }, sid);
+        await waitEval(cdp, sid, `innerWidth === ${metrics.width} && innerHeight === ${metrics.height}`);
+        await sleep(350);
+        keyboardLayouts.push(await evalExpr(cdp, sid, `(() => {
+          const entry = window.__tuiTouchRestore.entry;
+          const panel = entry.el.getBoundingClientRect();
+          const screen = entry.el.querySelector('.xterm-screen').getBoundingClientRect();
+          return { label: '${metrics.label}', innerHeight, panelBottom: panel.bottom, screenBottom: screen.bottom };
+        })()`));
+      }
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 3, mobile: true }, sid);
+      await waitEval(cdp, sid, 'innerWidth === 390 && innerHeight === 844');
+      await sleep(350);
+      const multiTouchPoint = await evalExpr(cdp, sid, `(() => {
+        const entry = window.__tuiTouchRestore.entry;
+        const rect = entry.el.querySelector('.xterm-screen').getBoundingClientRect();
+        entry.term.blur();
+        return {
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2,
+          initiallyFocused: document.activeElement === entry.el.querySelector('.xterm-helper-textarea')
+        };
+      })()`);
+      assert.strictEqual(multiTouchPoint.initiallyFocused, false, 'multi-touch focus regression must begin with xterm blurred');
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x: multiTouchPoint.x, y: multiTouchPoint.y, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
+      const multiTouchStartFocused = await evalExpr(cdp, sid, `document.activeElement === window.__tuiTouchRestore.entry.el.querySelector('.xterm-helper-textarea')`);
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [
-        { id: 1, x: tuiTouchSetup.x - 8, y: tuiTapY, radiusX: 1, radiusY: 1, force: 1 },
-        { id: 2, x: tuiTouchSetup.x + 8, y: tuiTapY, radiusX: 1, radiusY: 1, force: 1 }
+        { id: 1, x: multiTouchPoint.x - 8, y: multiTouchPoint.y, radiusX: 1, radiusY: 1, force: 1 },
+        { id: 2, x: multiTouchPoint.x + 8, y: multiTouchPoint.y, radiusX: 1, radiusY: 1, force: 1 }
       ] }, sid);
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, sid);
+      const multiTouchEndFocused = await evalExpr(cdp, sid, `document.activeElement === window.__tuiTouchRestore.entry.el.querySelector('.xterm-helper-textarea')`);
       tuiTouch = await evalExpr(cdp, sid, `(async () => {
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
         const { entry, mouseData, mouseProbeState, sentInput } = window.__tuiTouchRestore;
@@ -3087,6 +3160,17 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         };
       })()`);
       assert.strictEqual(tuiTouch.tapEvents, 2, `Hermes TUI touch taps must become one terminal mouse press and release while multi-touch emits no phantom tap: ${JSON.stringify(tuiTouch)}`);
+      assert.deepStrictEqual(
+        { mobileSelectionFocused, tapStartFocused, tapEndFocused, swipeStartFocused, swipeEndFocused, multiTouchStartFocused, multiTouchEndFocused },
+        { mobileSelectionFocused: false, tapStartFocused: false, tapEndFocused: true, swipeStartFocused: false, swipeEndFocused: false, multiTouchStartFocused: false, multiTouchEndFocused: false },
+        'mobile window selection and TUI swipes must not open the keyboard; only a completed terminal tap may focus xterm'
+      );
+      assert.deepStrictEqual(windowActivationFocus, { coarse: false, hybridFine: true }, 'window activation must stay keyboard-free on coarse touch devices while hybrid fine-pointer devices retain desktop focus');
+      assert.strictEqual(normalShellTouchFocused, true, 'touch-generated mousedown must still focus normal-shell terminals');
+      assert.ok(
+        keyboardLayouts.every(layout => layout.panelBottom <= layout.innerHeight + 1 && layout.screenBottom <= layout.innerHeight + 1),
+        `phone and Fold TUI content must resize above the soft keyboard: ${JSON.stringify(keyboardLayouts)}`
+      );
       assert.ok(tuiTouch.wheelEvents > 0, `Hermes TUI touch swipes must become terminal mouse-wheel input: ${JSON.stringify(tuiTouch)}`);
       assert.ok(tuiTouch.ptyInputs > 0, `Hermes TUI touch input must reach the isolated PTY input seam: ${JSON.stringify(tuiTouch)}`);
       assert.strictEqual(tuiTouch.selected, false, `Hermes TUI touch swipes must not select terminal text: ${JSON.stringify(tuiTouch)}`);
