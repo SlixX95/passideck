@@ -4344,7 +4344,6 @@ function isHermesTuiEntry(entry) {
 
 function uploadInsertion(upload, entry) {
   const path = upload?.path || '';
-  if (String(upload?.type || '').startsWith('image/') && isHermesTuiEntry(entry)) return `\x01/image ${path}\r`;
   return `\x1b[200~${String(path).replace(/\x1b/g, '')} \x1b[201~`;
 }
 

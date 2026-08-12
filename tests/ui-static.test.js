@@ -358,7 +358,7 @@ assert.ok(
 );
 const replayNormalizer = app.slice(app.indexOf('function normalizeReplayText'), app.indexOf('function sanitizeTerminalOutput'));
 assert.ok(!replayNormalizer.includes(".replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '')"), 'tmux replay normalization must not strip SGR with every CSI control');
-assert.ok(html.includes('app.js?v=20260812-mobile-tui-keyboard-v1') && html.includes('style.css?v=20260812-mobile-tui-keyboard-v1'), 'client cache keys must activate mobile Hermes TUI keyboard handling');
+assert.ok(html.includes('app.js?v=20260813-upload-space-v1') && html.includes('style.css?v=20260813-upload-space-v1'), 'client cache keys must activate upload space insertion');
 assert.ok(html.includes('interactive-widget=resizes-content'), 'mobile soft keyboards must resize PassiDeck content instead of covering the TUI composer');
 assert.ok(
   style.includes('height: var(--passideck-viewport-height, 100dvh)') &&

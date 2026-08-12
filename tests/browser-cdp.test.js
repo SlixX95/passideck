@@ -4126,9 +4126,9 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.deepStrictEqual(uploadInteraction, {
       sent: [
         '\u001b[200~normal Hermes paste\u001b[201~',
-        '\u0001/image /tmp/screenshot.png\r',
-        '\u0001/image /tmp/mirrored.png\r',
-        '\u0001/image /tmp/clipboard.png\r',
+        '\u001b[200~/tmp/screenshot.png \u001b[201~',
+        '\u001b[200~/tmp/mirrored.png \u001b[201~',
+        '\u001b[200~/tmp/clipboard.png \u001b[201~',
         '\u001b[200~/tmp/pasted.txt \u001b[201~',
         '\u001b[200~/tmp/notes.txt \u001b[201~'
       ],
