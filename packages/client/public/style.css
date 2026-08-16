@@ -505,7 +505,7 @@ body.shared-resizing-y { cursor: row-resize; user-select: none; }
   position: absolute;
   resize: none;
   min-width: 300px;
-  min-height: 190px;
+  min-height: 80px;
   overflow: hidden;
   max-height: none;
   box-shadow: 0 18px 48px rgba(0,0,0,.55), 0 0 0 1px var(--tg-accent-dim);

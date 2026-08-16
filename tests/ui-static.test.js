@@ -169,6 +169,12 @@ assert.ok(style.includes('.desktop-tab.active, .desktop-tab.active.attention') &
 assert.ok(style.includes('.grid-container {') && style.includes('padding: 0;'), 'desktop grid must not reserve a visible inset around maximized panes');
 assert.ok(app.includes('function renderWindowRect(') && app.includes('function installDesktopWindowResizeHandles('), 'Windows desktop renderer must fill authoritative edge panes while retaining invisible resize hit areas');
 assert.ok(
+  app.includes('const MIN_WINDOW_HEIGHT = 80;') &&
+  (app.match(/MIN_WINDOW_HEIGHT/g) || []).length === 8 &&
+  cssBlock(style, '.term-panel.free-window').includes('min-height: 80px;'),
+  'desktop terminal windows must resize down to compact content without stale 190px geometry clamps'
+);
+assert.ok(
   style.includes('body[data-skin="neon"]') && style.includes('--tg-panel-radius: 8px') &&
   style.includes('body[data-skin="stealth"]') && style.includes('--tg-panel-radius: 0px') &&
   style.includes('body[data-skin="prism"]') && style.includes('--tg-panel-radius: 2px'),
@@ -358,7 +364,7 @@ assert.ok(
 );
 const replayNormalizer = app.slice(app.indexOf('function normalizeReplayText'), app.indexOf('function sanitizeTerminalOutput'));
 assert.ok(!replayNormalizer.includes(".replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '')"), 'tmux replay normalization must not strip SGR with every CSI control');
-assert.ok(html.includes('app.js?v=20260813-upload-space-v1') && html.includes('style.css?v=20260813-upload-space-v1'), 'client cache keys must activate upload space insertion');
+assert.ok(html.includes('app.js?v=20260816-compact-window-v1') && html.includes('style.css?v=20260816-compact-window-v1'), 'client cache keys must activate compact terminal windows');
 assert.ok(html.includes('interactive-widget=resizes-content'), 'mobile soft keyboards must resize PassiDeck content instead of covering the TUI composer');
 assert.ok(
   style.includes('height: var(--passideck-viewport-height, 100dvh)') &&

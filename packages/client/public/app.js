@@ -87,6 +87,7 @@ const state = {
 const DESKTOP_VIEW_KEY = 'passideck:desktop-view:v1';
 const UI_DRAFT_KEY = 'passideck:ui-draft:v1';
 const MAX_DESKTOPS = 3;
+const MIN_WINDOW_HEIGHT = 80;
 
 function localDesktopView() {
   try { return JSON.parse(sessionStorage.getItem(DESKTOP_VIEW_KEY) || '{}'); }
@@ -650,7 +651,7 @@ function clampWindowRect(rect = {}) {
   const desktopW = Math.max(1, Number(gr.width) || 1280);
   const desktopH = Math.max(1, Number(gr.height) || 720);
   const minW = Math.min(300, desktopW);
-  const minH = Math.min(190, desktopH);
+  const minH = Math.min(MIN_WINDOW_HEIGHT, desktopH);
   const fallbackW = Math.min(640, desktopW);
   const fallbackH = Math.min(400, desktopH);
   const rawW = Number.isFinite(Number(rect.w)) ? Number(rect.w) : fallbackW;
@@ -860,7 +861,7 @@ function pointerGapSlotRect(rect, x, y) {
   const halfH = rect.h / 2;
   const edgeZone = ratio => ratio < 1 / 3 ? -1 : ratio > 2 / 3 ? 1 : 0;
   const horizontal = halfW >= 300 ? edgeZone((x - rect.x) / rect.w) : 0;
-  const vertical = halfH >= 190 ? edgeZone((y - rect.y) / rect.h) : 0;
+  const vertical = halfH >= MIN_WINDOW_HEIGHT ? edgeZone((y - rect.y) / rect.h) : 0;
   if (!horizontal && !vertical) return rect;
   return {
     ...rect,
@@ -897,7 +898,7 @@ function slotRectsForDrag(sourceId, pointerX = null, pointerY = null) {
   const isAvailable = c => {
     const area = c.w * c.h;
     const overlap = rectCoveredArea(c, occupiedRects);
-    return area >= 300 * 190 && overlap / Math.max(1, area) <= 0.12;
+    return area >= 300 * MIN_WINDOW_HEIGHT && overlap / Math.max(1, area) <= 0.12;
   };
   if (hasPointer) {
     const gaps = desktopGapSlotRects(occupied);
@@ -965,7 +966,7 @@ function desktopGapSlotRects(occupied) {
   for (const c of [...cells, ...rows, ...columns, ...mergeRuns(rows, 'y'), ...mergeRuns(columns, 'x')]) {
     if (!rects.some(rect => similarRect(rect, c))) rects.push(c);
   }
-  return rects.filter(c => c.w >= 300 && c.h >= 190).sort((a, b) => (b.w * b.h) - (a.w * a.h));
+  return rects.filter(c => c.w >= 300 && c.h >= MIN_WINDOW_HEIGHT).sort((a, b) => (b.w * b.h) - (a.w * a.h));
 }
 
 function pointInRect(px, py, rect) {
@@ -3203,7 +3204,7 @@ function endWindowResize(event) {
 
 function snapWindowResize(sourceId, edge, rect) {
   const minW = 300;
-  const minH = 190;
+  const minH = MIN_WINDOW_HEIGHT;
   const threshold = 16;
   const result = { ...rect };
   const prefs = windowPrefs();
@@ -3258,7 +3259,7 @@ function updateWindowResize(event) {
   const dy = pt.y - d.startY;
   const edge = d.edge || 'se';
   const minW = 300;
-  const minH = 190;
+  const minH = MIN_WINDOW_HEIGHT;
   let { x, y, w, h } = d.startRect;
   if (edge.includes('e')) w = Math.max(minW, Math.min(gr.width - x, d.startRect.w + dx));
   if (edge.includes('s')) h = Math.max(minH, Math.min(gr.height - y, d.startRect.h + dy));
@@ -3306,7 +3307,7 @@ function startSharedResize(group, event) {
 
 function sharedResizeDelta(d, rawDelta) {
   const minW = 300;
-  const minH = 190;
+  const minH = MIN_WINDOW_HEIGHT;
   let min = -Infinity;
   let max = Infinity;
   if (d.axis === 'vertical') {
