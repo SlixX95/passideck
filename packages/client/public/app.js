@@ -333,8 +333,10 @@ function applyHermesEvent(id, message) {
   const event = message.event || {};
   if (isHermesTuiEntry(entry)) entry.hermesEventsConnected = true;
   if (event.type === 'message.start') setSessionWorking(id, true);
-  if (event.type === 'message.complete') setSessionWorking(id, false);
-  if (event.type === 'session.info' && typeof event.payload?.running === 'boolean') setSessionWorking(id, event.payload.running);
+  if (event.type === 'message.complete') setSessionWorking(id, event.payload?.working === true);
+  if (event.type === 'session.info' && typeof (event.payload?.working ?? event.payload?.running) === 'boolean') {
+    setSessionWorking(id, event.payload.working ?? event.payload.running);
+  }
 }
 
 function syncSessionWorkingFromTerminal(id, entry, viewportRows = null) {

@@ -649,7 +649,13 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     hermesPublisher.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: {
       type: 'session.info',
       session_id: 'live-1',
-      payload: { running: true, title: 'Native Hermes Title', stored_session_id: 'stored-1', provider: 'secret-provider-detail' }
+      payload: {
+        running: false,
+        usage: { active_subagents: 1 },
+        title: 'Native Hermes Title',
+        stored_session_id: 'stored-1',
+        provider: 'secret-provider-detail'
+      }
     } }));
     hermesPublisher.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: {
       type: 'tool.start',
@@ -662,10 +668,36 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     );
     const nativeInfo = firstMessages.find(message => message.type === 'hermes-event' && message.event?.type === 'session.info');
     assert.deepStrictEqual(nativeInfo.event.payload, {
-      running: true,
+      running: false,
+      working: true,
       title: 'Native Hermes Title',
       stored_session_id: 'stored-1'
-    }, 'PassiDeck must forward only the native Hermes metadata it actually consumes');
+    }, 'PassiDeck must keep a completed parent turn working while native Hermes still reports an active subagent');
+    assert.strictEqual(session.hermesRunning, true, 'the active subagent must keep reconnect state working after the parent turn becomes idle');
+    hermesPublisher.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: {
+      type: 'message.complete', session_id: 'live-1', payload: { usage: { active_subagents: 1 } }
+    } }));
+    await delay(20);
+    assert.strictEqual(session.hermesRunning, true, 'parent completion must not clear working while delegated work remains active');
+    hermesPublisher.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: {
+      type: 'message.complete', session_id: 'live-1', payload: { usage: { active_subagents: 0 } }
+    } }));
+    await waitFor(() => session.hermesRunning === false, 'the normal final completion must restore the idle state');
+    hermesPublisher.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: {
+      type: 'message.complete', session_id: 'live-1', payload: { usage: { active_subagents: '1' } }
+    } }));
+    await delay(20);
+    assert.strictEqual(session.hermesRunning, false, 'a malformed subagent count must fail closed instead of pinning the pane working');
+    hermesPublisher.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: {
+      type: 'session.info', session_id: 'live-1', payload: { running: 'false', usage: { active_subagents: 0 } }
+    } }));
+    await delay(20);
+    assert.strictEqual(session.hermesRunning, false, 'a malformed running flag must not become truthy while combining native lifecycle state');
+    hermesPublisher.send(JSON.stringify({ jsonrpc: '2.0', method: 'event', params: {
+      type: 'session.info', session_id: 'live-1', payload: { running: false, usage: { active_subagents: '1' } }
+    } }));
+    await delay(20);
+    assert.strictEqual(session.hermesRunning, false, 'a malformed subagent count must stay excluded from combined session info state');
     await waitFor(
       () => session.meta.title === 'Native Hermes Title' && session.meta.hermesSessionId === 'stored-1',
       'native Hermes title metadata must update the pane without waiting for database polling'

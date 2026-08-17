@@ -367,10 +367,12 @@ function bufferExpression(id) {
       const queued = entry.pendingHermesEvents.length === 2 && entry.pendingHermesEvents[0].type === 'hermes-events' && !entry.working;
       applyTerminalOwner(id, entry.term, 'application', 'hermes-tui');
       const started = entry.working;
-      applyHermesEvent(id, { type: 'hermes-event', event: { type: 'message.complete' } });
-      return { queued, started, completed: !entry.working, declaredCommand: entry.session.meta.command, mode: entry.terminalMode };
+      applyHermesEvent(id, { type: 'hermes-event', event: { type: 'message.complete', payload: { working: true } } });
+      const delegated = entry.working;
+      applyHermesEvent(id, { type: 'hermes-event', event: { type: 'message.complete', payload: { working: false } } });
+      return { queued, started, delegated, completed: !entry.working, declaredCommand: entry.session.meta.command, mode: entry.terminalMode };
     })()`);
-    assert.deepStrictEqual(dynamicHermesEvents, { queued: true, started: true, completed: true, declaredCommand: '/bin/bash', mode: 'hermes-tui' });
+    assert.deepStrictEqual(dynamicHermesEvents, { queued: true, started: true, delegated: true, completed: true, declaredCommand: '/bin/bash', mode: 'hermes-tui' });
     const tuiWheel = await waitFor(async () => {
       const value = await evaluate(cdp, sid, `(async () => {
         const entry = state.sessions.get(${JSON.stringify(manual.id)});

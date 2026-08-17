@@ -1161,14 +1161,24 @@ function sanitizeHermesEvent(frame) {
   const event = frame?.method === 'event' ? frame.params : frame;
   const type = String(event?.type || '');
   const sessionId = String(event?.session_id || '').slice(0, 160);
-  if (type === 'message.start' || type === 'message.complete') return { type, session_id: sessionId };
+  const activeSubagents = event?.payload?.usage?.active_subagents;
+  const hasActiveSubagents = Number.isInteger(activeSubagents) && activeSubagents >= 0;
+  if (type === 'message.start' || type === 'message.complete') {
+    return {
+      type,
+      session_id: sessionId,
+      payload: { working: type === 'message.start' || (hasActiveSubagents && activeSubagents > 0) }
+    };
+  }
   if (type === 'session.info') {
     const payload = event.payload && typeof event.payload === 'object' ? event.payload : {};
+    const runningKnown = typeof payload.running === 'boolean';
     return {
       type,
       session_id: sessionId,
       payload: {
         ...(typeof payload.running === 'boolean' ? { running: payload.running } : {}),
+        ...(runningKnown || hasActiveSubagents ? { working: Boolean((runningKnown && payload.running) || (hasActiveSubagents && activeSubagents > 0)) } : {}),
         ...(payload.title ? { title: sanitizeDynamicTitle(payload.title) } : {}),
         ...(payload.stored_session_id ? { stored_session_id: String(payload.stored_session_id).slice(0, 160) } : {})
       }
@@ -1813,16 +1823,12 @@ function createServer(config = loadConfig()) {
         const event = sanitizeHermesEvent(frame);
         if (!event) return;
         if (!acceptHermesEvent(session, event)) return;
-        if (event.type === 'message.start') {
-          session.hermesRunning = true;
+        if (event.type === 'message.start' || event.type === 'message.complete') {
+          session.hermesRunning = event.payload?.working ?? event.type === 'message.start';
           session.hermesWorkingTurnId = null;
         }
-        if (event.type === 'message.complete') {
-          session.hermesRunning = false;
-          session.hermesWorkingTurnId = null;
-        }
-        if (event.type === 'session.info' && typeof event.payload?.running === 'boolean') {
-          session.hermesRunning = event.payload.running;
+        if (event.type === 'session.info' && typeof (event.payload?.working ?? event.payload?.running) === 'boolean') {
+          session.hermesRunning = event.payload.working ?? event.payload.running;
           session.hermesWorkingTurnId = null;
         }
         const title = String(event.payload?.title || '').trim();

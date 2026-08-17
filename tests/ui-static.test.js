@@ -197,13 +197,15 @@ assert.ok(
   app.includes("if (msg.type === 'hermes-event' || msg.type === 'hermes-events') applyHermesEvent(id, msg);") &&
   app.includes("isHermesTuiEntry(entry)") &&
   app.includes("line.translateToString(false).includes('Ctrl+C to interrupt')") &&
+  app.includes("event.payload?.working === true") &&
+  app.includes("event.payload.working ?? event.payload.running") &&
   app.includes('syncSessionWorkingFromTerminal(id, entry, rows);') &&
   !app.includes('SESSION_WORKING_IDLE_MS') &&
   !app.includes('workingIdleTimer') &&
   !app.includes("isHermesEntry(entry) && clean.includes('\\r')") &&
   style.includes('.term-panel.working[data-connection-status="live"] .connection-dot') &&
   style.includes('@keyframes session-working-spin'),
-  'the working spinner must accept native lifecycle events from normal Hermes CLI and TUI while retaining the TUI rendered-busy fallback'
+  'the working spinner must include delegated subagent work while preserving native busy-to-idle and TUI rendered-busy fallback behavior'
 );
 assert.ok(
   session.includes('WS_BACKPRESSURE_MAX_BYTES') && session.includes('(Number(ws.bufferedAmount) || 0) + bytes > WS_BACKPRESSURE_MAX_BYTES') && server.includes('sendJson(ws,') &&
@@ -364,7 +366,7 @@ assert.ok(
 );
 const replayNormalizer = app.slice(app.indexOf('function normalizeReplayText'), app.indexOf('function sanitizeTerminalOutput'));
 assert.ok(!replayNormalizer.includes(".replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '')"), 'tmux replay normalization must not strip SGR with every CSI control');
-assert.ok(html.includes('app.js?v=20260816-compact-window-v1') && html.includes('style.css?v=20260816-compact-window-v1'), 'client cache keys must activate compact terminal windows');
+assert.ok(html.includes('app.js?v=20260817-subagent-working-v1') && html.includes('style.css?v=20260817-subagent-working-v1'), 'client cache keys must activate delegated subagent working state');
 assert.ok(html.includes('interactive-widget=resizes-content'), 'mobile soft keyboards must resize PassiDeck content instead of covering the TUI composer');
 assert.ok(
   style.includes('height: var(--passideck-viewport-height, 100dvh)') &&
