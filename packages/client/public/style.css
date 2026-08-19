@@ -1029,8 +1029,8 @@ body.desktop-app.desktop-overflow-windows #windowMenu.open .switcher-item { widt
 body.desktop-app.desktop-overflow-windows #windowMenu.open .switcher-btn { width: 100%; }
 body.desktop-app.desktop-overflow-monitor #monitorMenu.open > .adaptive-menu-list,
 body.desktop-app.desktop-overflow-usage #usageMenu.open > .adaptive-menu-list { flex-wrap: wrap; width: max-content; max-width: min(420px, calc(100vw - 12px)); }
-body.desktop-app:not(.desktop-overflow-windows) #sessionSwitcher .switcher-item { flex: 1 1 90px; }
-body.desktop-app:not(.desktop-overflow-windows) #sessionSwitcher .switcher-btn { width: 100%; min-width: 0; }
+body.desktop-app:not(.desktop-overflow-windows) #sessionSwitcher .switcher-item { flex: 0 1 auto; max-width: 160px; }
+body.desktop-app:not(.desktop-overflow-windows) #sessionSwitcher .switcher-btn { width: auto; min-width: 72px; max-width: 160px; flex: 0 1 auto; }
 body.desktop-app:not(.desktop-overflow-windows) #sessionSwitcher .switcher-title { display: block; min-width: 0; }
 body.desktop-app .adaptive-menu.open .topbar-ql-btn { width: 100%; max-width: none; justify-content: flex-start; }
 

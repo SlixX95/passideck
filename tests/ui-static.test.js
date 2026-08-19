@@ -167,14 +167,24 @@ assert.ok(
   style.includes("body:not(.desktop-app) .compact-menu.open > .compact-menu-list"),
   'Electron must fill available chrome and progressively disclose whole control groups without clipping'
 );
+const desktopOverflowOrder = app.slice(app.indexOf('const DESKTOP_OVERFLOW_ORDER = ['), app.indexOf('function measuredDesktopChromeWidth'));
+assert.ok(
+  desktopOverflowOrder.indexOf("'desktop-overflow-windows'") < desktopOverflowOrder.indexOf("'desktop-overflow-launch'") &&
+  desktopOverflowOrder.indexOf("'desktop-overflow-launch'") < desktopOverflowOrder.indexOf("'desktop-overflow-usage'") &&
+  desktopOverflowOrder.indexOf("'desktop-overflow-usage'") < desktopOverflowOrder.indexOf("'desktop-overflow-monitor'") &&
+  desktopOverflowOrder.indexOf("'desktop-overflow-monitor'") < desktopOverflowOrder.indexOf("'desktop-overflow-desktops'"),
+  'desktop chrome must collapse windows before launch, Usage, Monitor, and desktops'
+);
 const desktopTopbarBlock = cssBlock(style, '\n.topbar {');
 assert.ok(desktopTopbarBlock.includes('position: relative') && desktopTopbarBlock.includes('z-index: var(--z-actions)'), 'desktop dropdowns must paint above the workspace');
+const expandedWindowItemBlock = cssBlock(style, 'body.desktop-app:not(.desktop-overflow-windows) #sessionSwitcher .switcher-item');
 const expandedWindowButtonBlock = cssBlock(style, 'body.desktop-app:not(.desktop-overflow-windows) #sessionSwitcher .switcher-btn');
 const expandedWindowTitleBlock = cssBlock(style, 'body.desktop-app:not(.desktop-overflow-windows) #sessionSwitcher .switcher-title');
 assert.ok(
-  expandedWindowButtonBlock.includes('width: 100%') && expandedWindowButtonBlock.includes('min-width: 0') &&
+  expandedWindowItemBlock.includes('flex: 0 1 auto') && expandedWindowItemBlock.includes('max-width: 160px') &&
+  expandedWindowButtonBlock.includes('width: auto') && expandedWindowButtonBlock.includes('max-width: 160px') &&
   expandedWindowTitleBlock.includes('display: block') && expandedWindowTitleBlock.includes('min-width: 0'),
-  'expanded desktop window buttons must fill their growing wrappers without intrinsic-title overflow'
+  'expanded desktop window buttons must remain compact and bound long titles'
 );
 assert.ok(
   style.includes('body:not(.desktop-app) .compact-menu > .compact-menu-toggle') &&
@@ -416,7 +426,7 @@ assert.ok(
 );
 const replayNormalizer = app.slice(app.indexOf('function normalizeReplayText'), app.indexOf('function sanitizeTerminalOutput'));
 assert.ok(!replayNormalizer.includes(".replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '')"), 'tmux replay normalization must not strip SGR with every CSI control');
-assert.ok(html.includes('app.js?v=20260819-adaptive-groups-v3') && html.includes('style.css?v=20260819-adaptive-groups-v3'), 'client cache keys must activate adaptive grouped chrome');
+assert.ok(html.includes('app.js?v=20260819-adaptive-groups-v4') && html.includes('style.css?v=20260819-adaptive-groups-v4'), 'client cache keys must activate adaptive grouped chrome');
 assert.ok(html.includes('interactive-widget=resizes-content'), 'mobile soft keyboards must resize PassiDeck content instead of covering the TUI composer');
 assert.ok(
   style.includes('height: var(--passideck-viewport-height, 100dvh)') &&

@@ -4571,10 +4571,10 @@ function desktopMenuUsesOverflow(menu) {
 let desktopChromeFrame = 0;
 const desktopMenuTimerCancels = new WeakMap();
 const DESKTOP_OVERFLOW_ORDER = [
+  'desktop-overflow-windows',
+  'desktop-overflow-launch',
   'desktop-overflow-usage',
   'desktop-overflow-monitor',
-  'desktop-overflow-launch',
-  'desktop-overflow-windows',
   'desktop-overflow-desktops'
 ];
 function measuredDesktopChromeWidth() {
