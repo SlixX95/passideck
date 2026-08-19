@@ -169,6 +169,13 @@ assert.ok(
 );
 const desktopTopbarBlock = cssBlock(style, '\n.topbar {');
 assert.ok(desktopTopbarBlock.includes('position: relative') && desktopTopbarBlock.includes('z-index: var(--z-actions)'), 'desktop dropdowns must paint above the workspace');
+const expandedWindowButtonBlock = cssBlock(style, 'body.desktop-app:not(.desktop-overflow-windows) #sessionSwitcher .switcher-btn');
+const expandedWindowTitleBlock = cssBlock(style, 'body.desktop-app:not(.desktop-overflow-windows) #sessionSwitcher .switcher-title');
+assert.ok(
+  expandedWindowButtonBlock.includes('width: 100%') && expandedWindowButtonBlock.includes('min-width: 0') &&
+  expandedWindowTitleBlock.includes('display: block') && expandedWindowTitleBlock.includes('min-width: 0'),
+  'expanded desktop window buttons must fill their growing wrappers without intrinsic-title overflow'
+);
 assert.ok(
   style.includes('body:not(.desktop-app) .compact-menu > .compact-menu-toggle') &&
   !style.includes('body:not(.desktop-app) .compact-menu-toggle {'),
@@ -409,7 +416,7 @@ assert.ok(
 );
 const replayNormalizer = app.slice(app.indexOf('function normalizeReplayText'), app.indexOf('function sanitizeTerminalOutput'));
 assert.ok(!replayNormalizer.includes(".replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '')"), 'tmux replay normalization must not strip SGR with every CSI control');
-assert.ok(html.includes('app.js?v=20260819-adaptive-groups-v2') && html.includes('style.css?v=20260819-adaptive-groups-v2'), 'client cache keys must activate adaptive grouped chrome');
+assert.ok(html.includes('app.js?v=20260819-adaptive-groups-v3') && html.includes('style.css?v=20260819-adaptive-groups-v3'), 'client cache keys must activate adaptive grouped chrome');
 assert.ok(html.includes('interactive-widget=resizes-content'), 'mobile soft keyboards must resize PassiDeck content instead of covering the TUI composer');
 assert.ok(
   style.includes('height: var(--passideck-viewport-height, 100dvh)') &&

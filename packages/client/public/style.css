@@ -1030,6 +1030,8 @@ body.desktop-app.desktop-overflow-windows #windowMenu.open .switcher-btn { width
 body.desktop-app.desktop-overflow-monitor #monitorMenu.open > .adaptive-menu-list,
 body.desktop-app.desktop-overflow-usage #usageMenu.open > .adaptive-menu-list { flex-wrap: wrap; width: max-content; max-width: min(420px, calc(100vw - 12px)); }
 body.desktop-app:not(.desktop-overflow-windows) #sessionSwitcher .switcher-item { flex: 1 1 90px; }
+body.desktop-app:not(.desktop-overflow-windows) #sessionSwitcher .switcher-btn { width: 100%; min-width: 0; }
+body.desktop-app:not(.desktop-overflow-windows) #sessionSwitcher .switcher-title { display: block; min-width: 0; }
 body.desktop-app .adaptive-menu.open .topbar-ql-btn { width: 100%; max-width: none; justify-content: flex-start; }
 
 /* Premium compact chrome pass — dense terminal-first polish, no extra layout height. */
