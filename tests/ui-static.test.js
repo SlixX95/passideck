@@ -175,17 +175,47 @@ assert.ok(
   desktopOverflowOrder.indexOf("'desktop-overflow-monitor'") < desktopOverflowOrder.indexOf("'desktop-overflow-desktops'"),
   'desktop chrome must collapse windows before launch, Usage, Monitor, and desktops'
 );
+assert.ok(
+  app.includes('const DESKTOP_OVERFLOW_HYSTERESIS_PX = 24') &&
+  app.includes('desiredCount < previousCount') &&
+  app.includes('strip.clientWidth - DESKTOP_OVERFLOW_HYSTERESIS_PX'),
+  'desktop overflow must use expansion hysteresis so live metric updates cannot flap neighboring groups'
+);
 const desktopTopbarBlock = cssBlock(style, '\n.topbar {');
 assert.ok(desktopTopbarBlock.includes('position: relative') && desktopTopbarBlock.includes('z-index: var(--z-actions)'), 'desktop dropdowns must paint above the workspace');
+const measuringWindowButtonBlock = cssBlock(style, 'body.desktop-app.desktop-chrome-measuring #sessionSwitcher .switcher-btn');
+assert.ok(
+  measuringWindowButtonBlock.includes('width: 52px') && measuringWindowButtonBlock.includes('max-width: 52px'),
+  'desktop chrome measurement must use the real minimum window-tab width before collapsing the whole group'
+);
+assert.ok(
+  style.lastIndexOf('body.desktop-app.desktop-chrome-measuring #sessionSwitcher .switcher-btn') >
+    style.lastIndexOf('body.desktop-app:not(.desktop-overflow-windows) #sessionSwitcher .switcher-btn'),
+  'minimum-width measurement rules must win the cascade over normal expanded window-tab sizing'
+);
 const expandedWindowItemBlock = cssBlock(style, 'body.desktop-app:not(.desktop-overflow-windows) #sessionSwitcher .switcher-item');
 const expandedWindowButtonBlock = cssBlock(style, 'body.desktop-app:not(.desktop-overflow-windows) #sessionSwitcher .switcher-btn');
 const expandedWindowTitleBlock = cssBlock(style, 'body.desktop-app:not(.desktop-overflow-windows) #sessionSwitcher .switcher-title');
 assert.ok(
-  expandedWindowItemBlock.includes('flex: 0 1 auto') && expandedWindowItemBlock.includes('max-width: 160px') &&
-  expandedWindowButtonBlock.includes('width: auto') && expandedWindowButtonBlock.includes('max-width: 160px') &&
+  expandedWindowItemBlock.includes('flex: 0 1 auto') && expandedWindowItemBlock.includes('min-width: 52px') && expandedWindowItemBlock.includes('max-width: 160px') &&
+  expandedWindowButtonBlock.includes('width: auto') && expandedWindowButtonBlock.includes('min-width: 52px') && expandedWindowButtonBlock.includes('max-width: 160px') &&
   expandedWindowTitleBlock.includes('display: block') && expandedWindowTitleBlock.includes('min-width: 0'),
   'expanded desktop window buttons must remain compact and bound long titles'
 );
+const openWindowItemBlock = cssBlock(style, 'body.desktop-app.desktop-overflow-windows #windowMenu.open .switcher-item');
+assert.ok(
+  style.includes('body.desktop-app.desktop-overflow-windows #windowMenu.open > .adaptive-menu-list { flex-direction: column; align-items: stretch; width: min(300px, calc(100vw - 12px)); }') &&
+  openWindowItemBlock.includes('flex: 0 0 auto'),
+  'open window dropdown must stay compact without flex-grown vertical gaps'
+);
+assert.ok(
+  style.includes('body.desktop-app.desktop-overflow-monitor #monitorMenu.open > .adaptive-menu-list { height: auto; }'),
+  'open monitor dropdown must override the inline monitor height instead of showing a needless scrollbar'
+);
+for (const control of ['compactLaunchList', 'desktopMenuList', 'sessionSwitcher', 'systemMonitor', 'usageMenuList']) {
+  const toggle = html.match(new RegExp(`<button[^>]+aria-controls="${control}"[^>]*>`))?.[0] || '';
+  assert.ok(toggle && !toggle.includes('data-tooltip='), `${control} adaptive toggle must not overlay its open menu with a redundant hover tooltip`);
+}
 assert.ok(
   style.includes('body:not(.desktop-app) .compact-menu > .compact-menu-toggle') &&
   !style.includes('body:not(.desktop-app) .compact-menu-toggle {'),
@@ -426,7 +456,7 @@ assert.ok(
 );
 const replayNormalizer = app.slice(app.indexOf('function normalizeReplayText'), app.indexOf('function sanitizeTerminalOutput'));
 assert.ok(!replayNormalizer.includes(".replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '')"), 'tmux replay normalization must not strip SGR with every CSI control');
-assert.ok(html.includes('app.js?v=20260819-adaptive-groups-v4') && html.includes('style.css?v=20260819-adaptive-groups-v4'), 'client cache keys must activate adaptive grouped chrome');
+assert.ok(html.includes('app.js?v=20260819-adaptive-groups-v5') && html.includes('style.css?v=20260819-adaptive-groups-v5'), 'client cache keys must activate adaptive grouped chrome');
 assert.ok(html.includes('interactive-widget=resizes-content'), 'mobile soft keyboards must resize PassiDeck content instead of covering the TUI composer');
 assert.ok(
   style.includes('height: var(--passideck-viewport-height, 100dvh)') &&

@@ -4577,6 +4577,7 @@ const DESKTOP_OVERFLOW_ORDER = [
   'desktop-overflow-monitor',
   'desktop-overflow-desktops'
 ];
+const DESKTOP_OVERFLOW_HYSTERESIS_PX = 24;
 function measuredDesktopChromeWidth() {
   const body = document.body;
   const strip = document.querySelector('.command-strip');
@@ -4600,15 +4601,25 @@ function syncDesktopAppChrome() {
   }
   const strip = document.querySelector('.command-strip');
   if (!strip || !strip.clientWidth) return;
+  const previousOverflow = DESKTOP_OVERFLOW_ORDER.filter(name => body.classList.contains(name));
   body.classList.remove(...DESKTOP_OVERFLOW_ORDER);
   const collapsible = DESKTOP_OVERFLOW_ORDER.filter(name => {
     const menu = document.querySelector(`[data-overflow-class="${name}"]`);
     const content = menu?.querySelector(':scope > .adaptive-menu-list, :scope > .launch-strip');
     return content && !content.hidden && [...content.children].some(child => !child.hidden && getComputedStyle(child).display !== 'none');
   });
+  const previous = previousOverflow.filter(name => collapsible.includes(name));
+  const desired = [];
   for (const name of collapsible) {
     if (measuredDesktopChromeWidth() <= strip.clientWidth) break;
     body.classList.add(name);
+    desired.push(name);
+  }
+  const desiredCount = desired.length;
+  const previousCount = previous.length;
+  if (desiredCount < previousCount && measuredDesktopChromeWidth() > strip.clientWidth - DESKTOP_OVERFLOW_HYSTERESIS_PX) {
+    body.classList.remove(...DESKTOP_OVERFLOW_ORDER);
+    body.classList.add(...previous);
   }
   document.querySelectorAll('.compact-menu, .adaptive-menu').forEach(menu => {
     if (desktopMenuUsesOverflow(menu)) return;
