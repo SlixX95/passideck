@@ -129,6 +129,8 @@ const TERM_OUTPUT_BUFFER_MAX_CHARS = 1024 * 1024;
 
 const TOOLTIP_MARGIN = 8;
 const TOOLTIP_DELAY_MS = 300;
+const DESKTOP_MENU_HOVER_DELAY_MS = 180;
+const DESKTOP_MENU_LEAVE_DELAY_MS = 140;
 let tooltipDelayTimer = null;
 let tooltipDelayTarget = null;
 
@@ -451,6 +453,7 @@ function resizeWindowsForDesktop(from, to) {
 }
 
 function isCompactViewport() {
+  if (window.passideckDesktop?.isDesktop) return false;
   const { w, h } = desktopSize();
   const width = Math.min(w, window.innerWidth || w);
   const height = window.innerHeight || h;
@@ -1600,6 +1603,7 @@ function setChromeHidden(hidden, opts = {}) {
   document.body.classList.toggle('chrome-hidden', Boolean(hidden));
   if (opts.resize !== false && wasHidden !== Boolean(hidden)) resizeWindowsForDesktop(before, desktopSize());
   scheduleTerminalFit();
+  scheduleDesktopAppChromeSync();
   if (opts.persist !== false) saveUiState();
 }
 
@@ -4558,6 +4562,45 @@ function setCompactMenuOpen(menu, open) {
   menu.classList.toggle('open', open);
   menu.querySelector(':scope > .compact-menu-toggle')?.setAttribute('aria-expanded', String(open));
 }
+function desktopMenuUsesOverflow(menu) {
+  if (!document.body.classList.contains('desktop-app')) return false;
+  return menu.id === 'compactActionsMenu'
+    ? document.body.classList.contains('desktop-overflow-actions')
+    : document.body.classList.contains('desktop-overflow-launch');
+}
+let desktopChromeFrame = 0;
+const desktopMenuTimerCancels = new WeakMap();
+function syncDesktopAppChrome() {
+  const body = document.body;
+  const desktop = window.passideckDesktop?.isDesktop === true;
+  body.classList.toggle('desktop-app', desktop);
+  if (!desktop) {
+    body.classList.remove('desktop-overflow-actions', 'desktop-overflow-launch');
+    return;
+  }
+  const strip = document.querySelector('.command-strip');
+  const center = document.querySelector('.command-center');
+  if (!strip || !center || !strip.clientWidth) return;
+  body.classList.remove('desktop-overflow-actions', 'desktop-overflow-launch');
+  const actionReserve = Math.min(420, Math.max(300, strip.clientWidth * .24));
+  const hideActions = center.getBoundingClientRect().width < actionReserve;
+  body.classList.toggle('desktop-overflow-actions', hideActions);
+  const launchReserve = Math.min(300, Math.max(220, strip.clientWidth * .22));
+  const hideLaunch = center.getBoundingClientRect().width < launchReserve;
+  body.classList.toggle('desktop-overflow-launch', hideLaunch);
+  document.querySelectorAll('.compact-menu').forEach(menu => {
+    if (desktopMenuUsesOverflow(menu)) return;
+    desktopMenuTimerCancels.get(menu)?.();
+    if (menu.classList.contains('open')) setCompactMenuOpen(menu, false);
+  });
+}
+function scheduleDesktopAppChromeSync() {
+  cancelAnimationFrame(desktopChromeFrame);
+  desktopChromeFrame = requestAnimationFrame(() => {
+    desktopChromeFrame = 0;
+    syncDesktopAppChrome();
+  });
+}
 document.addEventListener('pointerdown', event => {
   const panel = document.getElementById('settingsPanel');
   const toggle = document.getElementById('settingsToggle');
@@ -4573,6 +4616,44 @@ document.querySelectorAll('.compact-menu-toggle').forEach(toggle => toggle.oncli
 document.querySelectorAll('.compact-menu').forEach(menu => menu.addEventListener('click', event => {
   if (event.target.closest('button:not(.compact-menu-toggle)')) setCompactMenuOpen(menu, false);
 }));
+document.querySelectorAll('.compact-menu').forEach(menu => {
+  let openTimer = 0;
+  let closeTimer = 0;
+  const cancelTimers = () => {
+    clearTimeout(openTimer);
+    clearTimeout(closeTimer);
+    openTimer = 0;
+    closeTimer = 0;
+  };
+  desktopMenuTimerCancels.set(menu, cancelTimers);
+  menu.addEventListener('pointerenter', () => {
+    if (!desktopMenuUsesOverflow(menu)) return;
+    clearTimeout(closeTimer);
+    openTimer = setTimeout(() => {
+      openTimer = 0;
+      if (!desktopMenuUsesOverflow(menu)) return;
+      setCompactMenuOpen(menu, true);
+    }, DESKTOP_MENU_HOVER_DELAY_MS);
+  });
+  menu.addEventListener('pointerleave', () => {
+    if (!desktopMenuUsesOverflow(menu)) return;
+    clearTimeout(openTimer);
+    closeTimer = setTimeout(() => setCompactMenuOpen(menu, false), DESKTOP_MENU_LEAVE_DELAY_MS);
+  });
+  menu.addEventListener('focusout', event => {
+    if (!desktopMenuUsesOverflow(menu) || menu.contains(event.relatedTarget)) return;
+    closeTimer = setTimeout(() => setCompactMenuOpen(menu, false), DESKTOP_MENU_LEAVE_DELAY_MS);
+  });
+});
+window.addEventListener('resize', scheduleDesktopAppChromeSync);
+new MutationObserver(scheduleDesktopAppChromeSync).observe(document.getElementById('compactActionsList'), {
+  subtree: true,
+  childList: true,
+  characterData: true,
+  attributes: true,
+  attributeFilter: ['hidden']
+});
+scheduleDesktopAppChromeSync();
 document.getElementById('uploadFileBtn').onclick = () => document.getElementById('fileInput').click();
 document.getElementById('fileInput').onchange = event => {
   void uploadFiles([...event.target.files]);

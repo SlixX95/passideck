@@ -540,15 +540,15 @@ body.window-resizing { cursor: nwse-resize; user-select: none; }
 .window-resize-handle.edge-nw { top: 0; left: 0; }
 .window-resize-handle:hover { background-color: color-mix(in srgb, var(--tg-accent) 12%, transparent); }
 @media (pointer: coarse), (max-width: 900px) {
-  .term-panel.free-window { min-width: min(300px, calc(100dvw - 8px)); min-height: 220px; }
-  .term-panel.free-window .term-header { height: 32px; padding-right: 104px; }
-  .term-title[contenteditable="true"] { font-size: 12px; }
-  .term-actions { height: 32px; width: 102px; }
-  .term-actions button { min-width: 32px; height: 32px; }
-  .window-resize-handle.edge-ne, .window-resize-handle.edge-se, .window-resize-handle.edge-sw, .window-resize-handle.edge-nw { width: 34px; height: 34px; }
-  .window-resize-handle.edge-n, .window-resize-handle.edge-s { height: 12px; }
-  .window-resize-handle.edge-e, .window-resize-handle.edge-w { width: 12px; }
-  .layout-assist { max-width: min(92dvw, 360px); }
+  body:not(.desktop-app) .term-panel.free-window { min-width: min(300px, calc(100dvw - 8px)); min-height: 220px; }
+  body:not(.desktop-app) .term-panel.free-window .term-header { height: 32px; padding-right: 104px; }
+  body:not(.desktop-app) .term-title[contenteditable="true"] { font-size: 12px; }
+  body:not(.desktop-app) .term-actions { height: 32px; width: 102px; }
+  body:not(.desktop-app) .term-actions button { min-width: 32px; height: 32px; }
+  body:not(.desktop-app) .window-resize-handle.edge-ne, body:not(.desktop-app) .window-resize-handle.edge-se, body:not(.desktop-app) .window-resize-handle.edge-sw, body:not(.desktop-app) .window-resize-handle.edge-nw { width: 34px; height: 34px; }
+  body:not(.desktop-app) .window-resize-handle.edge-n, body:not(.desktop-app) .window-resize-handle.edge-s { height: 12px; }
+  body:not(.desktop-app) .window-resize-handle.edge-e, body:not(.desktop-app) .window-resize-handle.edge-w { width: 12px; }
+  body:not(.desktop-app) .layout-assist { max-width: min(92dvw, 360px); }
 }
 
 .term-panel.exited { opacity: .55; }
@@ -861,11 +861,11 @@ body.chrome-hidden .settings-panel { display: none !important; }
 .toast[data-type="error"] { border-color: var(--tg-red); color: var(--tg-red); }
 .toast[hidden] { display: none !important; }
 button:focus-visible, select:focus-visible, input:focus-visible { outline: 1px solid var(--tg-accent); outline-offset: 1px; }
-@media (max-width: 1180px) { .chrome-btn { padding: 0 4px; max-width: 68px; overflow: hidden; text-overflow: ellipsis; } }
+@media (max-width: 1180px) { body:not(.desktop-app) .chrome-btn { padding: 0 4px; max-width: 68px; overflow: hidden; text-overflow: ellipsis; } }
 
 /* Compact touch chrome: phones, Fold-class displays, and short landscape viewports. */
 @media (max-width: 1024px), (max-height: 419px), (pointer: coarse) and (max-width: 1200px) {
-  .topbar {
+  body:not(.desktop-app) .topbar {
     position: relative;
     z-index: var(--z-actions);
     flex: 0 0 calc(88px + env(safe-area-inset-top));
@@ -873,7 +873,7 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 1px s
     padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
     overflow: visible;
   }
-  .command-strip {
+  body:not(.desktop-app) .command-strip {
     height: 88px;
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -883,12 +883,12 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 1px s
     padding: 4px;
     overflow: visible;
   }
-  .command-zone { height: 40px; gap: 4px; }
-  .command-center { grid-column: 1 / -1; grid-row: 1; overflow-x: auto; }
-  .command-left { grid-column: 1; grid-row: 2; overflow: visible; }
-  .command-right { grid-column: 2; grid-row: 2; justify-content: flex-start; overflow: visible; max-width: none; }
-  .compact-menu { display: block; position: relative; width: 100%; height: 40px; }
-  .compact-menu-toggle {
+  body:not(.desktop-app) .command-zone { height: 40px; gap: 4px; }
+  body:not(.desktop-app) .command-center { grid-column: 1 / -1; grid-row: 1; overflow-x: auto; }
+  body:not(.desktop-app) .command-left { grid-column: 1; grid-row: 2; overflow: visible; }
+  body:not(.desktop-app) .command-right { grid-column: 2; grid-row: 2; justify-content: flex-start; overflow: visible; max-width: none; }
+  body:not(.desktop-app) .compact-menu { display: block; position: relative; width: 100%; height: 40px; }
+  body:not(.desktop-app) .compact-menu-toggle {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -903,8 +903,8 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 1px s
     cursor: pointer;
     list-style: none;
   }
-  .compact-menu > .launch-strip, .compact-menu > .compact-menu-list { display: none; }
-  .compact-menu.open > .launch-strip, .compact-menu.open > .compact-menu-list {
+  body:not(.desktop-app) .compact-menu > .launch-strip, body:not(.desktop-app) .compact-menu > .compact-menu-list { display: none; }
+  body:not(.desktop-app) .compact-menu.open > .launch-strip, body:not(.desktop-app) .compact-menu.open > .compact-menu-list {
     position: absolute;
     top: 44px;
     z-index: var(--z-actions);
@@ -920,27 +920,27 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 1px s
     background: var(--tg-surface);
     box-shadow: 0 18px 40px rgba(0,0,0,.7);
   }
-  #compactLaunchMenu > .launch-strip { left: 0; }
-  #compactActionsMenu > .compact-menu-list { right: 0; }
-  .compact-menu.open .topbar-ql-btn, .compact-menu.open .chrome-btn { width: 100%; min-width: 0; max-width: none; min-height: 44px; padding: 0 12px; justify-content: flex-start; }
-  .launch-strip { height: 40px; }
-  .topbar-ql-btn, .chrome-btn, .switcher-btn { height: 40px; min-height: 40px; font-size: 11px; }
-  .topbar-ql-btn, .chrome-btn { min-width: 40px; padding: 0 10px; }
-  .command-divider { display: none !important; }
-  .desktop-switcher { flex: 0 1 max-content; max-width: min(38%, 152px); }
-  .desktop-tab, .desktop-add { flex-basis: 40px; width: 40px; min-width: 40px; max-width: 40px; height: 40px; font-size: 12px; }
-  .desktop-divider { height: 30px; margin: 0 2px; }
-  .switcher-btn { min-width: 96px; max-width: 150px; padding-right: 46px; }
-  .switcher-close { right: 0; width: 40px; height: 40px; opacity: 1; pointer-events: auto; }
-  .grid-container[class*="layout-"] { padding-bottom: env(safe-area-inset-bottom); overflow: hidden; }
-  .free-window:not(.layout-hidden) { left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important; min-width: 0; min-height: 0; }
-  .term-panel.free-window .term-header { height: 44px; padding: 0 88px 0 6px; cursor: default; touch-action: manipulation; }
-  .desktop-slot-suggestions, .shared-resize-handles, .window-resize-handle, .layout-assist, .term-actions .arrange { display: none !important; }
-  .connection-dot { flex-basis: 10px; width: 10px; height: 10px; }
-  .term-title[contenteditable="true"] { font-size: 13px; }
-  .term-actions { width: 88px; height: 44px; }
-  .term-actions button { min-width: 44px; width: 44px; height: 44px; font-size: 20px; }
-  .settings-panel {
+  body:not(.desktop-app) #compactLaunchMenu > .launch-strip { left: 0; }
+  body:not(.desktop-app) #compactActionsMenu > .compact-menu-list { right: 0; }
+  body:not(.desktop-app) .compact-menu.open .topbar-ql-btn, body:not(.desktop-app) .compact-menu.open .chrome-btn { width: 100%; min-width: 0; max-width: none; min-height: 44px; padding: 0 12px; justify-content: flex-start; }
+  body:not(.desktop-app) .launch-strip { height: 40px; }
+  body:not(.desktop-app) .topbar-ql-btn, body:not(.desktop-app) .chrome-btn, body:not(.desktop-app) .switcher-btn { height: 40px; min-height: 40px; font-size: 11px; }
+  body:not(.desktop-app) .topbar-ql-btn, body:not(.desktop-app) .chrome-btn { min-width: 40px; padding: 0 10px; }
+  body:not(.desktop-app) .command-divider { display: none !important; }
+  body:not(.desktop-app) .desktop-switcher { flex: 0 1 max-content; max-width: min(38%, 152px); }
+  body:not(.desktop-app) .desktop-tab, body:not(.desktop-app) .desktop-add { flex-basis: 40px; width: 40px; min-width: 40px; max-width: 40px; height: 40px; font-size: 12px; }
+  body:not(.desktop-app) .desktop-divider { height: 30px; margin: 0 2px; }
+  body:not(.desktop-app) .switcher-btn { min-width: 96px; max-width: 150px; padding-right: 46px; }
+  body:not(.desktop-app) .switcher-close { right: 0; width: 40px; height: 40px; opacity: 1; pointer-events: auto; }
+  body:not(.desktop-app) .grid-container[class*="layout-"] { padding-bottom: env(safe-area-inset-bottom); overflow: hidden; }
+  body:not(.desktop-app) .free-window:not(.layout-hidden) { left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important; min-width: 0; min-height: 0; }
+  body:not(.desktop-app) .term-panel.free-window .term-header { height: 44px; padding: 0 88px 0 6px; cursor: default; touch-action: manipulation; }
+  body:not(.desktop-app) .desktop-slot-suggestions, body:not(.desktop-app) .shared-resize-handles, body:not(.desktop-app) .window-resize-handle, body:not(.desktop-app) .layout-assist, body:not(.desktop-app) .term-actions .arrange { display: none !important; }
+  body:not(.desktop-app) .connection-dot { flex-basis: 10px; width: 10px; height: 10px; }
+  body:not(.desktop-app) .term-title[contenteditable="true"] { font-size: 13px; }
+  body:not(.desktop-app) .term-actions { width: 88px; height: 44px; }
+  body:not(.desktop-app) .term-actions button { min-width: 44px; width: 44px; height: 44px; font-size: 20px; }
+  body:not(.desktop-app) .settings-panel {
     inset: 0;
     width: 100%;
     max-width: none;
@@ -949,16 +949,58 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 1px s
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
     border-width: 0;
   }
-  .settings-header { min-height: 56px; padding: 6px 8px; }
-  .settings-close { width: 44px; height: 44px; font-size: 22px; }
-  .settings-row, .settings-toggle { min-height: 56px; }
-  .settings-panel select, .settings-action { min-height: 44px; }
-  .settings-toggle input { width: 22px; height: 22px; }
-  .modal-box { width: calc(100vw - 24px); min-width: 0; max-width: 440px; padding: 18px; }
-  .modal-btn { min-width: 96px; min-height: 44px; }
-  .toast { left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); max-width: none; }
-  .chrome-peek { right: max(2px, env(safe-area-inset-right)); min-width: 44px; }
+  body:not(.desktop-app) .settings-header { min-height: 56px; padding: 6px 8px; }
+  body:not(.desktop-app) .settings-close { width: 44px; height: 44px; font-size: 22px; }
+  body:not(.desktop-app) .settings-row, body:not(.desktop-app) .settings-toggle { min-height: 56px; }
+  body:not(.desktop-app) .settings-panel select, body:not(.desktop-app) .settings-action { min-height: 44px; }
+  body:not(.desktop-app) .settings-toggle input { width: 22px; height: 22px; }
+  body:not(.desktop-app) .modal-box { width: calc(100vw - 24px); min-width: 0; max-width: 440px; padding: 18px; }
+  body:not(.desktop-app) .modal-btn { min-width: 96px; min-height: 44px; }
+  body:not(.desktop-app) .toast { left: 8px; right: 8px; bottom: calc(8px + env(safe-area-inset-bottom)); max-width: none; }
+  body:not(.desktop-app) .chrome-peek { right: max(2px, env(safe-area-inset-right)); min-width: 44px; }
 }
+
+body.desktop-app.desktop-overflow-actions #compactActionsMenu,
+body.desktop-app.desktop-overflow-launch #compactLaunchMenu { display: block; position: relative; height: 23px; }
+body.desktop-app.desktop-overflow-actions #compactActionsMenu > .compact-menu-toggle,
+body.desktop-app.desktop-overflow-launch #compactLaunchMenu > .compact-menu-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 21px;
+  min-width: 31px;
+  padding: 0 7px;
+  border: 1px solid var(--tg-border);
+  background: linear-gradient(180deg, var(--tg-surface-hover), #050909);
+  color: var(--tg-accent);
+  font: 10px/1 var(--tg-mono);
+  cursor: pointer;
+}
+body.desktop-app.desktop-overflow-actions #compactActionsMenu > .compact-menu-list,
+body.desktop-app.desktop-overflow-launch #compactLaunchMenu > .launch-strip { display: none; }
+body.desktop-app.desktop-overflow-actions #compactActionsMenu.open > .compact-menu-list,
+body.desktop-app.desktop-overflow-launch #compactLaunchMenu.open > .launch-strip {
+  position: absolute;
+  top: 25px;
+  z-index: var(--z-actions);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  width: min(340px, calc(100vw - 12px));
+  max-height: calc(100dvh - 40px);
+  padding: 6px;
+  overflow-y: auto;
+  border: 1px solid var(--tg-edge-hot);
+  background: var(--tg-surface);
+  box-shadow: 0 18px 42px rgba(0,0,0,.74), 0 0 22px var(--tg-glow-soft);
+}
+body.desktop-app.desktop-overflow-actions #compactActionsMenu.open > .compact-menu-list { right: 0; }
+body.desktop-app.desktop-overflow-launch #compactLaunchMenu.open > .launch-strip { left: 0; width: min(220px, calc(100vw - 12px)); }
+body.desktop-app .compact-menu.open .topbar-ql-btn,
+body.desktop-app .compact-menu.open .chrome-btn { width: 100%; max-width: none; justify-content: flex-start; }
+body.desktop-app.desktop-overflow-actions #compactActionsMenu.open :is(.backend-latency, .system-monitor, .codex-limits, .codex-limit) { width: 100%; }
+body.desktop-app.desktop-overflow-actions #compactActionsMenu.open :is(.system-monitor, .codex-limits) { height: auto; flex-wrap: wrap; }
 
 /* Premium compact chrome pass — dense terminal-first polish, no extra layout height. */
 :root {

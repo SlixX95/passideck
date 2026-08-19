@@ -146,6 +146,21 @@ assert.ok(
   style.includes('@media (max-width: 1024px), (max-height: 419px), (pointer: coarse) and (max-width: 1200px)'),
   'Fold-class touch displays must use the compact one-pane chrome with dropdown menus'
 );
+assert.ok(
+  html.includes("window.passideckDesktop?.isDesktop") && html.includes("document.body.classList.add('desktop-app')") &&
+  app.includes("if (window.passideckDesktop?.isDesktop) return false") &&
+  app.includes('function syncDesktopAppChrome()') && app.includes("classList.toggle('desktop-overflow-actions'") &&
+  app.includes("classList.toggle('desktop-overflow-launch'") && app.includes('DESKTOP_MENU_HOVER_DELAY_MS') &&
+  app.includes('scheduleDesktopAppChromeSync();\n  if (opts.persist !== false) saveUiState();') &&
+  app.includes('desktopMenuTimerCancels.get(menu)?.();') &&
+  app.includes("if (!desktopMenuUsesOverflow(menu)) return;\n      setCompactMenuOpen(menu, true);") &&
+  !app.includes("menu.addEventListener('focusin'") &&
+  app.includes("document.querySelectorAll('.compact-menu-toggle').forEach(toggle => toggle.onclick") &&
+  style.includes('body.desktop-app.desktop-overflow-actions #compactActionsMenu') &&
+  style.includes('body.desktop-app.desktop-overflow-launch #compactLaunchMenu') &&
+  style.includes("body:not(.desktop-app) .compact-menu.open > .compact-menu-list"),
+  'Electron must retain desktop chrome and progressively disclose crowded controls through hoverable overflow menus'
+);
 const firefoxScrollbarBlock = cssBlock(style, '@supports not selector(::-webkit-scrollbar)');
 assert.ok(
   (style.match(/scrollbar-width: thin;/g) || []).length === 1 &&
@@ -366,7 +381,7 @@ assert.ok(
 );
 const replayNormalizer = app.slice(app.indexOf('function normalizeReplayText'), app.indexOf('function sanitizeTerminalOutput'));
 assert.ok(!replayNormalizer.includes(".replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '')"), 'tmux replay normalization must not strip SGR with every CSI control');
-assert.ok(html.includes('app.js?v=20260817-subagent-working-v1') && html.includes('style.css?v=20260817-subagent-working-v1'), 'client cache keys must activate delegated subagent working state');
+assert.ok(html.includes('app.js?v=20260819-desktop-overflow-v1') && html.includes('style.css?v=20260819-desktop-overflow-v1'), 'client cache keys must activate adaptive desktop overflow chrome');
 assert.ok(html.includes('interactive-widget=resizes-content'), 'mobile soft keyboards must resize PassiDeck content instead of covering the TUI composer');
 assert.ok(
   style.includes('height: var(--passideck-viewport-height, 100dvh)') &&
