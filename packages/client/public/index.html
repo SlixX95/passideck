@@ -7,15 +7,15 @@
   <title>PassiDeck</title>
   <script>document.title = location.port === '8792' ? 'PassiDeck Dev' : 'PassiDeck';</script>
   <link rel="stylesheet" href="vendor/xterm.css">
-  <link rel="stylesheet" href="style.css?v=20260819-desktop-overflow-v1">
+  <link rel="stylesheet" href="style.css?v=20260819-adaptive-groups-v2">
 </head>
 <body data-theme="green">
   <script>if (window.passideckDesktop?.isDesktop) document.body.classList.add('desktop-app');</script>
   <header class="topbar">
     <div class="command-strip">
       <div class="command-zone command-left">
-        <div id="compactLaunchMenu" class="compact-menu">
-          <button class="compact-menu-toggle" type="button" aria-label="New terminal" aria-expanded="false" aria-controls="compactLaunchList">+ new</button>
+        <div id="compactLaunchMenu" class="compact-menu adaptive-menu" data-overflow-class="desktop-overflow-launch">
+          <button class="compact-menu-toggle" type="button" aria-label="New terminal" data-tooltip="New terminal" aria-expanded="false" aria-controls="compactLaunchList">+</button>
           <nav id="compactLaunchList" class="launch-strip" aria-label="Quick launch">
             <button class="topbar-ql-btn" data-command="/bin/bash" data-tooltip="Open shell" aria-label="Open shell">+ shell</button>
             <button class="topbar-ql-btn" data-command="hermes" data-tooltip="Open Hermes CLI" aria-label="Open Hermes CLI">+ hermes</button>
@@ -26,32 +26,47 @@
       </div>
 
       <div class="command-zone command-center" aria-label="Desktop and window switcher">
-        <nav class="desktop-switcher" id="desktopSwitcher" aria-label="Desktops" role="tablist"></nav>
-        <button id="addDesktop" class="desktop-add" type="button" data-tooltip="Add desktop" aria-label="Add desktop">+</button>
+        <div id="desktopMenu" class="adaptive-menu" data-overflow-class="desktop-overflow-desktops">
+          <button class="compact-menu-toggle" type="button" aria-label="Desktops" data-tooltip="Desktops" aria-expanded="false" aria-controls="desktopMenuList">▦</button>
+          <div id="desktopMenuList" class="adaptive-menu-list desktop-menu-list">
+            <nav class="desktop-switcher" id="desktopSwitcher" aria-label="Desktops" role="tablist"></nav>
+            <button id="addDesktop" class="desktop-add" type="button" data-tooltip="Add desktop" aria-label="Add desktop">+</button>
+          </div>
+        </div>
         <span class="desktop-divider" aria-hidden="true"></span>
-        <nav class="switcher-grid" id="sessionSwitcher" aria-label="Open and minimized windows"></nav>
+        <div id="windowMenu" class="adaptive-menu window-menu" data-overflow-class="desktop-overflow-windows">
+          <button class="compact-menu-toggle" type="button" aria-label="Open windows" data-tooltip="Open windows" aria-expanded="false" aria-controls="sessionSwitcher">▤</button>
+          <nav class="switcher-grid adaptive-menu-list" id="sessionSwitcher" aria-label="Open and minimized windows"></nav>
+        </div>
       </div>
 
       <div class="command-zone command-right">
-        <div id="compactActionsMenu" class="compact-menu">
+        <div id="compactActionsMenu" class="compact-menu mobile-actions-menu">
           <button class="compact-menu-toggle" type="button" aria-label="More actions" data-tooltip="More actions" aria-expanded="false" aria-controls="compactActionsList">⋯</button>
           <div id="compactActionsList" class="compact-menu-list">
-            <span id="backendLatency" class="backend-latency" data-level="offline" data-tooltip="No active terminal" aria-label="No active terminal"><span>NET</span><b>-- ms</b></span>
-            <section id="systemMonitor" class="system-monitor" hidden aria-label="System monitor">
-              <span class="monitor-cell" data-metric="cpu"><span>CPU</span><b>0%</b></span>
-              <span class="monitor-cell" data-metric="ram"><span>RAM</span><b>0%</b></span>
-              <span class="monitor-cell" data-metric="disk" aria-label="Disk"><span>DSK</span><b>--%</b></span>
-            </section>
-            <section id="codexLimits" class="codex-limits" hidden aria-label="Codex weekly limits">
-              <span class="codex-limit" data-account-index="1" data-limit="secondary" data-tooltip="Codex weekly" aria-label="Codex weekly"><span class="codex-account-label">CX</span><span class="codex-limit-part" data-limit="secondary"><span>7d</span><b>--%</b></span></span>
-            </section>
-            <span id="ollamaUsage" class="codex-limit" hidden data-tooltip="Ollama Cloud usage unavailable" aria-label="Ollama Cloud usage unavailable"><span class="codex-account-label">OL</span><span class="codex-limit-part" data-window="session"><span>S</span><b>--%</b></span><span class="codex-limit-separator" aria-hidden="true">/</span><span class="codex-limit-part" data-window="weekly"><span>7d</span><b>--%</b></span></span>
-            <span id="nousBalance" class="codex-limit" hidden data-tooltip="Nous balance unavailable" aria-label="Nous balance unavailable"><span class="codex-account-label">NOUS</span><b>$--</b></span>
+            <div id="monitorMenu" class="adaptive-menu" data-overflow-class="desktop-overflow-monitor">
+              <button class="compact-menu-toggle" type="button" aria-label="Monitor" data-tooltip="Monitor" aria-expanded="false" aria-controls="systemMonitor">Monitor</button>
+              <section id="systemMonitor" class="system-monitor adaptive-menu-list" hidden aria-label="System monitor">
+                <span id="backendLatency" class="backend-latency" data-level="offline" data-tooltip="No active terminal" aria-label="No active terminal"><span>NET</span><b>-- ms</b></span>
+                <span class="monitor-cell" data-metric="cpu"><span>CPU</span><b>0%</b></span>
+                <span class="monitor-cell" data-metric="ram"><span>RAM</span><b>0%</b></span>
+                <span class="monitor-cell" data-metric="disk" aria-label="Disk"><span>DSK</span><b>--%</b></span>
+              </section>
+            </div>
+            <div id="usageMenu" class="adaptive-menu" data-overflow-class="desktop-overflow-usage">
+              <button class="compact-menu-toggle" type="button" aria-label="Usage" data-tooltip="Usage" aria-expanded="false" aria-controls="usageMenuList">Usage</button>
+              <div id="usageMenuList" class="usage-strip adaptive-menu-list">
+                <section id="codexLimits" class="codex-limits" hidden aria-label="Codex weekly limits">
+                  <span class="codex-limit" data-account-index="1" data-limit="secondary" data-tooltip="Codex weekly" aria-label="Codex weekly"><span class="codex-account-label">CX</span><span class="codex-limit-part" data-limit="secondary"><span>7d</span><b>--%</b></span></span>
+                </section>
+                <span id="ollamaUsage" class="codex-limit" hidden data-tooltip="Ollama Cloud usage unavailable" aria-label="Ollama Cloud usage unavailable"><span class="codex-account-label">OL</span><span class="codex-limit-part" data-window="session"><span>S</span><b>--%</b></span><span class="codex-limit-separator" aria-hidden="true">/</span><span class="codex-limit-part" data-window="weekly"><span>7d</span><b>--%</b></span></span>
+                <span id="nousBalance" class="codex-limit" hidden data-tooltip="Nous balance unavailable" aria-label="Nous balance unavailable"><span class="codex-account-label">NOUS</span><b>$--</b></span>
+              </div>
+            </div>
             <span class="command-divider"></span>
-            <button id="settingsToggle" class="chrome-btn" data-tooltip="Settings" aria-label="Settings" aria-expanded="false" aria-controls="settingsPanel">⚙ settings</button>
-            <button id="uploadFileBtn" class="chrome-btn" data-tooltip="Upload file into active terminal" aria-label="Upload file">⇧ upload</button>
-            <button id="clipboardImageBtn" class="chrome-btn" data-tooltip="Paste a clipboard image into active terminal" aria-label="Paste clipboard image">▧ image</button>
-            <button id="chromeToggle" class="chrome-btn" data-tooltip="Hide UI · Alt+0" aria-label="Hide UI">hide</button>
+            <button id="uploadFileBtn" class="chrome-btn icon-btn" data-tooltip="Upload file into active terminal" aria-label="Upload file">⇧</button>
+            <button id="chromeToggle" class="chrome-btn icon-btn" data-tooltip="Hide UI · Alt+0" aria-label="Hide UI">⌃</button>
+            <button id="settingsToggle" class="chrome-btn icon-btn" data-tooltip="Settings" aria-label="Settings" aria-expanded="false" aria-controls="settingsPanel">⚙</button>
           </div>
         </div>
         <input id="fileInput" type="file" hidden multiple>
@@ -175,7 +190,7 @@
           </select>
         </div>
         <label class="settings-toggle" for="systemMonitorToggle">
-          <span class="settings-copy"><span>Top monitor</span><small>CPU, memory, disk and limits</small></span>
+          <span class="settings-copy"><span>Top monitor</span><small>Network, CPU, memory and disk</small></span>
           <input id="systemMonitorToggle" type="checkbox">
         </label>
       </section>
@@ -223,6 +238,6 @@
   <script src="vendor/addon-serialize.js"></script>
   <script src="vendor/xterm-zerolag-input.js"></script>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script src="app.js?v=20260819-desktop-overflow-v1" defer></script>
+  <script src="app.js?v=20260819-adaptive-groups-v2" defer></script>
 </body>
 </html>

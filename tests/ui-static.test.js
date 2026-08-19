@@ -139,8 +139,8 @@ assert.ok(
   'dynamic session-title Retitle must be a PassiDeck setting with a session-bound activation boundary'
 );
 assert.ok(
-  html.includes('id="compactLaunchMenu"') && html.includes('id="compactActionsMenu"') &&
-  html.includes('class="compact-menu-toggle"') && html.includes('aria-controls="compactActionsList"') &&
+  ['compactLaunchMenu', 'desktopMenu', 'windowMenu', 'monitorMenu', 'usageMenu'].every(id => html.includes(`id="${id}"`)) &&
+  ['desktop-overflow-usage', 'desktop-overflow-monitor', 'desktop-overflow-launch', 'desktop-overflow-windows', 'desktop-overflow-desktops'].every(name => html.includes(`data-overflow-class="${name}"`)) &&
   app.includes('width <= 1024') && app.includes('window.innerHeight') && app.includes('height <= 419') &&
   app.includes("width <= 1200 && window.matchMedia?.('(pointer: coarse)').matches") &&
   style.includes('@media (max-width: 1024px), (max-height: 419px), (pointer: coarse) and (max-width: 1200px)'),
@@ -149,17 +149,45 @@ assert.ok(
 assert.ok(
   html.includes("window.passideckDesktop?.isDesktop") && html.includes("document.body.classList.add('desktop-app')") &&
   app.includes("if (window.passideckDesktop?.isDesktop) return false") &&
-  app.includes('function syncDesktopAppChrome()') && app.includes("classList.toggle('desktop-overflow-actions'") &&
-  app.includes("classList.toggle('desktop-overflow-launch'") && app.includes('DESKTOP_MENU_HOVER_DELAY_MS') &&
+  app.includes('function syncDesktopAppChrome()') && app.includes('const DESKTOP_OVERFLOW_ORDER = [') &&
+  app.includes("'desktop-overflow-usage'") && app.includes("'desktop-overflow-monitor'") &&
+  app.includes("'desktop-overflow-launch'") && app.includes("'desktop-overflow-windows'") && app.includes("'desktop-overflow-desktops'") &&
+  app.includes('function measuredDesktopChromeWidth()') && app.includes('DESKTOP_MENU_HOVER_DELAY_MS') &&
   app.includes('scheduleDesktopAppChromeSync();\n  if (opts.persist !== false) saveUiState();') &&
   app.includes('desktopMenuTimerCancels.get(menu)?.();') &&
   app.includes("if (!desktopMenuUsesOverflow(menu)) return;\n      setCompactMenuOpen(menu, true);") &&
   !app.includes("menu.addEventListener('focusin'") &&
+  app.includes("event.key !== 'Escape'") && app.includes("menu.querySelector(':scope > .compact-menu-toggle')?.focus()") &&
   app.includes("document.querySelectorAll('.compact-menu-toggle').forEach(toggle => toggle.onclick") &&
-  style.includes('body.desktop-app.desktop-overflow-actions #compactActionsMenu') &&
-  style.includes('body.desktop-app.desktop-overflow-launch #compactLaunchMenu') &&
+  style.includes('body.desktop-app.desktop-overflow-desktops #desktopMenu') &&
+  style.includes('body.desktop-app.desktop-overflow-windows #windowMenu') &&
+  style.includes('body.desktop-app.desktop-overflow-monitor #monitorMenu') &&
+  style.includes('body.desktop-app.desktop-overflow-usage #usageMenu') &&
+  style.includes('body.desktop-app:not(.desktop-overflow-windows) #sessionSwitcher .switcher-item') &&
   style.includes("body:not(.desktop-app) .compact-menu.open > .compact-menu-list"),
-  'Electron must retain desktop chrome and progressively disclose crowded controls through hoverable overflow menus'
+  'Electron must fill available chrome and progressively disclose whole control groups without clipping'
+);
+const desktopTopbarBlock = cssBlock(style, '\n.topbar {');
+assert.ok(desktopTopbarBlock.includes('position: relative') && desktopTopbarBlock.includes('z-index: var(--z-actions)'), 'desktop dropdowns must paint above the workspace');
+assert.ok(
+  style.includes('body:not(.desktop-app) .compact-menu > .compact-menu-toggle') &&
+  !style.includes('body:not(.desktop-app) .compact-menu-toggle {'),
+  'mobile browser chrome must expose only the two outer compact toggles, not nested adaptive toggles beside their content'
+);
+assert.ok(
+  html.indexOf('id="uploadFileBtn"') < html.indexOf('id="chromeToggle"') &&
+  html.indexOf('id="chromeToggle"') < html.indexOf('id="settingsToggle"') &&
+  html.includes('id="uploadFileBtn" class="chrome-btn icon-btn"') &&
+  html.includes('id="chromeToggle" class="chrome-btn icon-btn"') &&
+  html.includes('id="settingsToggle" class="chrome-btn icon-btn"') &&
+  !html.includes('clipboardImageBtn') && !app.includes('clipboardImageBtn'),
+  'utility actions must be icon-only in Upload, Hide, Settings order and the redundant Image button must be removed'
+);
+assert.ok(
+  html.indexOf('id="backendLatency"') > html.indexOf('id="systemMonitor"') &&
+  html.indexOf('id="backendLatency"') < html.indexOf('</section>', html.indexOf('id="systemMonitor"')) &&
+  html.includes('<span>Top monitor</span><small>Network, CPU, memory and disk</small>'),
+  'NET must follow the same Top monitor setting as CPU, RAM and disk'
 );
 const firefoxScrollbarBlock = cssBlock(style, '@supports not selector(::-webkit-scrollbar)');
 assert.ok(
@@ -381,7 +409,7 @@ assert.ok(
 );
 const replayNormalizer = app.slice(app.indexOf('function normalizeReplayText'), app.indexOf('function sanitizeTerminalOutput'));
 assert.ok(!replayNormalizer.includes(".replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '')"), 'tmux replay normalization must not strip SGR with every CSI control');
-assert.ok(html.includes('app.js?v=20260819-desktop-overflow-v1') && html.includes('style.css?v=20260819-desktop-overflow-v1'), 'client cache keys must activate adaptive desktop overflow chrome');
+assert.ok(html.includes('app.js?v=20260819-adaptive-groups-v2') && html.includes('style.css?v=20260819-adaptive-groups-v2'), 'client cache keys must activate adaptive grouped chrome');
 assert.ok(html.includes('interactive-widget=resizes-content'), 'mobile soft keyboards must resize PassiDeck content instead of covering the TUI composer');
 assert.ok(
   style.includes('height: var(--passideck-viewport-height, 100dvh)') &&
@@ -449,7 +477,7 @@ assert.ok(app.includes("JSON.stringify({ type: 'redraw' })") && app.includes('re
 assert.ok(!app.includes('redrawPending'), 'removed initial-redraw state must not leave dead writes behind');
 assert.ok(app.includes('if (changed) entry.term.__passideckSnapshotLinks = null'), 'later terminal resize must invalidate restored OSC 8 target coordinates');
 
-assert.ok(html.includes('id="uploadFileBtn"') && html.includes('id="clipboardImageBtn"') && html.includes('id="fileInput"'), 'upload, clipboard image, and file picker controls must stay available');
+assert.ok(html.includes('id="uploadFileBtn"') && html.includes('id="fileInput"') && !html.includes('id="clipboardImageBtn"'), 'file upload must stay available without a redundant clipboard-image button');
 assert.ok(app.includes("document.addEventListener('contextmenu', handleTerminalContextMenu, true)") && app.includes('term.clearSelection()'), 'right-click copy must clear terminal selection in browser and desktop renderers');
 assert.ok(
   app.includes('event.ctrlKey && event.shiftKey') && !app.includes('terminalEntryForTarget(event.target) || activeTerminalEntry()'),

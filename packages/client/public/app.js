@@ -1854,6 +1854,7 @@ function setSystemMonitorVisible(visible, opts = {}) {
   if (toggle) toggle.checked = enabled;
   if (enabled) startSystemMonitorPolling();
   else stopSystemMonitorPolling();
+  scheduleDesktopAppChromeSync();
   if (opts.persist !== false) saveUiState();
 }
 
@@ -4113,6 +4114,7 @@ function renderSwitcher() {
     wrapper.append(btn, close);
     switcher.appendChild(wrapper);
   }
+  scheduleDesktopAppChromeSync();
 }
 
 function syncTerminalInputFocus(hasDocumentFocus = document.hasFocus()) {
@@ -4564,31 +4566,51 @@ function setCompactMenuOpen(menu, open) {
 }
 function desktopMenuUsesOverflow(menu) {
   if (!document.body.classList.contains('desktop-app')) return false;
-  return menu.id === 'compactActionsMenu'
-    ? document.body.classList.contains('desktop-overflow-actions')
-    : document.body.classList.contains('desktop-overflow-launch');
+  return Boolean(menu.dataset.overflowClass && document.body.classList.contains(menu.dataset.overflowClass));
 }
 let desktopChromeFrame = 0;
 const desktopMenuTimerCancels = new WeakMap();
+const DESKTOP_OVERFLOW_ORDER = [
+  'desktop-overflow-usage',
+  'desktop-overflow-monitor',
+  'desktop-overflow-launch',
+  'desktop-overflow-windows',
+  'desktop-overflow-desktops'
+];
+function measuredDesktopChromeWidth() {
+  const body = document.body;
+  const strip = document.querySelector('.command-strip');
+  if (!strip) return 0;
+  body.classList.add('desktop-chrome-measuring');
+  const style = getComputedStyle(strip);
+  const zones = [...strip.children].filter(child => getComputedStyle(child).display !== 'none');
+  const gap = Number.parseFloat(style.columnGap || style.gap) || 0;
+  const padding = (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0);
+  const width = zones.reduce((sum, zone) => sum + Math.ceil(zone.scrollWidth), 0) + gap * Math.max(0, zones.length - 1) + padding;
+  body.classList.remove('desktop-chrome-measuring');
+  return width;
+}
 function syncDesktopAppChrome() {
   const body = document.body;
   const desktop = window.passideckDesktop?.isDesktop === true;
   body.classList.toggle('desktop-app', desktop);
   if (!desktop) {
-    body.classList.remove('desktop-overflow-actions', 'desktop-overflow-launch');
+    body.classList.remove(...DESKTOP_OVERFLOW_ORDER);
     return;
   }
   const strip = document.querySelector('.command-strip');
-  const center = document.querySelector('.command-center');
-  if (!strip || !center || !strip.clientWidth) return;
-  body.classList.remove('desktop-overflow-actions', 'desktop-overflow-launch');
-  const actionReserve = Math.min(420, Math.max(300, strip.clientWidth * .24));
-  const hideActions = center.getBoundingClientRect().width < actionReserve;
-  body.classList.toggle('desktop-overflow-actions', hideActions);
-  const launchReserve = Math.min(300, Math.max(220, strip.clientWidth * .22));
-  const hideLaunch = center.getBoundingClientRect().width < launchReserve;
-  body.classList.toggle('desktop-overflow-launch', hideLaunch);
-  document.querySelectorAll('.compact-menu').forEach(menu => {
+  if (!strip || !strip.clientWidth) return;
+  body.classList.remove(...DESKTOP_OVERFLOW_ORDER);
+  const collapsible = DESKTOP_OVERFLOW_ORDER.filter(name => {
+    const menu = document.querySelector(`[data-overflow-class="${name}"]`);
+    const content = menu?.querySelector(':scope > .adaptive-menu-list, :scope > .launch-strip');
+    return content && !content.hidden && [...content.children].some(child => !child.hidden && getComputedStyle(child).display !== 'none');
+  });
+  for (const name of collapsible) {
+    if (measuredDesktopChromeWidth() <= strip.clientWidth) break;
+    body.classList.add(name);
+  }
+  document.querySelectorAll('.compact-menu, .adaptive-menu').forEach(menu => {
     if (desktopMenuUsesOverflow(menu)) return;
     desktopMenuTimerCancels.get(menu)?.();
     if (menu.classList.contains('open')) setCompactMenuOpen(menu, false);
@@ -4605,18 +4627,33 @@ document.addEventListener('pointerdown', event => {
   const panel = document.getElementById('settingsPanel');
   const toggle = document.getElementById('settingsToggle');
   if (!panel.hidden && !panel.contains(event.target) && !toggle.contains(event.target)) setSettingsOpen(false);
-  document.querySelectorAll('.compact-menu.open').forEach(menu => { if (!menu.contains(event.target)) setCompactMenuOpen(menu, false); });
+  document.querySelectorAll('.compact-menu.open, .adaptive-menu.open').forEach(menu => { if (!menu.contains(event.target)) setCompactMenuOpen(menu, false); });
 }, true);
 document.querySelectorAll('.compact-menu-toggle').forEach(toggle => toggle.onclick = () => {
   const menu = toggle.closest('.compact-menu');
-  const open = !menu.classList.contains('open');
-  document.querySelectorAll('.compact-menu.open').forEach(other => setCompactMenuOpen(other, false));
-  setCompactMenuOpen(menu, open);
+  const adaptiveMenu = toggle.closest('.adaptive-menu');
+  const owner = adaptiveMenu || menu;
+  desktopMenuTimerCancels.get(owner)?.();
+  const open = !owner.classList.contains('open');
+  document.querySelectorAll('.compact-menu.open, .adaptive-menu.open').forEach(other => setCompactMenuOpen(other, false));
+  setCompactMenuOpen(owner, open);
 });
-document.querySelectorAll('.compact-menu').forEach(menu => menu.addEventListener('click', event => {
+document.querySelectorAll('.compact-menu, .adaptive-menu').forEach(menu => menu.addEventListener('click', event => {
   if (event.target.closest('button:not(.compact-menu-toggle)')) setCompactMenuOpen(menu, false);
 }));
-document.querySelectorAll('.compact-menu').forEach(menu => {
+function closeOpenCompactMenu(event) {
+  if (event.key !== 'Escape') return false;
+  const openMenus = [...document.querySelectorAll('.compact-menu.open, .adaptive-menu.open')];
+  if (!openMenus.length) return false;
+  const focusedMenu = [...openMenus].reverse().find(menu => menu.contains(document.activeElement));
+  const menu = focusedMenu || openMenus[openMenus.length - 1];
+  event.preventDefault();
+  desktopMenuTimerCancels.get(menu)?.();
+  setCompactMenuOpen(menu, false);
+  menu.querySelector(':scope > .compact-menu-toggle')?.focus();
+  return true;
+}
+document.querySelectorAll('.compact-menu, .adaptive-menu').forEach(menu => {
   let openTimer = 0;
   let closeTimer = 0;
   const cancelTimers = () => {
@@ -4658,10 +4695,6 @@ document.getElementById('uploadFileBtn').onclick = () => document.getElementById
 document.getElementById('fileInput').onchange = event => {
   void uploadFiles([...event.target.files]);
   event.target.value = '';
-};
-document.getElementById('clipboardImageBtn').onclick = () => {
-  activeTerminalEntry()?.term.focus();
-  showToast('Press Ctrl+V to paste an image');
 };
 document.getElementById('chromeToggle').onclick = toggleChrome;
 document.getElementById('chromePeek').onclick = toggleChrome;
@@ -4832,7 +4865,7 @@ document.addEventListener('keydown', e => {
     if (!settingsPanel.hidden) {
       e.preventDefault();
       setSettingsOpen(false, true);
-    }
+    } else closeOpenCompactMenu(e);
   }
   if (e.altKey && /^[1-9]$/.test(e.key)) {
     e.preventDefault();
