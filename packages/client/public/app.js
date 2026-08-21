@@ -4634,7 +4634,7 @@ function scheduleDesktopAppChromeSync() {
     syncDesktopAppChrome();
   });
 }
-document.addEventListener('pointerdown', event => {
+window.addEventListener('pointerdown', event => {
   const panel = document.getElementById('settingsPanel');
   const toggle = document.getElementById('settingsToggle');
   if (!panel.hidden && !panel.contains(event.target) && !toggle.contains(event.target)) setSettingsOpen(false);
