@@ -72,9 +72,9 @@ const CODEX_OAUTH_TOKEN_URL = 'https://auth.openai.com/oauth/token';
 const CODEX_OAUTH_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 const CODEX_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 300;
 const UPLOAD_CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;
-const MAX_DESKTOPS = 3;
+const FIXED_DESKTOP_IDS = ['desktop-1', 'desktop-2', 'desktop-3'];
 
-const UI_STATE_DEFAULT = { revision: 0, activeId: null, theme: 'blue', skin: 'neon', fontSize: 13, notifyBlinking: true, performanceMode: false, chromeHidden: false, systemMonitor: false, panePrefs: { titles: {}, order: [], desktopOrder: ['desktop-1'], paneDesktop: {}, desktops: { 'desktop-1': { name: 'Desktop 1', minimized: [], windows: {}, viewport: null } } }, updatedAt: null };
+const UI_STATE_DEFAULT = { revision: 0, activeId: null, theme: 'blue', skin: 'neon', fontSize: 13, notifyBlinking: true, performanceMode: false, chromeHidden: false, systemMonitor: false, panePrefs: { titles: {}, order: [], desktopOrder: FIXED_DESKTOP_IDS.slice(), paneDesktop: {}, desktops: { 'desktop-1': { name: 'Desktop 1', minimized: [], windows: {}, viewport: null }, 'desktop-2': { name: 'Desktop 2', minimized: [], windows: {}, viewport: null }, 'desktop-3': { name: 'Desktop 3', minimized: [], windows: {}, viewport: null } } }, updatedAt: null };
 
 function uiStatePath() {
   return path.join(configDir(), 'ui-state.json');
@@ -127,25 +127,16 @@ function sanitizePanePrefs(input) {
       };
     }
   }
-  if (!Object.keys(desktops).length) {
+  if (!desktops['desktop-1']) {
     desktops['desktop-1'] = { name: 'Desktop 1', minimized: cleanIdList(src.minimized), windows: windows.desktop || {}, viewport: vp };
   }
-  const requestedOrder = cleanIdList(src.desktopOrder).filter(id => desktops[id]);
-  const desktopOrder = [...new Set([...requestedOrder, ...Object.keys(desktops)])].slice(0, MAX_DESKTOPS);
-  const retainedDesktops = new Set(desktopOrder);
-  for (const id of Object.keys(desktops)) if (!retainedDesktops.has(id)) delete desktops[id];
-  const usedDesktopNames = new Set();
-  for (const id of desktopOrder) {
-    const desktop = desktops[id];
-    let name = desktop.name;
-    if (usedDesktopNames.has(name.toLowerCase())) {
-      let number = 1;
-      while (usedDesktopNames.has(`desktop ${number}`)) number += 1;
-      name = `Desktop ${number}`;
-      desktop.name = name;
-    }
-    usedDesktopNames.add(name.toLowerCase());
+  const desktopOrder = [];
+  for (const id of FIXED_DESKTOP_IDS) {
+    if (!desktops[id]) desktops[id] = { name: `Desktop ${desktopOrder.length + 1}`, minimized: [], windows: {}, viewport: null };
+    desktops[id].name = `Desktop ${desktopOrder.length + 1}`;
+    desktopOrder.push(id);
   }
+  for (const id of Object.keys(desktops)) if (!desktopOrder.includes(id)) delete desktops[id];
   const fallbackDesktop = desktopOrder[0];
   const paneDesktop = {};
   if (src.paneDesktop && typeof src.paneDesktop === 'object') {

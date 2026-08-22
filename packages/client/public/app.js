@@ -90,7 +90,7 @@ const state = {
 
 const DESKTOP_VIEW_KEY = 'passideck:desktop-view:v1';
 const UI_DRAFT_KEY = 'passideck:ui-draft:v1';
-const MAX_DESKTOPS = 3;
+const FIXED_DESKTOP_IDS = ['desktop-1', 'desktop-2', 'desktop-3'];
 const MIN_WINDOW_HEIGHT = 80;
 
 function localDesktopView() {
@@ -2734,46 +2734,22 @@ function saveAllTerminalSnapshots() {
   for (const [id, entry] of state.sessions) if (!entry.detached) saveTerminalSnapshot(id);
 }
 
-function desktopNameKey(name) {
-  return String(name || '').trim().toLocaleLowerCase();
-}
-
-function nextDesktopDefaultName(desktops = state.panePrefs.desktops, excludedId = null) {
-  const used = new Set(Object.entries(desktops || {})
-    .filter(([id]) => id !== excludedId)
-    .map(([, desktop]) => desktopNameKey(desktop?.name)));
-  let number = 1;
-  while (used.has(`desktop ${number}`)) number += 1;
-  return `Desktop ${number}`;
-}
-
-function normalizeDesktopNames(desktops, order) {
-  const used = new Set();
-  for (const id of order) {
-    const desktop = desktops[id];
-    if (!desktop) continue;
-    let name = String(desktop.name || '').trim().slice(0, 40);
-    if (!name || used.has(desktopNameKey(name))) {
-      let number = 1;
-      while (used.has(`desktop ${number}`)) number += 1;
-      name = `Desktop ${number}`;
-    }
-    desktop.name = name;
-    used.add(desktopNameKey(name));
-  }
-}
-
 function loadPanePrefs(prefs = {}) {
   const legacyWindows = prefs.windows && typeof prefs.windows === 'object' ? prefs.windows : {};
   const legacyViewport = prefs.viewport && typeof prefs.viewport === 'object' ? prefs.viewport : null;
   const hasModernDesktops = prefs.desktops && typeof prefs.desktops === 'object' && Object.keys(prefs.desktops).length;
-  const desktops = hasModernDesktops
-    ? structuredClone(prefs.desktops)
-    : { 'desktop-1': { name: 'Desktop 1', minimized: prefs.minimized || [], windows: legacyWindows.desktop || {}, viewport: legacyViewport } };
-  const desktopOrder = Array.isArray(prefs.desktopOrder) ? prefs.desktopOrder.filter(id => desktops[id]) : [];
-  for (const id of Object.keys(desktops)) if (!desktopOrder.includes(id)) desktopOrder.push(id);
-  normalizeDesktopNames(desktops, desktopOrder);
-  const fallbackDesktop = desktopOrder[0] || 'desktop-1';
+  const desktops = hasModernDesktops ? structuredClone(prefs.desktops) : {};
+  if (!hasModernDesktops) {
+    desktops['desktop-1'] = { name: 'Desktop 1', minimized: prefs.minimized || [], windows: legacyWindows.desktop || {}, viewport: legacyViewport };
+  }
+  const desktopOrder = [];
+  for (const id of FIXED_DESKTOP_IDS) {
+    if (!desktops[id]) desktops[id] = { name: `Desktop ${desktopOrder.length + 1}`, minimized: [], windows: {}, viewport: null };
+    desktops[id].name = `Desktop ${desktopOrder.length + 1}`;
+    desktopOrder.push(id);
+  }
+  for (const id of Object.keys(desktops)) if (!desktopOrder.includes(id)) delete desktops[id];
+  const fallbackDesktop = desktopOrder[0];
   const order = Array.isArray(prefs.order) ? prefs.order.filter(id => typeof id === 'string') : [];
   const paneDesktop = prefs.paneDesktop && typeof prefs.paneDesktop === 'object' ? { ...prefs.paneDesktop } : {};
   for (const id of order) if (!desktops[paneDesktop[id]]) paneDesktop[id] = fallbackDesktop;
@@ -4052,43 +4028,20 @@ function selectDesktop(id) {
 }
 
 function createDesktop() {
-  if (state.panePrefs.desktopOrder.length >= MAX_DESKTOPS) return;
-  const id = crypto.randomUUID?.() || `desktop-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-  state.panePrefs.desktops[id] = { name: nextDesktopDefaultName(), minimized: [], windows: {}, viewport: null };
-  state.panePrefs.desktopOrder.push(id);
-  selectDesktop(id);
-  savePanePrefs();
+  // Desktops are fixed: Desktop 1-3 always exist and cannot be added or removed.
 }
 
 function performDeleteDesktop(id) {
-  if (state.panePrefs.desktopOrder.length <= 1 || !state.panePrefs.desktops[id]) return;
-  const paneIds = state.order.filter(paneId => state.panePrefs.paneDesktop[paneId] === id);
-  const fallback = state.panePrefs.desktopOrder.find(desktopId => desktopId !== id);
-  if (state.activeDesktopId === id) selectDesktop(fallback);
-  for (const paneId of paneIds) movePaneToDesktop(paneId, fallback);
-  delete state.panePrefs.desktops[id];
-  state.panePrefs.desktopOrder = state.panePrefs.desktopOrder.filter(desktopId => desktopId !== id);
-  renderSwitcher();
-  savePanePrefs();
+  // Desktops are fixed: Desktop 1-3 always exist and cannot be added or removed.
 }
 
 function deleteDesktop(id) {
-  if (state.panePrefs.desktopOrder.length <= 1 || !state.panePrefs.desktops[id]) return;
-  const paneCount = state.order.filter(paneId => state.panePrefs.paneDesktop[paneId] === id).length;
-  const message = paneCount
-    ? `${paneCount} window${paneCount === 1 ? '' : 's'} will be moved to another desktop.`
-    : 'This desktop will be removed.';
-  showConfirmation('Delete desktop?', message, 'Delete', () => performDeleteDesktop(id));
+  // Desktops are fixed: Desktop 1-3 always exist and cannot be added or removed.
 }
 
 function renderDesktops() {
   const switcher = document.getElementById('desktopSwitcher');
   if (!switcher) return;
-  const add = document.getElementById('addDesktop');
-  if (add) {
-    add.disabled = state.panePrefs.desktopOrder.length >= MAX_DESKTOPS;
-    setTooltip(add, add.disabled ? `Maximum ${MAX_DESKTOPS} desktops` : 'Add desktop');
-  }
   switcher.replaceChildren(...state.panePrefs.desktopOrder.map((id, index) => {
     const attention = state.order.some(paneId => state.panePrefs.paneDesktop[paneId] === id && state.sessions.get(paneId)?.responseAttention);
     const active = id === state.activeDesktopId;
@@ -4104,9 +4057,8 @@ function renderDesktops() {
     tab.setAttribute('aria-label', `Desktop ${ordinal}${active ? ', current desktop' : ''}${shortcut}${attention ? ', new response' : ''}`);
     if (index < 9) tab.setAttribute('aria-keyshortcuts', `Alt+Shift+${index + 1}`);
     tab.textContent = String(ordinal);
-    setTooltip(tab, `Desktop ${ordinal}${index < 9 ? ` · Alt+Shift+${index + 1}` : ''} · Right-click to delete`);
+    setTooltip(tab, `Desktop ${ordinal}${index < 9 ? ` · Alt+Shift+${index + 1}` : ''}`);
     tab.onclick = () => selectDesktop(id);
-    tab.oncontextmenu = event => { event.preventDefault(); deleteDesktop(id); };
     return tab;
   }));
 }
@@ -4794,7 +4746,6 @@ function escapeHtml(str) {
 }
 
 document.querySelectorAll('[data-command]').forEach(btn => btn.onclick = () => launch(btn.dataset.command));
-document.getElementById('addDesktop').onclick = createDesktop;
 function setSettingsOpen(open, restoreFocus = false) {
   const panel = document.getElementById('settingsPanel');
   const toggle = document.getElementById('settingsToggle');

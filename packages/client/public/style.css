@@ -102,7 +102,7 @@ button, select { font: inherit; }
 .desktop-menu-list { flex: 0 0 auto; }
 .desktop-switcher { display: flex; flex: 0 0 auto; min-width: 0; gap: 3px; overflow: visible; scrollbar-width: none; }
 .desktop-switcher::-webkit-scrollbar { display: none; }
-.desktop-tab, .desktop-add {
+.desktop-tab {
   height: 21px;
   border: 1px solid var(--tg-border);
   background: #030707;
@@ -133,8 +133,6 @@ body.notify-blinking .desktop-tab.attention:not(.active) { animation: desktop-re
   filter: none;
   box-shadow: inset 0 -3px 0 color-mix(in srgb, var(--tg-bg) 72%, transparent), 0 0 10px color-mix(in srgb, var(--tg-accent) 38%, transparent);
 }
-.desktop-add { flex: 0 0 23px; width: 23px; padding: 0; color: var(--tg-accent); }
-.desktop-add:disabled { cursor: default; opacity: .35; color: var(--tg-text-dim); }
 .desktop-divider { flex: 0 0 1px; height: 17px; margin: 0 3px; background: var(--tg-border); }
 .window-menu { display: flex; flex: 1 1 auto; min-width: 0; }
 .switcher-grid { display: flex; flex: 1 1 auto; min-width: 0; gap: 3px; overflow: visible; justify-content: flex-start; }
@@ -912,7 +910,7 @@ button:focus-visible, select:focus-visible, input:focus-visible { outline: 1px s
   body:not(.desktop-app) .topbar-ql-btn, body:not(.desktop-app) .chrome-btn { min-width: 40px; padding: 0 10px; }
   body:not(.desktop-app) .command-divider { display: none !important; }
   body:not(.desktop-app) .desktop-switcher { flex: 0 1 max-content; max-width: min(38%, 152px); }
-  body:not(.desktop-app) .desktop-tab, body:not(.desktop-app) .desktop-add { flex-basis: 40px; width: 40px; min-width: 40px; max-width: 40px; height: 40px; font-size: 12px; }
+  body:not(.desktop-app) .desktop-tab { flex-basis: 40px; width: 40px; min-width: 40px; max-width: 40px; height: 40px; font-size: 12px; }
   body:not(.desktop-app) .desktop-divider { height: 30px; margin: 0 2px; }
   body:not(.desktop-app) .switcher-btn { min-width: 96px; max-width: 150px; padding-right: 46px; }
   body:not(.desktop-app) .switcher-close { right: 0; width: 40px; height: 40px; opacity: 1; pointer-events: auto; }

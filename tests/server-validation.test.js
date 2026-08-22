@@ -773,10 +773,12 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     });
     assert.strictEqual(legacyResponse.status, 200);
     const migratedUi = await legacyResponse.json();
-    assert.deepStrictEqual(migratedUi.panePrefs.desktopOrder, ['desktop-1'], 'legacy pane preferences must migrate into the default desktop');
+    assert.deepStrictEqual(migratedUi.panePrefs.desktopOrder, ['desktop-1', 'desktop-2', 'desktop-3'], 'legacy pane preferences must migrate into the fixed Desktop 1-3 set');
     assert.deepStrictEqual(migratedUi.panePrefs.desktops['desktop-1'].minimized, ['validation'], 'legacy minimized state must migrate');
     assert.deepStrictEqual(migratedUi.panePrefs.desktops['desktop-1'].windows.validation, { x: 10, y: 20, w: 700, h: 500, z: 11 }, 'legacy geometry must migrate');
     assert.deepStrictEqual(migratedUi.panePrefs.desktops['desktop-1'].viewport, { w: 1400, h: 850 }, 'legacy viewport must migrate');
+    assert.deepStrictEqual(migratedUi.panePrefs.desktops['desktop-2'].name, 'Desktop 2', 'fixed desktops must be created with canonical names');
+    assert.deepStrictEqual(migratedUi.panePrefs.desktops['desktop-3'].name, 'Desktop 3', 'fixed desktops must be created with canonical names');
     const uiEvents = await fetch(`${base}/api/ui-events`);
     assert.strictEqual(uiEvents.status, 200, 'UI state event stream must be available');
     const reader = uiEvents.body.getReader();
@@ -819,15 +821,15 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
       assert.strictEqual(Object.hasOwn(savedUi.panePrefs, field), false, `legacy panePrefs field ${field} must be read-only migration input`);
     }
     assert.deepStrictEqual(Object.keys(savedUi.panePrefs).sort(), ['desktopOrder', 'desktops', 'order', 'paneDesktop', 'titles'], 'serialized pane preferences must expose only the modern contract');
-    assert.deepStrictEqual(savedUi.panePrefs.desktopOrder, ['work', 'monitoring'], 'desktop order must survive server validation');
+    assert.deepStrictEqual(savedUi.panePrefs.desktopOrder, ['desktop-1', 'desktop-2', 'desktop-3'], 'custom desktop names must be replaced by the fixed Desktop 1-3 set');
     assert.deepStrictEqual(
       savedUi.panePrefs.desktopOrder.map(id => savedUi.panePrefs.desktops[id].name),
-      ['Work', 'Desktop 1'],
-      'server validation must repair duplicate desktop names with the lowest free default number'
+      ['Desktop 1', 'Desktop 2', 'Desktop 3'],
+      'server validation must enforce the fixed desktop names'
     );
-    assert.strictEqual(savedUi.panePrefs.paneDesktop.validation, 'monitoring', 'pane desktop assignment must survive server validation');
-    assert.deepStrictEqual(savedUi.panePrefs.desktops.monitoring.minimized, ['validation'], 'per-desktop minimized state must survive server validation');
-    assert.deepStrictEqual(savedUi.panePrefs.desktops.monitoring.windows.validation, { x: 10, y: 20, w: 700, h: 500, z: 11 }, 'per-desktop geometry must survive server validation');
+    assert.strictEqual(savedUi.panePrefs.paneDesktop.validation, 'desktop-1', 'panes assigned to a removed custom desktop must move to the first fixed desktop');
+    assert.deepStrictEqual(savedUi.panePrefs.desktops['desktop-1'].minimized, [], 'custom-desktop minimized state must be discarded with the removed desktop');
+    assert.deepStrictEqual(savedUi.panePrefs.desktops['desktop-1'].windows, {}, 'custom-desktop geometry must be discarded with the removed desktop');
     assert.ok(savedUi.revision > migratedUi.revision, 'accepted UI changes must advance the server revision');
     const eventChunk = new TextDecoder().decode((await reader.read()).value || new Uint8Array());
     assert.ok(eventChunk.includes('"activeId":"validation"') && eventChunk.includes(`"revision":${savedUi.revision}`), 'accepted UI changes must broadcast to every browser');
@@ -848,9 +850,9 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     });
     assert.strictEqual(capped.status, 200);
     const cappedUi = await capped.json();
-    assert.deepStrictEqual(cappedUi.panePrefs.desktopOrder, ['one', 'two', 'three'], 'server validation must cap persisted desktops at the supported maximum');
-    assert.deepStrictEqual(Object.keys(cappedUi.panePrefs.desktops), ['one', 'two', 'three'], 'discarded desktops must not remain in persisted desktop metadata');
-    assert.strictEqual(cappedUi.panePrefs.paneDesktop.validation, 'one', 'panes assigned to a discarded desktop must move to the first retained desktop');
+    assert.deepStrictEqual(cappedUi.panePrefs.desktopOrder, ['desktop-1', 'desktop-2', 'desktop-3'], 'server validation must replace custom desktops with the fixed Desktop 1-3 set');
+    assert.deepStrictEqual(Object.keys(cappedUi.panePrefs.desktops), ['desktop-1', 'desktop-2', 'desktop-3'], 'custom desktops must not remain in persisted desktop metadata');
+    assert.strictEqual(cappedUi.panePrefs.paneDesktop.validation, 'desktop-1', 'panes assigned to a discarded desktop must move to the first fixed desktop');
     const stale = await fetch(`${base}/api/ui-state`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },

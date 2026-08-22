@@ -332,17 +332,17 @@ assert.ok(
 assert.ok(app.includes('function applyHermesEvent(id, message)') && app.includes('!isHermesEntry(entry) && !isHermesTuiEntry(entry)'), 'native Hermes events must work for dynamically detected TUI sessions launched from a shell');
 assert.ok(app.includes('pendingHermesEvents: []') && app.includes('for (const message of pendingHermesEvents) applyHermesEvent(id, message)'), 'Hermes events arriving before dynamic TUI detection must replay when the mode becomes authoritative');
 assert.ok(style.includes('.term-panel.hermes-tui .xterm-viewport') && style.includes('scrollbar-width: none'), 'Hermes TUI panes must hide xterm scrollbars without disabling TUI scrolling');
-assert.ok(html.includes('id="desktopSwitcher"') && html.includes('id="addDesktop"'), 'multi-desktop controls must be present in the shared browser/Electron renderer');
+assert.ok(html.includes('id="desktopSwitcher"') && !html.includes('id="addDesktop"'), 'desktop switcher must exist without an add-desktop control');
 assert.ok(app.includes('handleDesktopShortcut') && app.includes('movePaneToDesktop') && app.includes('DESKTOP_VIEW_KEY'), 'desktop switching, pane movement and per-window local selection must stay wired');
 assert.ok(!app.includes('confirm('), 'destructive actions must not use native browser/Electron confirmation dialogs');
 assert.ok(
   html.includes('id="closeModalText"') &&
   app.includes('function showConfirmation') &&
-  app.includes("showConfirmation('Delete desktop?', message, 'Delete', () => performDeleteDesktop(id))"),
-  'desktop deletion must reuse the themed PassiDeck confirmation modal with dynamic copy and action'
+  !app.includes("showConfirmation('Delete desktop?', message, 'Delete', () => performDeleteDesktop(id))"),
+  'desktop deletion must be removed: fixed desktops cannot be deleted'
 );
 assert.ok(app.includes("window.addEventListener('pagehide', flushUiState)") && app.includes('UI_DRAFT_KEY'), 'page exit must retain unsaved desktop state without racing an in-flight revision');
-assert.ok(app.includes('crypto.randomUUID?.()') && app.includes('Date.now().toString(36)'), 'desktop IDs need a plain-HTTP fallback where randomUUID is unavailable');
+assert.ok(app.includes('FIXED_DESKTOP_IDS') && app.includes("['desktop-1', 'desktop-2', 'desktop-3']"), 'desktops must be fixed at Desktop 1-3');
 assert.ok(!html.includes('status-chip') && !html.includes('stat-active') && !html.includes('saveState'), 'window/save status chip should stay removed so launch controls start at the left edge');
 assert.ok(!style.includes('.status-chip') && !style.includes('#saveState'), 'removed window/save status chip must not leave dead CSS');
 assert.ok(!app.includes('setSaveState') && !app.includes("saveState: 'saved'"), 'removed save indicator must not leave display-only state logic');
@@ -456,7 +456,7 @@ assert.ok(
 );
 const replayNormalizer = app.slice(app.indexOf('function normalizeReplayText'), app.indexOf('function sanitizeTerminalOutput'));
 assert.ok(!replayNormalizer.includes(".replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '')"), 'tmux replay normalization must not strip SGR with every CSI control');
-assert.ok(html.includes('app.js?v=20260822-bell-touch-ack') && html.includes('style.css?v=20260822-bell-touch-ack'), 'client cache keys must activate the response-bell fix including deliberate touch acknowledgement');
+assert.ok(html.includes('app.js?v=20260822-fixed-desktops-bell-touch-ack') && html.includes('style.css?v=20260822-fixed-desktops-bell-touch-ack'), 'client cache keys must activate fixed Desktop 1-3 and response-bell touch-ack behavior including native pane popouts');
 assert.ok(html.includes('interactive-widget=resizes-content'), 'mobile soft keyboards must resize PassiDeck content instead of covering the TUI composer');
 assert.ok(
   style.includes('height: var(--passideck-viewport-height, 100dvh)') &&
@@ -564,5 +564,35 @@ assert.ok(app.includes('const renderedSessions = POPOUT_MODE') && app.includes('
 assert.ok(app.includes('suspendDetachedPane(id);') && app.includes('resumeDetachedPane(id);'), 'main renderer must relinquish and resume the detached terminal socket');
 assert.ok(html.includes('id="popoutClose"') && html.includes('Close session'), 'single popout titlebar must expose the session-closing X');
 assert.ok(style.includes('body.popout-mode .term-header { display: none !important; }'), 'popout must hide the redundant pane titlebar');
+
+// Pane popout (detach) client regressions
+assert.ok(app.includes('const POPOUT_MODE = Boolean(POPOUT_PANE_ID)'), 'client must detect popout mode from URL params');
+assert.ok(app.includes('function detachPaneToWindow'), 'drag-out gesture must detach the pane into an OS window');
+assert.ok(app.includes('function installDetachGesture'), 'main app must install the header drag-out gesture');
+assert.ok(app.includes('trySetPointerCapture(header, event.pointerId)'), 'header drag-out must capture the pointer before it leaves the Electron renderer');
+assert.ok(app.includes("document.addEventListener('pointerup', finishDetachGesture, true)") && app.includes('void detachPaneToWindow(current.id, {'), 'drag-out must create the OS window at the actual pointer release position');
+assert.ok(!app.slice(app.indexOf("document.addEventListener('pointermove', event =>", app.indexOf('function installDetachGesture')), app.indexOf('const finishDetachGesture', app.indexOf('function installDetachGesture'))).includes('detachPaneToWindow'), 'crossing the app boundary must not detach before pointer release');
+assert.ok(app.includes('const renderedSessions = POPOUT_MODE') && app.includes('session.id === POPOUT_PANE_ID') && app.includes('renderedSessions.forEach(createPanel)'), 'popout renderer must create exactly the detached pane, never hidden duplicate terminal sockets');
+assert.ok(app.includes('saveTerminalSnapshot(id);') && app.includes('suspendDetachedPane(id);'), 'detach must hand the current xterm/TUI snapshot to the popout and suspend the duplicate main renderer socket');
+assert.ok(app.includes('resumeDetachedPane(id);'), 'redock must reconnect the main renderer after the popout releases the session');
+assert.ok(app.includes('if (entry.detached) return false;'), 'heartbeat must not recreate the duplicate main socket while a pane is detached');
+assert.ok(app.includes('if (!entry.detached) saveTerminalSnapshot(id);') && app.includes('clearTimeout(entry.snapshotTimer);'), 'detached main renderers must not overwrite the popout terminal snapshot');
+assert.ok(app.includes('state.detachedPanes.has(id)') && app.includes('!state.detachedPanes.has(paneId)'), 'detached panes must be excluded from grid layout and switcher panes');
+assert.ok(app.includes("btn.className = 'switcher-btn detached'"), 'switcher must mark detached panes');
+assert.ok(app.includes('installPopoutMode') && html.includes('id="popoutTitlebar"'), 'popout renderer must show its own titlebar');
+assert.ok(html.includes('id="popoutPin"') && html.includes('Always foreground'), 'popout titlebar needs the always-foreground pin button');
+assert.ok(html.includes('id="popoutRedock"') && html.includes('Back to app'), 'popout titlebar needs the back-to-app button');
+assert.ok(app.includes("saveTerminalSnapshot(POPOUT_PANE_ID);\n    window.passideckDesktop.redockRequest()"), 'Back to app must save the current popout screen before releasing its renderer');
+assert.ok(html.includes('id="popoutReload"') && html.includes('Reload window'), 'popout titlebar needs a per-window reload button');
+assert.ok(html.includes('id="popoutMaximize"') && html.includes('id="popoutMinimize"'), 'popout titlebar needs maximize/minimize buttons');
+assert.ok(html.includes('id="popoutClose"') && html.includes('Close session'), 'the one popout titlebar needs an explicit session-closing X');
+assert.ok(style.includes('body.popout-mode .topbar') && style.includes('.popout-titlebar {'), 'popout mode CSS must hide app chrome and style the titlebar');
+assert.ok(style.includes('body.popout-mode .term-header { display: none !important; }'), 'popout must hide the redundant inner pane titlebar');
+assert.ok(app.includes("document.getElementById('popoutClose').onclick") && app.includes("popoutAction('terminate')"), 'popout X must terminate the session before closing the OS window');
+assert.ok(style.includes('-webkit-app-region: drag'), 'popout titlebar must drag the frameless window');
+assert.ok(app.includes('if (POPOUT_MODE) return; // Popout windows consume UI state but never write shared layout state.'), 'popout renderers must not write shared UI state');
+assert.ok(app.includes('savePanePrefs() {\n  if (state.hydrating || POPOUT_MODE) return;') || app.includes('state.hydrating || POPOUT_MODE'), 'pane prefs writes must be blocked in popout mode');
+assert.ok(app.includes('onRedockPane?.(details => {') && app.includes('redockDetachedPane(id, details || {})'), 'shell must re-dock panes when their popout closes or is dragged back');
+assert.ok(html.includes('id="popoutRememberSelect"') && app.includes('setPopoutRememberGeometry'), 'settings must expose the remember-geometry option');
 
 console.log('ui-static ok');

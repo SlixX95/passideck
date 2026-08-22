@@ -244,20 +244,19 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     assert.deepStrictEqual(compactLaunchStrip, { statusChip: false, leftGap: 6 }, 'quick-launch buttons must occupy the left edge after removing the window/save status chip');
     const migratedDesktop = await evalExpr(cdp, sid, `(() => {
       const tabs = [...document.querySelectorAll('[data-desktop-id]')];
-      const lastTab = tabs.at(-1)?.getBoundingClientRect();
-      const add = document.getElementById('addDesktop')?.getBoundingClientRect();
+      const add = document.getElementById('addDesktop');
       return {
         ids: state.panePrefs.desktopOrder || [],
         names: tabs.map(tab => tab.textContent.trim()),
         assignments: state.order.map(id => state.panePrefs.paneDesktop?.[id]),
         active: state.activeDesktopId,
         local: JSON.parse(sessionStorage.getItem('passideck:desktop-view:v1') || '{}').activeDesktopId,
-        addGap: add && lastTab ? Math.round(add.left - lastTab.right) : null
+        addGap: add ? 0 : null
       };
     })()`);
-    assert.deepStrictEqual(migratedDesktop.ids, ['desktop-1'], 'legacy pane layout must migrate into one default desktop');
-    assert.deepStrictEqual(migratedDesktop.names, ['1'], 'desktop switcher must use compact ordinal-only labels');
-    assert.ok(migratedDesktop.addGap !== null && migratedDesktop.addGap <= 7, `add desktop must stay attached to the dynamic desktop tab group, gap=${migratedDesktop.addGap}`);
+    assert.deepStrictEqual(migratedDesktop.ids, ['desktop-1', 'desktop-2', 'desktop-3'], 'legacy pane layout must migrate into the fixed Desktop 1-3 set');
+    assert.deepStrictEqual(migratedDesktop.names, ['1', '2', '3'], 'desktop switcher must use compact ordinal-only labels');
+    assert.strictEqual(migratedDesktop.addGap, null, 'no add-desktop control must exist');
     assert.ok(migratedDesktop.assignments.every(id => id === 'desktop-1'), 'legacy panes must remain assigned to Desktop 1');
     assert.strictEqual(migratedDesktop.active, 'desktop-1', 'default desktop must become locally active');
     assert.strictEqual(migratedDesktop.local, 'desktop-1', 'active desktop must persist locally, not in shared UI state');
@@ -334,11 +333,22 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         paneDesktop: { 'pane-modern': 'survivor' },
         desktops: { survivor: { name: 'Survivor', minimized: [], windows: { 'pane-modern': { x: 20, y: 30, w: 700, h: 500, z: 2 } }, viewport: { w: 1400, h: 850 } } }
       });
-      const survivor = structuredClone(state.panePrefs.desktops.survivor);
+      const first = structuredClone(state.panePrefs.desktops['desktop-1']);
+      const result = {
+        order: state.panePrefs.desktopOrder,
+        first,
+        survivorGone: !state.panePrefs.desktops.survivor,
+        paneDesktop: state.panePrefs.paneDesktop['pane-modern']
+      };
       loadPanePrefs(snapshot);
-      return survivor;
+      return result;
     })()`);
-    assert.deepStrictEqual(modernDesktopIgnoresLegacy, { name: 'Survivor', minimized: [], windows: { 'pane-modern': { x: 20, y: 30, w: 700, h: 500, z: 2 } }, viewport: { w: 1400, h: 850 } }, 'modern desktop state must never be overwritten by stale legacy mirrors after deleting the original first desktop');
+    assert.deepStrictEqual(modernDesktopIgnoresLegacy, {
+      order: ['desktop-1', 'desktop-2', 'desktop-3'],
+      first: { name: 'Desktop 1', minimized: [], windows: {}, viewport: null },
+      survivorGone: true,
+      paneDesktop: 'desktop-1'
+    }, 'custom desktops must normalize into the fixed Desktop 1-3 set; stale legacy mirrors must never leak into fixed desktops');
     const mergedConcurrentDesktops = await evalExpr(cdp, sid, `(() => {
       const desktop = name => ({ name, minimized: [], windows: {}, viewport: null });
       const baseState = { revision: 1, panePrefs: { desktopOrder: ['one', 'two'], paneDesktop: { p1: 'one', p2: 'two' }, desktops: { one: desktop('One'), two: desktop('Two') } } };
@@ -374,6 +384,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       state.lastUiState = structuredClone(baseState);
       state.panePrefs.desktops['retry-local'] = desktop('Retry local');
       state.panePrefs.desktopOrder.push('retry-local');
+      state.panePrefs.paneDesktop['pane-local'] = 'retry-local';
       let remote = structuredClone(baseState);
       let puts = 0;
       api = async (method, path, body) => {
@@ -382,6 +393,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
           const id = 'retry-remote-' + puts;
           remote.panePrefs.desktops[id] = desktop('Retry remote ' + puts);
           remote.panePrefs.desktopOrder.push(id);
+          remote.panePrefs.paneDesktop['pane-remote-' + puts] = id;
           remote.revision += 1;
           const error = new Error('conflict');
           error.status = 409;
@@ -392,7 +404,12 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       };
       saveUiState();
       for (let i = 0; i < 40 && (puts < 4 || uiSavePending()); i += 1) await new Promise(resolve => setTimeout(resolve, 50));
-      const result = { puts, pending: uiSavePending(), ids: state.panePrefs.desktopOrder.filter(id => id.startsWith('retry-')) };
+      const result = {
+        puts,
+        pending: uiSavePending(),
+        panes: Object.keys(state.panePrefs.paneDesktop).filter(id => id.startsWith('pane-')).sort(),
+        order: state.panePrefs.desktopOrder
+      };
       clearTimeout(state.saveTimer);
       state.saveTimer = null;
       state.saveInFlight = 0;
@@ -403,7 +420,12 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       renderSwitcher();
       return result;
     })()`);
-    assert.deepStrictEqual(repeatedConflictReplay, { puts: 4, pending: false, ids: ['retry-local', 'retry-remote-1', 'retry-remote-2', 'retry-remote-3'] }, 'three consecutive 409 responses must retain local changes and retry them against every remote revision');
+    assert.deepStrictEqual(repeatedConflictReplay, {
+      puts: 4,
+      pending: false,
+      panes: ['pane-local', 'pane-remote-1', 'pane-remote-2', 'pane-remote-3'],
+      order: ['desktop-1', 'desktop-2', 'desktop-3']
+    }, 'three consecutive 409 responses must retain local and remote pane assignments through fixed-desktop normalization and retry them against every remote revision');
     const serializedSaves = await evalExpr(cdp, sid, `(async () => {
       const originalApi = api;
       const snapshot = { prefs: structuredClone(state.panePrefs), revision: state.uiRevision, baseline: structuredClone(state.lastUiState), queued: state.saveQueued };
@@ -728,19 +750,34 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await waitEval(cdp, peerSid, 'document.readyState === "complete" && document.querySelectorAll(".term-panel").length >= 11');
     await waitEval(cdp, sid, `!state.hydrating && state.saveTimer == null`);
     await waitEval(cdp, peerSid, `!state.hydrating && state.saveTimer == null`);
-    const addDesktopReady = await evalExpr(cdp, sid, `(() => ({ count: state.panePrefs.desktopOrder.length, disabled: document.getElementById('addDesktop').disabled, max: MAX_DESKTOPS }))()`);
-    assert.deepStrictEqual(addDesktopReady, { count: 1, disabled: false, max: 3 }, 'add desktop must stay enabled below the three-desktop limit');
-    await evalExpr(cdp, sid, `document.getElementById('addDesktop').click()`);
-    await sleep(250);
-    const desktopCreation = await evalExpr(cdp, sid, `(() => ({
-      count: state.panePrefs.desktopOrder.length,
-      active: state.activeDesktopId,
-      name: activeDesktop().name,
-      visiblePanels: [...document.querySelectorAll('.term-panel:not(.layout-hidden)')].length,
-      local: localDesktopView().activeDesktopId
+    const fixedDesktops = await evalExpr(cdp, sid, `(() => ({
+      ids: state.panePrefs.desktopOrder,
+      names: state.panePrefs.desktopOrder.map(id => state.panePrefs.desktops[id].name),
+      tabs: [...document.querySelectorAll('.desktop-tab')].map(tab => tab.textContent.trim()),
+      addButton: Boolean(document.getElementById('addDesktop')),
+      deleteHint: [...document.querySelectorAll('.desktop-tab')].some(tab => tab.dataset.tooltip?.includes('delete'))
     }))()`);
-    assert.strictEqual(desktopCreation.count, 2, 'Add desktop must create one shared desktop');
-    assert.strictEqual(desktopCreation.name, 'Desktop 2', 'new desktops need a predictable default name');
+    assert.deepStrictEqual(fixedDesktops, {
+      ids: ['desktop-1', 'desktop-2', 'desktop-3'],
+      names: ['Desktop 1', 'Desktop 2', 'Desktop 3'],
+      tabs: ['1', '2', '3'],
+      addButton: false,
+      deleteHint: false
+    }, 'desktops must be fixed at Desktop 1-3 with no add or delete controls');
+    const desktopCreation = await evalExpr(cdp, sid, `(() => {
+      selectDesktop('desktop-2');
+      return {
+        count: state.panePrefs.desktopOrder.length,
+        active: state.activeDesktopId,
+        name: activeDesktop().name,
+        visiblePanels: [...document.querySelectorAll('.term-panel:not(.layout-hidden)')].length,
+        local: localDesktopView().activeDesktopId
+      };
+    })()`);
+    assert.strictEqual(desktopCreation.count, 3, 'exactly three fixed desktops must exist');
+    assert.strictEqual(desktopCreation.name, 'Desktop 2', 'fixed desktops must keep their canonical names');
+    assert.strictEqual(desktopCreation.active, desktopCreation.local, 'active desktop must persist locally');
+    assert.strictEqual(desktopCreation.visiblePanels, 0, 'an empty fixed desktop must show no panes without stopping existing panes');
     const desktopPresentation = await evalExpr(cdp, sid, `(() => {
       const firstId = state.panePrefs.desktopOrder[0];
       const waitingPaneId = state.order.find(id => state.panePrefs.paneDesktop[id] === firstId);
@@ -769,13 +806,13 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       return result;
     })()`);
     assert.deepStrictEqual(desktopPresentation, {
-      labels: ['1', '2'], maxWidth: 29, activeLabel: '2', activeSelected: 'true', activeCurrent: 'page',
+      labels: ['1', '2', '3'], maxWidth: 29, activeLabel: '2', activeSelected: 'true', activeCurrent: 'page',
       activeWeight: '900', activeAnimation: 'none', waitingLabel: '1', waitingAnimation: 'desktop-response-pulse',
       distinctBackground: true, renameHint: false
     }, 'compact desktop ordinals must keep the current desktop solid and unmistakable while another desktop pulses for attention');
-    assert.strictEqual(desktopCreation.active, desktopCreation.local, 'new desktop must become active only in this client');
-    assert.strictEqual(desktopCreation.visiblePanels, 0, 'new desktop must start empty without stopping existing panes');
-    await waitEval(cdp, peerSid, `state.panePrefs.desktopOrder.length === 2`);
+    assert.strictEqual(desktopCreation.active, desktopCreation.local, 'active desktop must persist only in this client');
+    assert.strictEqual(desktopCreation.visiblePanels, 0, 'an empty fixed desktop must start without stopping existing panes');
+    await waitEval(cdp, peerSid, `state.panePrefs.desktopOrder.length === 3`);
     const peerDesktopSelection = await evalExpr(cdp, peerSid, `(() => ({ active: state.activeDesktopId, visiblePanels: [...document.querySelectorAll('.term-panel:not(.layout-hidden)')].length }))()`);
     assert.strictEqual(peerDesktopSelection.active, 'desktop-1', 'shared desktop updates must not switch another client locally');
     assert.ok(peerDesktopSelection.visiblePanels > 0, 'another client must keep rendering its locally selected desktop');
@@ -787,7 +824,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       createDesktop();
       createDesktop();
       renderDesktops();
-      const result = { count: state.panePrefs.desktopOrder.length, addDisabled: document.getElementById('addDesktop').disabled };
+      const result = { count: state.panePrefs.desktopOrder.length, ids: state.panePrefs.desktopOrder };
       loadPanePrefs(prefs);
       state.activeDesktopId = active;
       state.hydrating = wasHydrating;
@@ -795,7 +832,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       renderSwitcher();
       return result;
     })()`);
-    assert.deepStrictEqual(desktopLimit, { count: 3, addDisabled: true }, 'desktop creation must stop at the initial maximum of three');
+    assert.deepStrictEqual(desktopLimit, { count: 3, ids: ['desktop-1', 'desktop-2', 'desktop-3'] }, 'desktop creation must be a no-op: exactly three fixed desktops always exist');
 
     const firstDesktopDeletion = await evalExpr(cdp, sid, `(() => {
       const removedId = 'desktop-1';
@@ -847,17 +884,17 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.deepStrictEqual(
       { removed: firstDesktopDeletion.removed, first: firstDesktopDeletion.first, allMoved: firstDesktopDeletion.allMoved },
-      { removed: true, first: desktopCreation.active, allMoved: true },
-      `deleting the first desktop must promote the surviving desktop: ${JSON.stringify(firstDesktopDeletion)}`
+      { removed: false, first: 'desktop-1', allMoved: false },
+      `deleting a fixed desktop must be a no-op: ${JSON.stringify(firstDesktopDeletion)}`
     );
-    assert.deepStrictEqual(firstDesktopDeletion.blocker, firstDesktopDeletion.blockerExpected, `promoting a desktop must preserve its existing window geometry: ${JSON.stringify(firstDesktopDeletion)}`);
+    assert.deepStrictEqual(firstDesktopDeletion.blocker, firstDesktopDeletion.blockerExpected, `fixed desktops must preserve their existing window geometry: ${JSON.stringify(firstDesktopDeletion)}`);
     await evalExpr(cdp, sid, `document.querySelector('[data-desktop-id="desktop-1"]').click()`);
     await waitEval(cdp, sid, `state.activeDesktopId === 'desktop-1'`);
     const desktopMoveChoices = await evalExpr(cdp, sid, `(() => {
       state.sessions.get('${madeSessions[0]}').el.querySelector('.arrange').click();
       return [...document.querySelectorAll('#layoutAssist [data-target-desktop-id]')].map(button => button.textContent.trim());
     })()`);
-    assert.deepStrictEqual(desktopMoveChoices, ['Move to Desktop 2'], 'Arrange menu must offer every other desktop as a move target');
+    assert.deepStrictEqual(desktopMoveChoices, ['Move to Desktop 2', 'Move to Desktop 3'], 'Arrange menu must offer every other fixed desktop as a move target');
     const movedPane = await evalExpr(cdp, sid, `(async () => {
       document.querySelector('#layoutAssist [data-target-desktop-id]').click();
       await new Promise(resolve => setTimeout(resolve, 200));
@@ -1110,18 +1147,16 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.deepStrictEqual(desktopLifecycle, {
       renamed: 'Desktop 2',
-      removed: true,
-      paneDesktop: 'desktop-1',
+      removed: false,
+      paneDesktop: 'desktop-2',
       attention: true,
       sessionsUnchanged: true,
-      confirmation: { open: true, title: 'Delete desktop?', text: '1 window will be moved to another desktop.', action: 'Delete' }
-    }, 'desktop deletion must use the themed confirmation modal, preserve panes and surface hidden-desktop response attention');
-    await waitEval(cdp, sid, `state.saveTimer === null && state.panePrefs.desktopOrder.length === 1`);
-    await waitEval(cdp, peerSid, `state.panePrefs.desktopOrder.length === 1`);
+      confirmation: { open: false, title: '', text: '', action: 'Close' }
+    }, 'fixed desktops must ignore delete gestures, keep their panes and surface hidden-desktop response attention');
+    await waitEval(cdp, sid, `state.saveTimer === null && state.panePrefs.desktopOrder.length === 3`);
+    await waitEval(cdp, peerSid, `state.panePrefs.desktopOrder.length === 3`);
     const launchDesktop = await evalExpr(cdp, sid, `(async () => {
-      state.panePrefs.desktops['desktop-1'].name = 'Work';
-      renderDesktops();
-      document.getElementById('addDesktop').click();
+      selectDesktop('desktop-2');
       const target = state.activeDesktopId;
       const defaultName = state.panePrefs.desktops[target].name;
       const renameUnavailable = !document.querySelector('.desktop-rename');
@@ -1140,8 +1175,8 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     })()`);
     assert.deepStrictEqual(
       { assigned: launchDesktop.assigned, target: launchDesktop.target, defaultName: launchDesktop.defaultName, renameUnavailable: launchDesktop.renameUnavailable, visible: launchDesktop.visible },
-      { assigned: launchDesktop.target, target: launchDesktop.target, defaultName: 'Desktop 1', renameUnavailable: true, visible: true },
-      'new desktops must reuse the lowest free default name, expose no rename control and receive new sessions'
+      { assigned: launchDesktop.target, target: launchDesktop.target, defaultName: 'Desktop 2', renameUnavailable: true, visible: true },
+      'fixed desktops must keep canonical names, expose no rename control and receive new sessions'
     );
     await waitEval(cdp, peerSid, `state.sessions.has('${launchDesktop.id}') && state.panePrefs.paneDesktop['${launchDesktop.id}'] === '${launchDesktop.target}'`);
     const remoteLaunchIsolation = await evalExpr(cdp, peerSid, `(() => ({
@@ -1158,7 +1193,9 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       return { staleAssignment };
     })()`);
     assert.deepStrictEqual(launchCleanup, { staleAssignment: false }, 'closed sessions must remove their desktop assignment');
-    await waitEval(cdp, sid, `state.saveTimer === null && state.panePrefs.desktopOrder.length === 1`);
+    await waitEval(cdp, sid, `state.saveTimer === null && state.panePrefs.desktopOrder.length === 3`);
+    await evalExpr(cdp, sid, `(() => { movePaneToDesktop('${madeSessions[0]}', 'desktop-1'); selectDesktop('desktop-1'); })()`);
+    await waitEval(cdp, sid, `state.panePrefs.paneDesktop['${madeSessions[0]}'] === 'desktop-1' && state.activeDesktopId === 'desktop-1' && state.saveTimer === null`);
     const expectedSharedDesktopRect = await evalExpr(cdp, sid, `(() => {
       const rect = windowPrefs()['${madeSessions[0]}'];
       return { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
@@ -4412,7 +4449,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const visible = [...document.querySelectorAll('.term-panel')].filter(panel => !panel.classList.contains('layout-hidden'));
       const panel = visible[0];
       const grid = document.getElementById('termGrid');
-      const targets = [document.querySelector('#compactLaunchMenu > .compact-menu-toggle'), document.querySelector('#compactActionsMenu > .compact-menu-toggle'), document.getElementById('addDesktop'), document.querySelector('.switcher-btn'), document.querySelector('.switcher-close')]
+      const targets = [document.querySelector('#compactLaunchMenu > .compact-menu-toggle'), document.querySelector('#compactActionsMenu > .compact-menu-toggle'), document.querySelector('.desktop-tab'), document.querySelector('.switcher-btn'), document.querySelector('.switcher-close')]
         .map(el => ({ id: el?.id || el?.className || '', ...rect(el) }));
       const before = structuredClone(windowPrefs()[state.activeId]);
       startPointerDrag(state.activeId, panel.querySelector('.term-header'), { button: 0 });
