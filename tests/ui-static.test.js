@@ -456,7 +456,7 @@ assert.ok(
 );
 const replayNormalizer = app.slice(app.indexOf('function normalizeReplayText'), app.indexOf('function sanitizeTerminalOutput'));
 assert.ok(!replayNormalizer.includes(".replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '')"), 'tmux replay normalization must not strip SGR with every CSI control');
-assert.ok(html.includes('app.js?v=20260822-bell-fix') && html.includes('style.css?v=20260822-bell-fix'), 'client cache keys must activate the response-bell fix (mouse reports must not clear attention, bell beside dot)');
+assert.ok(html.includes('app.js?v=20260822-bell-touch-ack') && html.includes('style.css?v=20260822-bell-touch-ack'), 'client cache keys must activate the response-bell fix including deliberate touch acknowledgement');
 assert.ok(html.includes('interactive-widget=resizes-content'), 'mobile soft keyboards must resize PassiDeck content instead of covering the TUI composer');
 assert.ok(
   style.includes('height: var(--passideck-viewport-height, 100dvh)') &&
@@ -479,8 +479,9 @@ assert.ok(
   terminalTouchBlock.includes('resetTouchScroll();') &&
   terminalTouchBlock.includes("selectPanel(session.id, { focus: false })") &&
   terminalTouchBlock.includes("sendApplicationMouse(lines < 0 ? 64 : 65, e.touches[0])") &&
+  terminalTouchEndBlock.includes('clearResponseAttention(session.id)') &&
   terminalTouchBlock.includes("sendApplicationMouse(0, touch, true)"),
-  'Hermes TUI touch gestures must bypass text drag-selection and enter xterm through its wheel owner'
+  'Hermes TUI touch gestures must bypass text drag-selection, acknowledge a completed tap, and enter xterm through its wheel owner'
 );
 assert.ok(
   !terminalTouchStartBlock.includes('term.focus()') &&

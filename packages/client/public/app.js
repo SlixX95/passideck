@@ -2287,6 +2287,7 @@ function installTerminalWheelScroll(termEl, term, session = null) {
   const endTouchScroll = () => {
     if (touchApplication && touchDistance < 8 && touchStartX !== null && touchStartY !== null) {
       const touch = { clientX: touchStartX, clientY: touchStartY };
+      clearResponseAttention(session.id);
       term.focus();
       syncTerminalInputFocus(true);
       sendApplicationMouse(0, touch);

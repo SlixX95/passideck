@@ -3134,6 +3134,13 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         }
       })()`);
       await evalExpr(cdp, sid, "document.getElementById('settingsToggle').focus()");
+      const swipeAttention = await evalExpr(cdp, sid, `(() => {
+        const entry = window.__tuiTouchRestore.entry;
+        entry.responseAttention = true;
+        updateSessionIndicator(entry.session.id);
+        return { attention: entry.responseAttention, bell: Boolean(entry.el.querySelector('.response-bell')) };
+      })()`);
+      assert.deepStrictEqual(swipeAttention, { attention: true, bell: true }, 'Hermes TUI swipe acknowledgement regression must begin with visible response attention');
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: tuiTouchSetup.x, y: tuiTouchSetup.startY, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
       const swipeStartFocused = await evalExpr(cdp, sid, `document.activeElement === window.__tuiTouchRestore.entry.el.querySelector('.xterm-helper-textarea')`);
       for (let step = 1; step <= 6; step++) {
@@ -3141,15 +3148,42 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: tuiTouchSetup.x, y, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
       }
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, sid);
-      const swipeEndFocused = await evalExpr(cdp, sid, `document.activeElement === window.__tuiTouchRestore.entry.el.querySelector('.xterm-helper-textarea')`);
+      const swipeEndState = await evalExpr(cdp, sid, `(() => {
+        const entry = window.__tuiTouchRestore.entry;
+        return {
+          focused: document.activeElement === entry.el.querySelector('.xterm-helper-textarea'),
+          attention: entry.responseAttention,
+          bell: Boolean(entry.el.querySelector('.response-bell'))
+        };
+      })()`);
+      const swipeEndFocused = swipeEndState.focused;
+      assert.deepStrictEqual(
+        swipeEndState,
+        { focused: false, attention: true, bell: true },
+        'a Hermes TUI touch swipe must preserve response attention while forwarding wheel input'
+      );
       const tuiTapPoint = await evalExpr(cdp, sid, `(() => {
-        const rect = window.__tuiTouchRestore.entry.el.querySelector('.xterm-screen').getBoundingClientRect();
+        const entry = window.__tuiTouchRestore.entry;
+        const rect = entry.el.querySelector('.xterm-screen').getBoundingClientRect();
         return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
       })()`);
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: tuiTapPoint.x, y: tuiTapPoint.y, radiusX: 1, radiusY: 1, force: 1 }] }, sid);
       const tapStartFocused = await evalExpr(cdp, sid, `document.activeElement === window.__tuiTouchRestore.entry.el.querySelector('.xterm-helper-textarea')`);
       await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }, sid);
-      const tapEndFocused = await evalExpr(cdp, sid, `document.activeElement === window.__tuiTouchRestore.entry.el.querySelector('.xterm-helper-textarea')`);
+      const tapEndState = await evalExpr(cdp, sid, `(() => {
+        const entry = window.__tuiTouchRestore.entry;
+        return {
+          focused: document.activeElement === entry.el.querySelector('.xterm-helper-textarea'),
+          attention: entry.responseAttention,
+          bell: Boolean(entry.el.querySelector('.response-bell'))
+        };
+      })()`);
+      const tapEndFocused = tapEndState.focused;
+      assert.deepStrictEqual(
+        tapEndState,
+        { focused: true, attention: false, bell: false },
+        'a completed Hermes TUI touch tap must focus the terminal and acknowledge its response attention'
+      );
       const keyboardLayouts = [];
       for (const metrics of [
         { label: 'phone', width: 390, height: 500, deviceScaleFactor: 3 },
@@ -3235,6 +3269,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         listener.dispose();
         entry.el.querySelector('.terminal').removeEventListener('mousedown', mouseProbe);
         socket.send = originalSend;
+        clearResponseAttention(entry.session.id);
         try {
           await new Promise(resolve => entry.term.write('\\x1b[?1000l\\x1b[?1006l\\x1b[?1049l', resolve));
           entry.term.reset();
