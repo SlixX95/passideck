@@ -11,6 +11,8 @@ const MAC_DOCK_BOUNCE_INTERVAL_MS = 800;
 const RESIZE_DIRECTIONS = new Set(['top', 'right', 'bottom', 'left', 'top-left', 'top-right', 'bottom-left', 'bottom-right']);
 const MIN_WINDOW_WIDTH = 800;
 const MIN_WINDOW_HEIGHT = 500;
+const POPOUT_MIN_WIDTH = 320;
+const POPOUT_MIN_HEIGHT = 240;
 const POPOUT_DOCK_CHECK_MS = 120;
 let mainWindow;
 let config;
@@ -29,8 +31,8 @@ function normalizePopoutRect(value) {
   return {
     x: num(value?.x, undefined, -32000, 32000),
     y: num(value?.y, undefined, -32000, 32000),
-    width: num(value?.width, 720, 320, 16000),
-    height: num(value?.height, 480, 240, 16000)
+    width: num(value?.width, 720, POPOUT_MIN_WIDTH, 16000),
+    height: num(value?.height, 480, POPOUT_MIN_HEIGHT, 16000)
   };
 }
 
@@ -475,27 +477,40 @@ function assertShellSender(event) {
   }
 }
 
-function assertResizeSender(event) {
-  if (event.sender === mainWindow?.webContents) assertShellSender(event);
-  else backendIdForSender(event);
+function resizeTargetForSender(event) {
+  if (event.senderFrame !== event.sender.mainFrame) throw new Error('Untrusted PassiDeck resize frame');
+  if (event.sender === mainWindow?.webContents) {
+    return { win: mainWindow, minWidth: MIN_WINDOW_WIDTH, minHeight: MIN_WINDOW_HEIGHT };
+  }
+  for (const entry of backendViews.values()) {
+    if (entry.view.webContents === event.sender) {
+      return { win: mainWindow, minWidth: MIN_WINDOW_WIDTH, minHeight: MIN_WINDOW_HEIGHT };
+    }
+  }
+  for (const entry of popoutWindows.values()) {
+    if (entry.win.webContents === event.sender) {
+      return { win: entry.win, minWidth: POPOUT_MIN_WIDTH, minHeight: POPOUT_MIN_HEIGHT };
+    }
+  }
+  throw new Error('Unknown PassiDeck resize sender');
 }
 
 function resizeWindowFromRenderer(event, phase, value = {}) {
-  assertResizeSender(event);
-  if (process.platform !== 'win32' || !mainWindow || mainWindow.isDestroyed()) return;
+  const target = resizeTargetForSender(event);
+  if (process.platform !== 'win32' || !target.win || target.win.isDestroyed()) return;
   if (phase === 'end') {
-    resizeDrag = null;
+    if (resizeDrag?.win === target.win) resizeDrag = null;
     return;
   }
   const screenX = Number(value.screenX);
   const screenY = Number(value.screenY);
   if (!Number.isFinite(screenX) || !Number.isFinite(screenY)) return;
   if (phase === 'start') {
-    if (!RESIZE_DIRECTIONS.has(value.direction) || mainWindow.isMaximized()) return;
-    resizeDrag = { direction: value.direction, screenX, screenY, bounds: mainWindow.getBounds() };
+    if (!RESIZE_DIRECTIONS.has(value.direction) || target.win.isMaximized()) return;
+    resizeDrag = { win: target.win, minWidth: target.minWidth, minHeight: target.minHeight, direction: value.direction, screenX, screenY, bounds: target.win.getBounds() };
     return;
   }
-  if (phase !== 'move' || !resizeDrag) return;
+  if (phase !== 'move' || !resizeDrag || resizeDrag.win !== target.win) return;
   const dx = screenX - resizeDrag.screenX;
   const dy = screenY - resizeDrag.screenY;
   const start = resizeDrag.bounds;
@@ -503,11 +518,11 @@ function resizeWindowFromRenderer(event, phase, value = {}) {
   let right = start.x + start.width;
   let top = start.y;
   let bottom = start.y + start.height;
-  if (resizeDrag.direction.includes('left')) left = Math.min(right - MIN_WINDOW_WIDTH, start.x + dx);
-  if (resizeDrag.direction.includes('right')) right = Math.max(left + MIN_WINDOW_WIDTH, start.x + start.width + dx);
-  if (resizeDrag.direction.includes('top')) top = Math.min(bottom - MIN_WINDOW_HEIGHT, start.y + dy);
-  if (resizeDrag.direction.includes('bottom')) bottom = Math.max(top + MIN_WINDOW_HEIGHT, start.y + start.height + dy);
-  mainWindow.setBounds({
+  if (resizeDrag.direction.includes('left')) left = Math.min(right - resizeDrag.minWidth, start.x + dx);
+  if (resizeDrag.direction.includes('right')) right = Math.max(left + resizeDrag.minWidth, start.x + start.width + dx);
+  if (resizeDrag.direction.includes('top')) top = Math.min(bottom - resizeDrag.minHeight, start.y + dy);
+  if (resizeDrag.direction.includes('bottom')) bottom = Math.max(top + resizeDrag.minHeight, start.y + start.height + dy);
+  resizeDrag.win.setBounds({
     x: Math.round(left),
     y: Math.round(top),
     width: Math.round(right - left),

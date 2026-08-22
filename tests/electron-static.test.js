@@ -48,7 +48,7 @@ assert.ok(
 assert.ok(
   main.includes("ipcMain.on('passideck:window-resize'") &&
   main.includes('const RESIZE_DIRECTIONS = new Set') &&
-  main.includes('function assertResizeSender') &&
+  main.includes('function resizeTargetForSender') &&
   main.includes('function resizeWindowFromRenderer') &&
   shellJs.includes("document.querySelectorAll('.resize-handle')") &&
   shellHtml.includes('data-resize="bottom-right"') &&
@@ -326,5 +326,7 @@ assert.ok(main.includes('const popoutWindows = new Map()') && main.includes('fun
 assert.ok(main.includes("ipcMain.handle('passideck:detach-pane'") && main.includes("action === 'terminate'"), 'Electron must detach and terminate popout sessions through validated IPC');
 assert.ok(main.includes('options.rect || remembered'), 'pointer-release geometry must override remembered position');
 assert.ok(preload.includes('detachPane') && preload.includes('redockRequest') && preload.includes('focusPopout'), 'backend preload must expose the narrow popout bridge');
+assert.ok(main.includes('popoutWindows.values()') && main.includes('resizeDrag = { win: target.win'), 'resize IPC must recognize the popout sender and bind the drag to that native window');
+assert.ok(main.includes('resizeDrag.win.setBounds') && main.includes('minWidth: POPOUT_MIN_WIDTH'), 'popout resizing must update its own bounds with popout minimums');
 
 console.log('electron-static ok');
