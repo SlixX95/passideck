@@ -11,6 +11,7 @@ const MAC_DOCK_BOUNCE_INTERVAL_MS = 800;
 const RESIZE_DIRECTIONS = new Set(['top', 'right', 'bottom', 'left', 'top-left', 'top-right', 'bottom-left', 'bottom-right']);
 const MIN_WINDOW_WIDTH = 800;
 const MIN_WINDOW_HEIGHT = 500;
+const POPOUT_DOCK_CHECK_MS = 120;
 let mainWindow;
 let config;
 let dialogOpen = false;
@@ -18,6 +19,20 @@ let resizeDrag = null;
 let dockBounceTimers = [];
 let dockBounceIds = [];
 const backendViews = new Map();
+const popoutWindows = new Map();
+
+function normalizePopoutRect(value) {
+  const num = (input, fallback, min, max) => {
+    const parsed = Number(input);
+    return Number.isFinite(parsed) ? Math.max(min, Math.min(max, Math.round(parsed))) : fallback;
+  };
+  return {
+    x: num(value?.x, undefined, -32000, 32000),
+    y: num(value?.y, undefined, -32000, 32000),
+    width: num(value?.width, 720, 320, 16000),
+    height: num(value?.height, 480, 240, 16000)
+  };
+}
 
 if (process.env.PASSIDECK_SMOKE_USER_DATA) app.setPath('userData', process.env.PASSIDECK_SMOKE_USER_DATA);
 
@@ -61,6 +76,7 @@ function shellState() {
   return {
     activeBackendId: config.activeBackendId,
     globalSoundEnabled: config.globalSoundEnabled,
+    popoutRememberGeometry: config.popoutRememberGeometry !== false,
     backends: config.backends.map(backend => {
       const entry = backendViews.get(backend.id);
       return {
@@ -312,6 +328,147 @@ function removeBackend(id) {
   notifyShell();
 }
 
+function popoutStateForShell() {
+  return [...popoutWindows.keys()];
+}
+
+// Popout lifecycle events concern the backend renderers (app.js), not the shell.
+function notifyBackendViews(channel, payload) {
+  for (const { view } of backendViews.values()) {
+    if (!view.webContents.isDestroyed()) view.webContents.send(channel, payload);
+  }
+}
+
+function notifyPopoutState() {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('passideck:popouts-changed', popoutStateForShell());
+}
+
+function popoutBackendForSender(event) {
+  if (event.senderFrame !== event.sender.mainFrame) throw new Error('Untrusted PassiDeck popout frame');
+  for (const entry of popoutWindows.values()) {
+    if (entry.win.webContents === event.sender) return entry;
+  }
+  throw new Error('Unknown PassiDeck popout');
+}
+
+function popoutUrl(backend, paneId) {
+  const url = new URL(backend.url);
+  url.searchParams.set('pane', paneId);
+  url.searchParams.set('popout', '1');
+  return url.href;
+}
+/* popout-url-params: pane + popout */
+
+function savePopoutGeometry(sessionId) {
+  const entry = popoutWindows.get(sessionId);
+  if (!entry || entry.win.isDestroyed() || entry.win.isMinimized()) return;
+  const bounds = entry.win.getBounds();
+  entry.geometry = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
+  entry.alwaysOnTop = entry.win.isAlwaysOnTop();
+}
+
+function persistPopoutPrefs() {
+  if (config.popoutRememberGeometry === false) return;
+  const prefs = {};
+  for (const [sessionId, entry] of popoutWindows) {
+    if (entry.geometry) prefs[sessionId] = { ...entry.geometry, alwaysOnTop: Boolean(entry.alwaysOnTop) };
+  }
+  for (const [sessionId, pref] of Object.entries(config.popoutPrefs || {})) {
+    if (!popoutWindows.has(sessionId)) prefs[sessionId] = pref;
+  }
+  config.popoutPrefs = prefs;
+  writeConfig();
+}
+
+function redockPane(sessionId, { reason } = {}) {
+  const entry = popoutWindows.get(sessionId);
+  if (!entry) return false;
+  savePopoutGeometry(sessionId);
+  persistPopoutPrefs();
+  popoutWindows.delete(sessionId);
+  if (!entry.win.isDestroyed()) entry.win.destroy();
+  notifyBackendViews('passideck:redock-pane', { sessionId, reason: reason || 'drag' });
+  notifyPopoutState();
+  return true;
+}
+
+function createPopoutWindow(backend, sessionId, options = {}) {
+  if (popoutWindows.has(sessionId)) return popoutWindows.get(sessionId).win;
+  const remembered = config.popoutRememberGeometry === false
+    ? null
+    : config.popoutPrefs?.[sessionId];
+  const rect = normalizePopoutRect(options.rect || remembered || {});
+  const win = new BrowserWindow({
+    width: rect.width,
+    height: rect.height,
+    ...(Number.isFinite(rect.x) && Number.isFinite(rect.y) ? { x: rect.x, y: rect.y } : {}),
+    frame: false,
+    show: false,
+    title: 'PassiDeck',
+    autoHideMenuBar: true,
+    backgroundColor: '#020505',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true
+    }
+  });
+  const entry = { win, backendId: backend.id, sessionId, geometry: null, alwaysOnTop: false, dragMonitorTimer: null };
+  popoutWindows.set(sessionId, entry);
+  win.webContents.on('context-menu', (_event, params) => {
+    void copySelectionOnContextMenu(win.webContents, params);
+  });
+  win.webContents.on('will-navigate', (event, url) => {
+    if (new URL(url).origin !== new URL(backend.url).origin) event.preventDefault();
+  });
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    try {
+      if (['http:', 'https:'].includes(new URL(url).protocol)) shell.openExternal(url).catch(() => {});
+    } catch {}
+    return { action: 'deny' };
+  });
+  win.once('ready-to-show', () => {
+    if (remembered?.alwaysOnTop) {
+      win.setAlwaysOnTop(true);
+      entry.alwaysOnTop = true;
+    }
+    win.show();
+  });
+  win.on('close', () => {
+    if (!popoutWindows.has(sessionId)) return;
+    savePopoutGeometry(sessionId);
+    persistPopoutPrefs();
+    popoutWindows.delete(sessionId);
+    notifyBackendViews('passideck:redock-pane', { sessionId, reason: 'close' });
+    notifyPopoutState();
+  });
+  win.on('moved', () => {
+    if (entry.dragMonitorTimer) return;
+    entry.dragMonitorTimer = setInterval(() => {
+      if (entry.win.isDestroyed() || entry.win.isMinimized()) return;
+      if (popoutCenterOverMainWindow(entry.win)) redockPane(sessionId, { reason: 'drag' });
+    }, POPOUT_DOCK_CHECK_MS);
+  });
+  win.on('close', () => {
+    if (entry.dragMonitorTimer) { clearInterval(entry.dragMonitorTimer); entry.dragMonitorTimer = null; }
+  });
+  win.webContents.loadURL(popoutUrl(backend, sessionId));
+  notifyPopoutState();
+  return win;
+}
+
+function popoutCenterOverMainWindow(win) {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMinimized()) return false;
+  const [mx, my] = mainWindow.getPosition();
+  const [mw, mh] = mainWindow.getSize();
+  const [px, py] = win.getPosition();
+  const [pw, ph] = win.getSize();
+  const cx = px + pw / 2;
+  const cy = py + ph / 2;
+  return cx > mx && cx < mx + mw && cy > my && cy < my + mh;
+}
+
 function assertShellSender(event) {
   if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== event.sender.mainFrame) {
     throw new Error('Untrusted PassiDeck shell');
@@ -394,6 +551,10 @@ function createWindow() {
       if (!view.webContents.isDestroyed()) view.webContents.close();
     }
     backendViews.clear();
+    for (const entry of popoutWindows.values()) {
+      if (!entry.win.isDestroyed()) entry.win.destroy();
+    }
+    popoutWindows.clear();
   });
   win.loadFile(path.join(__dirname, 'shell.html')).then(() => {
     for (const backend of config.backends) createBackendView(backend);
@@ -468,6 +629,65 @@ app.whenReady().then(() => {
     else if (action === 'minimize') mainWindow.minimize();
     else if (action === 'maximize') mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize();
     else if (action === 'close') mainWindow.close();
+  });
+  ipcMain.handle('passideck:detach-pane', (event, request) => {
+    const sessionId = String(request?.sessionId || '');
+    const backend = config.backends.find(item => item.id === backendIdForSender(event));
+    if (!sessionId || !backend) throw new Error('Invalid detach request');
+    createPopoutWindow(backend, sessionId, { rect: normalizePopoutRect(request?.rect || {}) });
+    return popoutStateForShell();
+  });
+  ipcMain.handle('passideck:redock-request', event => {
+    const entry = popoutBackendForSender(event);
+    redockPane(entry.sessionId, { reason: 'button' });
+    return true;
+  });
+  ipcMain.handle('passideck:focus-popout', (event, sessionId) => {
+    assertShellSender(event);
+    const entry = popoutWindows.get(String(sessionId || ''));
+    if (!entry || entry.win.isDestroyed()) return false;
+    if (entry.win.isMinimized()) entry.win.restore();
+    entry.win.focus();
+    return true;
+  });
+  ipcMain.handle('passideck:popout-action', (event, action) => {
+    const entry = popoutBackendForSender(event);
+    const win = entry.win;
+    if (win.isDestroyed()) return false;
+    if (action === 'reload') win.webContents.reload();
+    else if (action === 'minimize') win.minimize();
+    else if (action === 'maximize') win.isMaximized() ? win.unmaximize() : win.maximize();
+    else if (action === 'terminate') {
+      savePopoutGeometry(entry.sessionId);
+      popoutWindows.delete(entry.sessionId);
+      if (config.popoutPrefs) delete config.popoutPrefs[entry.sessionId];
+      writeConfig();
+      notifyBackendViews('passideck:redock-pane', { sessionId: entry.sessionId, reason: 'terminated' });
+      notifyPopoutState();
+      setImmediate(() => { if (!win.isDestroyed()) win.destroy(); });
+      return true;
+    }
+    else if (action === 'always-on-top') {
+      const next = !win.isAlwaysOnTop();
+      win.setAlwaysOnTop(next);
+      entry.alwaysOnTop = next;
+      persistPopoutPrefs();
+      return next;
+    }
+    else if (action === 'always-on-top-state') return win.isAlwaysOnTop();
+    return undefined;
+  });
+  ipcMain.handle('passideck:get-popout-prefs', event => {
+    popoutBackendForSender(event);
+    return { rememberGeometry: config.popoutRememberGeometry !== false };
+  });
+  ipcMain.handle('passideck:set-popout-remember-geometry', (event, enabled) => {
+    assertShellSender(event);
+    config.popoutRememberGeometry = Boolean(enabled);
+    if (!config.popoutRememberGeometry) config.popoutPrefs = {};
+    writeConfig();
+    notifyShell();
+    return config.popoutRememberGeometry;
   });
   mainWindow = createWindow();
   mainWindow.webContents.session.setPermissionRequestHandler((webContents, permission, callback, details) => {

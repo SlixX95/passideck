@@ -53,6 +53,8 @@ function normalizeConfig(value = {}) {
     activeBackendId,
     globalSoundEnabled: value.globalSoundEnabled !== false,
     notifyBlinking: value.notifyBlinking !== false,
+    popoutRememberGeometry: value.popoutRememberGeometry !== false,
+    popoutPrefs: value.popoutPrefs && typeof value.popoutPrefs === 'object' ? value.popoutPrefs : {},
     backends
   };
 }

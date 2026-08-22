@@ -321,4 +321,10 @@ assert.ok(workflow.includes("runner.name }}' -ne 'ai-server-passideck-dev'"), 'p
 assert.ok(!workflow.includes('pull_request:'), 'untrusted PR code must never execute on the persistent self-hosted runner');
 assert.ok(workflow.includes('contents: read'), 'build workflow token must stay read-only');
 
+// Native pane-popout Electron regression
+assert.ok(main.includes('const popoutWindows = new Map()') && main.includes('function createPopoutWindow'), 'Electron must own one native window per detached pane');
+assert.ok(main.includes("ipcMain.handle('passideck:detach-pane'") && main.includes("action === 'terminate'"), 'Electron must detach and terminate popout sessions through validated IPC');
+assert.ok(main.includes('options.rect || remembered'), 'pointer-release geometry must override remembered position');
+assert.ok(preload.includes('detachPane') && preload.includes('redockRequest') && preload.includes('focusPopout'), 'backend preload must expose the narrow popout bridge');
+
 console.log('electron-static ok');
