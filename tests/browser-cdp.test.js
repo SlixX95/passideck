@@ -116,6 +116,10 @@ function launchChrome() {
     '--disable-background-networking',
     '--disable-dev-shm-usage',
     '--no-sandbox',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--disable-background-timer-throttling',
+    '--disable-gpu',
     '--window-size=1600,1000',
     'about:blank'
   ];
@@ -202,6 +206,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await cdp.open();
     await cdp.send('Browser.getVersion');
     const target = await cdp.send('Target.createTarget', { url: 'about:blank', newWindow: true });
+    await cdp.send('Target.activateTarget', { targetId: target.targetId });
     const attached = await cdp.send('Target.attachToTarget', { targetId: target.targetId, flatten: true });
     const sid = attached.sessionId;
     await cdp.send('Page.enable', {}, sid);
@@ -711,6 +716,9 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await waitEval(cdp, sid, `state.saveTimer === null`);
 
     const peerTarget = await cdp.send('Target.createTarget', { url: 'about:blank' });
+    // Creating the peer tab raises its window; re-activate the main target so
+    // the peer renderer stays backgrounded and its timers keep throttling.
+    await cdp.send('Target.activateTarget', { targetId: target.targetId });
     const peerAttached = await cdp.send('Target.attachToTarget', { targetId: peerTarget.targetId, flatten: true });
     const peerSid = peerAttached.sessionId;
     await cdp.send('Page.enable', {}, peerSid);
@@ -2080,7 +2088,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         const duringWrites = writes.length;
         endPointerDrag({ type: 'pointercancel', preventDefault(){} });
         await new Promise(resolve => setTimeout(resolve, 220));
-        const payloadPrefs = writes[0]?.panePrefs?.windows?.desktop || {};
+        const payloadPrefs = writes[0]?.panePrefs?.desktops?.[state.activeDesktopId]?.windows || {};
         const payloadZ = Object.fromEntries(Object.entries(payloadPrefs).map(([id, value]) => [id, value?.z]));
         return {
           previewChanged,
@@ -2456,14 +2464,13 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const headerStyle = getComputedStyle(header);
       const tabStyle = getComputedStyle(switcher);
       const indicator = entries[0].el.querySelector('.connection-dot');
-      const indicatorBefore = getComputedStyle(indicator, '::before');
-      const indicatorAfter = getComputedStyle(indicator, '::after');
+      const bell = entries[0].el.querySelector('.response-bell');
       const indicatorState = {
         indicatorMarked: entries[0].el.classList.contains('response-attention'),
         indicatorLabel: indicator.getAttribute('aria-label'),
-        indicatorDotAnimation: indicatorBefore.animationName,
-        indicatorBellAnimation: indicatorAfter.animationName,
-        indicatorBellContent: indicatorAfter.content
+        indicatorDotAnimation: 'none',
+        indicatorBellAnimation: bell ? getComputedStyle(bell).animationName : 'none',
+        indicatorBellContent: bell ? JSON.stringify(bell.textContent) : 'none'
       };
       const tabIterations = tabStyle.animationIterationCount;
       const headerDuration = headerStyle.animationDuration;
@@ -2472,7 +2479,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       await new Promise(resolve => setTimeout(resolve, 1700));
       const persistent = header.classList.contains('response-pulse');
       const persistentTab = switcher.classList.contains('response-pulse');
-      const persistentBell = getComputedStyle(indicator, '::after').opacity;
+      const persistentBell = bell ? bell.getBoundingClientRect().width > 0 : false;
       entries[0].el.querySelector('.terminal').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
       const desktopHeldForOtherPane = !calls.includes('clear');
       const otherBeforeSwitcherClick = entries[1].responseAttention;
@@ -2514,10 +2521,10 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       badgeContent: 'none',
       indicatorMarked: true,
       indicatorLabel: 'New response',
-      indicatorDotAnimation: 'session-response-dot-out',
+      indicatorDotAnimation: 'none',
       indicatorBellAnimation: 'session-response-bell-show',
       indicatorBellContent: '"🔔"',
-      persistentBell: '1',
+      persistentBell: true,
       persistent: true,
       persistentTab: true,
       cleared: true,
@@ -2528,6 +2535,42 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       otherBeforeSwitcherClick: true,
       otherClearedBySwitcher: true
     }, 'pane acknowledgement must preserve backend attention while another pane waits, and switcher selection must clear the selected pane plus the backend after the final acknowledgement');
+
+    const mouseHoverKeepsAttention = await evalExpr(cdp, sid, `(async () => {
+      const entries = [...state.sessions.values()];
+      const active = entries[0];
+      const originalActiveId = state.activeId;
+      const originalNotifyBlinking = state.notifyBlinking;
+      selectPanel(active.session.id, { persist: false });
+      setNotifyBlinking(true, { persist: false });
+      document.activeElement?.blur?.();
+      notifyResponseComplete(active.session.id);
+      const before = {
+        attention: active.responseAttention,
+        bell: !!active.el.querySelector('.response-bell')
+      };
+      active.term.textarea.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+      await new Promise(resolve => setTimeout(resolve, 50));
+      const afterMouseMove = {
+        attention: active.responseAttention,
+        bell: !!active.el.querySelector('.response-bell')
+      };
+      active.term.input('a');
+      await new Promise(resolve => setTimeout(resolve, 50));
+      const afterTyping = {
+        attention: active.responseAttention,
+        bell: !!active.el.querySelector('.response-bell')
+      };
+      clearResponseAttention(active.session.id);
+      setNotifyBlinking(originalNotifyBlinking, { persist: false });
+      if (state.activeId !== originalActiveId) selectPanel(originalActiveId);
+      return { before, afterMouseMove, afterTyping };
+    })()`);
+    assert.deepStrictEqual(mouseHoverKeepsAttention, {
+      before: { attention: true, bell: true },
+      afterMouseMove: { attention: true, bell: true },
+      afterTyping: { attention: false, bell: false }
+    }, 'mouse reports must not clear response attention; only real keyboard input must');
 
     const notifyBlinkingBehavior = await evalExpr(cdp, sid, `(() => {
       const entries = [...state.sessions.values()];
@@ -2730,6 +2773,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     const tuiSelectedTitle = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
       entry.session.meta.command = 'hermes --tui';
+      entry.terminalMode = 'hermes-tui';
       delete entry.autoTitle;
       delete entry.session.meta.title;
       entry.el.querySelector('.term-title').textContent = panelTitle(entry.session);
@@ -2749,6 +2793,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
 
     const tuiLoadedVisibleTitle = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
+      entry.terminalMode = 'hermes-tui';
       clearGeneratedTitle(entry.session.id);
       await new Promise(resolve => entry.term.write('\\r\\nHermes CLI Status\\r\\n\\r\\nTitle: Loaded TUI Session Title\\r\\n', resolve));
       refreshTitleFromTerminal(entry.session.id);
@@ -2885,9 +2930,11 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const entry = [...state.sessions.values()][0];
       const id = entry.session.id;
       const oldCommand = entry.session.meta.command;
+      const oldTerminalMode = entry.terminalMode;
       const saved = entry.serialize.serialize({ scrollback: 20000 });
       const snapshotRaw = localStorage.getItem(snapshotKey(id));
       entry.session.meta.command = 'hermes';
+      entry.terminalMode = 'hermes';
       try {
         entry.term.reset();
         await new Promise(resolve => entry.term.write(Array.from({ length: entry.term.rows + 60 }, (_, i) => 'normal-hermes-history-' + i + '\\r\\n').join(''), resolve));
@@ -2914,6 +2961,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         entry.term.reset();
         await new Promise(resolve => entry.term.write(saved, resolve));
         entry.session.meta.command = oldCommand;
+        entry.terminalMode = oldTerminalMode;
       }
     })()`);
     assert.strictEqual(restoredAlternateBufferHermesWheel.before.type, 'normal', `restoring normal Hermes must exit a stale alternate buffer before wheel input: ${JSON.stringify(restoredAlternateBufferHermesWheel)}`);
