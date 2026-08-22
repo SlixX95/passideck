@@ -370,9 +370,14 @@ function bufferExpression(id) {
       applyHermesEvent(id, { type: 'hermes-event', event: { type: 'message.complete', payload: { working: true } } });
       const delegated = entry.working;
       applyHermesEvent(id, { type: 'hermes-event', event: { type: 'message.complete', payload: { working: false } } });
-      return { queued, started, delegated, completed: !entry.working, declaredCommand: entry.session.meta.command, mode: entry.terminalMode };
+      const completed = !entry.working;
+      entry.hermesEventsConnected = false;
+      syncSessionWorkingFromTerminal(id, entry, ['─ ready │ ⛓ 1 │ ↩ resumes when subagent finishes']);
+      const delegatedFallback = entry.working;
+      syncSessionWorkingFromTerminal(id, entry, ['─ ready │ ⛓ 0']);
+      return { queued, started, delegated, completed, delegatedFallback, fallbackCompleted: !entry.working, declaredCommand: entry.session.meta.command, mode: entry.terminalMode };
     })()`);
-    assert.deepStrictEqual(dynamicHermesEvents, { queued: true, started: true, delegated: true, completed: true, declaredCommand: '/bin/bash', mode: 'hermes-tui' });
+    assert.deepStrictEqual(dynamicHermesEvents, { queued: true, started: true, delegated: true, completed: true, delegatedFallback: true, fallbackCompleted: true, declaredCommand: '/bin/bash', mode: 'hermes-tui' });
     const tuiWheel = await waitFor(async () => {
       const value = await evaluate(cdp, sid, `(async () => {
         const entry = state.sessions.get(${JSON.stringify(manual.id)});

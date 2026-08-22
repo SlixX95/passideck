@@ -359,27 +359,30 @@ function applyHermesEvent(id, message) {
   }
 }
 
+function hermesTuiWorkingFromRows(rows = []) {
+  return rows.slice(-3).map(terminalLineText).some(line => (
+    line.includes('Ctrl+C to interrupt') ||
+    line.includes('resumes when subagent finishes')
+  ));
+}
+
 function syncSessionWorkingFromTerminal(id, entry, viewportRows = null) {
   if (!isHermesTuiEntry(entry)) return;
   if (entry.hermesEventsConnected) return;
   if (viewportRows) {
-    const working = viewportRows.slice(-2).some(row => terminalLineText(row).includes('Ctrl+C to interrupt'));
-    setSessionWorking(id, working);
+    setSessionWorking(id, hermesTuiWorkingFromRows(viewportRows));
     return;
   }
   const buffer = entry.term?.buffer?.active;
   if (!buffer) return;
   const viewportY = buffer.viewportY || 0;
   const end = Math.min(buffer.length || 0, viewportY + (entry.term.rows || 0));
-  let working = false;
-  for (let i = Math.max(viewportY, end - 2); i < end; i += 1) {
+  const rows = [];
+  for (let i = Math.max(viewportY, end - 3); i < end; i += 1) {
     const line = buffer.getLine(i);
-    if (line && line.translateToString(false).includes('Ctrl+C to interrupt')) {
-      working = true;
-      break;
-    }
+    if (line) rows.push(line.translateToString(false));
   }
-  setSessionWorking(id, working);
+  setSessionWorking(id, hermesTuiWorkingFromRows(rows));
 }
 
 function renderBackendLatency() {

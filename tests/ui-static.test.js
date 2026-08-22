@@ -286,7 +286,10 @@ assert.ok(
   app.includes('if (entry.hermesEventsConnected) return;') &&
   app.includes("if (msg.type === 'hermes-event' || msg.type === 'hermes-events') applyHermesEvent(id, msg);") &&
   app.includes("isHermesTuiEntry(entry)") &&
-  app.includes("line.translateToString(false).includes('Ctrl+C to interrupt')") &&
+  app.includes("function hermesTuiWorkingFromRows(rows = [])") &&
+  app.includes("line.includes('Ctrl+C to interrupt')") &&
+  app.includes("line.includes('resumes when subagent finishes')") &&
+  app.includes('line.translateToString(false)') &&
   app.includes("event.payload?.working === true") &&
   app.includes("event.payload.working ?? event.payload.running") &&
   app.includes('syncSessionWorkingFromTerminal(id, entry, rows);') &&
@@ -457,7 +460,7 @@ assert.ok(
 );
 const replayNormalizer = app.slice(app.indexOf('function normalizeReplayText'), app.indexOf('function sanitizeTerminalOutput'));
 assert.ok(!replayNormalizer.includes(".replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '')"), 'tmux replay normalization must not strip SGR with every CSI control');
-assert.ok(html.includes('app.js?v=20260822-fixed-desktops-bell-touch-ack') && html.includes('style.css?v=20260822-fixed-desktops-bell-touch-ack'), 'client cache keys must activate fixed Desktop 1-3 and response-bell touch-ack behavior including native pane popouts');
+assert.ok(html.includes('app.js?v=20260822-working-fallback') && html.includes('style.css?v=20260822-working-fallback'), 'client cache keys must activate delegated working fallback after the native Hermes event bridge disconnects');
 assert.ok(html.includes('interactive-widget=resizes-content'), 'mobile soft keyboards must resize PassiDeck content instead of covering the TUI composer');
 assert.ok(
   style.includes('height: var(--passideck-viewport-height, 100dvh)') &&
