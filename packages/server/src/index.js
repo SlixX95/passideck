@@ -51,6 +51,7 @@ const TMUX_COMMAND_TIMEOUT_MS = 3000;
 const TMUX_HYDRATION_SETTLE_MS = 100;
 const TMUX_HYDRATION_MAX_MS = 15000;
 const TMUX_HYDRATION_MAX_ATTEMPTS = 20;
+const PASSIDECK_CPU_WEIGHT = 200;
 const TERMINAL_OWNER_VIEWPORT = 'viewport';
 const TERMINAL_OWNER_APPLICATION = 'application';
 const TERMINAL_APPLICATION_COMMANDS = new Set(['vi', 'vim', 'nvim', 'nano', 'emacs', 'less', 'more', 'man', 'top', 'htop', 'btop', 'atop', 'glances', 'watch', 'mc', 'nnn', 'ranger', 'lf', 'lazygit', 'fzf', 'tmux', 'screen', 'ssh', 'mosh', 'codex']);
@@ -60,6 +61,7 @@ const execFileAsync = promisify(execFile);
 
 let lastCpuSample = null;
 let lastNetSample = null;
+let tmuxPriorityWarningShown = false;
 let codexLimitsCache = { at: 0, data: null };
 let ollamaUsageCache = { at: 0, data: null };
 let nousBalanceCache = { at: 0, data: null };
@@ -1090,8 +1092,6 @@ function clearSessionTimers(session) {
       ws.hydrationStartedAt = 0;
       ws.hydrationAttempts = 0;
       ws.hydrationBusy = false;
-      ws.hydrationOutput = [];
-      ws.hydrationOutputBytes = 0;
       ws.finishHydration = null;
     }
     for (const publisher of session.hermesEventPublishers || []) {
@@ -1240,6 +1240,31 @@ function tmuxKill(name) {
   try { execFileSync(TMUX_CMD, tmuxArgs(['kill-session', '-t', name]), { stdio: 'ignore', timeout: TMUX_COMMAND_TIMEOUT_MS }); } catch {}
 }
 
+function tmuxScopeUnitFromCgroup(cgroup, uid = process.getuid?.()) {
+  if (!Number.isInteger(uid) || uid < 0) return null;
+  const prefix = `0::/user.slice/user-${uid}.slice/user@${uid}.service/app.slice/`;
+  const line = String(cgroup || '').split(/\r?\n/).find(value => value.startsWith(prefix));
+  if (!line) return null;
+  const unit = line.slice(prefix.length);
+  return /^tmux-spawn-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.scope$/.test(unit) ? unit : null;
+}
+
+async function prioritizeTmuxScope(session) {
+  try {
+    const { stdout } = await execFileAsync(TMUX_CMD, tmuxArgs(['display-message', '-p', '-t', session.tmuxName, '#{pane_pid}']), { encoding: 'utf8', timeout: TMUX_COMMAND_TIMEOUT_MS });
+    const panePid = Number(String(stdout).trim());
+    if (!Number.isSafeInteger(panePid) || panePid < 2) return;
+    const unit = tmuxScopeUnitFromCgroup(await fs.promises.readFile(`/proc/${panePid}/cgroup`, 'utf8'));
+    if (!unit) return;
+    await execFileAsync('systemctl', ['--user', 'set-property', '--runtime', unit, `CPUWeight=${PASSIDECK_CPU_WEIGHT}`], { timeout: TMUX_COMMAND_TIMEOUT_MS });
+  } catch (err) {
+    if (!['ENOENT', 'ESRCH'].includes(err.code) && !tmuxPriorityWarningShown) {
+      tmuxPriorityWarningShown = true;
+      console.warn(`[tmux] scope priority unavailable: ${err.message}`);
+    }
+  }
+}
+
 async function tmuxClientsAsync() {
   try {
     const { stdout } = await execFileAsync(TMUX_CMD, tmuxArgs([
@@ -1370,8 +1395,6 @@ function startTerminalHydration(session, ws) {
   ws.hydrationBusy = false;
   ws.shellHistorySent = false;
   ws.hydrationStartSequence = session.outputBytes;
-  ws.hydrationOutput = [];
-  ws.hydrationOutputBytes = 0;
 
   function finish() {
     clearTimeout(ws.hydrationTimer);
@@ -1384,24 +1407,13 @@ function startTerminalHydration(session, ws) {
     ws.hydrationStartedAt = 0;
     ws.hydrationAttempts = 0;
     ws.hydrationBusy = false;
-    ws.hydrationOutput = [];
-    ws.hydrationOutputBytes = 0;
     ws.finishHydration = null;
-  }
-
-  function flushHydrationOutput(boundary) {
-    for (const frame of ws.hydrationOutput) {
-      if (frame.sequence > boundary && !sendJson(ws, { type: 'output', data: frame.data, sequence: frame.sequence })) break;
-    }
-    ws.hydrationOutput = [];
-    ws.hydrationOutputBytes = 0;
   }
 
   function sendFrame(replay, sequence) {
     const currentReplay = terminalReplayState(session, replay);
     ws.shellHistorySent = currentReplay.kind === 'tmux-history';
     const sent = sendJson(ws, { type: 'replay', attachId, sequence, outputBoundary: sequence, ...currentReplay });
-    if (sent) flushHydrationOutput(sequence);
     return sent;
   }
 
@@ -1497,6 +1509,7 @@ function attachTmux(session) {
   session.pty = term;
   session.pid = term.pid;
   session.tmuxName = name;
+  void prioritizeTmuxScope(session);
   session.tmuxClientTty = term.ptsName;
   session.outputBytes = 0;
   session.meta.status = 'active';
@@ -1506,15 +1519,8 @@ function attachTmux(session) {
     session.outputBytes += bytes.length;
     for (const ws of session.clients) {
       if (ws.readyState !== 1) continue;
-      if (ws.hydrating) {
-        ws.hydrationOutput.push({ data: normalized, sequence: session.outputBytes });
-        ws.hydrationOutputBytes += bytes.length;
-        if (ws.hydrationOutputBytes > WS_BACKPRESSURE_MAX_BYTES) {
-          try { ws.close(1013, 'hydration output backlog'); } catch {}
-        }
-        continue;
-      }
-      sendJson(ws, { type: 'output', data: normalized, sequence: session.outputBytes });
+      if (ws.hydrating) ws.finishHydration?.('live output during hydration');
+      if (ws.readyState === 1) sendJson(ws, { type: 'output', data: normalized, sequence: session.outputBytes });
     }
     scheduleTerminalOwnerRefresh(session);
   });
@@ -1893,8 +1899,6 @@ function createServer(config = loadConfig()) {
       ws.hydrationStartedAt = 0;
       ws.hydrationAttempts = 0;
       ws.hydrationBusy = false;
-      ws.hydrationOutput = [];
-      ws.hydrationOutputBytes = 0;
       ws.finishHydration = null;
       session.clients.delete(ws);
     });
@@ -1920,7 +1924,7 @@ function createServer(config = loadConfig()) {
   return { app, server, wss, sessions, close };
 }
 
-module.exports = { createServer, loadConfig, readCodexLimits, readOllamaUsage, readNousBalance, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, parseOllamaUsage, normalizeNousUsage, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, paneProcessesWithRetry, terminalReplayState, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings };
+module.exports = { createServer, loadConfig, readCodexLimits, readOllamaUsage, readNousBalance, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount, parseCodexLimits, parseOllamaUsage, normalizeNousUsage, saveUploadedBlob, normalizeMime, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, paneProcessesWithRetry, terminalReplayState, tmuxScopeUnitFromCgroup, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, isLoopbackAddress, isTitleBridgeAddress, passideckTitleEnv, dynamicTitleSettings };
 
 if (require.main === module) {
   const config = loadConfig();

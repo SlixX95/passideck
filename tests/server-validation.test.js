@@ -32,7 +32,12 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
 
 (async () => {
   try {
-    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, paneProcessesWithRetry, terminalReplayState, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, parseCodexLimits, parseOllamaUsage, normalizeNousUsage, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount } = require('../packages/server/src/index');
+    const { createServer, syncHermesTitles, hermesResumeIdFromArgv, hermesActiveSessionIdFromEnv, terminalOwnerFromProcesses, terminalStateFromProcesses, foregroundHasHermes, paneProcessesWithRetry, terminalReplayState, tmuxScopeUnitFromCgroup, acceptHermesEvent, isPlainShellCommand, isMouseInput, isJobControlSuspendInput, splitCommand, parseCodexLimits, parseOllamaUsage, normalizeNousUsage, readHermesCodexAuth, readHermesCodexAuths, saveHermesCodexAuth, selectActiveCodexAccount } = require('../packages/server/src/index');
+    const uid = process.getuid();
+    const scope = 'tmux-spawn-0d19e9bc-870f-4d57-8e5a-f25c8185abaf.scope';
+    assert.strictEqual(tmuxScopeUnitFromCgroup(`0::/user.slice/user-${uid}.slice/user@${uid}.service/app.slice/${scope}\n`, uid), scope, 'PassiDeck must recognize the current user tmux pane scope');
+    assert.strictEqual(tmuxScopeUnitFromCgroup(`0::/user.slice/user-${uid + 1}.slice/user@${uid + 1}.service/app.slice/${scope}\n`, uid), null, 'PassiDeck must reject another user cgroup');
+    assert.strictEqual(tmuxScopeUnitFromCgroup(`0::/user.slice/user-${uid}.slice/user@${uid}.service/app.slice/passideck.service\n`, uid), null, 'PassiDeck must never retarget a non-tmux unit');
     assert.strictEqual(
       hermesResumeIdFromArgv(['/venv/bin/python3', '/venv/bin/hermes', '--resume', '20260716_180100_5dbdcf']),
       '20260716_180100_5dbdcf',
@@ -395,6 +400,35 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     assert.ok(!persistentPaneEnv.some(value => value.startsWith('PASSIDECK_WORKING_ENDPOINT=')), 'non-Hermes shell panes must not receive the Hermes working-state bridge');
     assert.ok(!persistentPaneEnv.some(value => value.startsWith('HERMES_TUI_SIDECAR_URL=')), 'non-Hermes shell panes must not receive the TUI event publisher');
 
+    const cleanupResponse = await fetch(`${base}/api/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ command: '/bin/bash', cwd: home, label: 'delete-cleanup' })
+    });
+    assert.strictEqual(cleanupResponse.status, 200);
+    const cleanupSessionMeta = await cleanupResponse.json();
+    const cleanupSession = app.sessions.get(cleanupSessionMeta.id);
+    const cleanupTmux = `passideck_${cleanupSessionMeta.id.replace(/-/g, '')}`;
+    const cleanupPanePid = tmux('list-panes', '-t', cleanupTmux, '-F', '#{pane_pid}').toString().trim();
+    const cleanupScope = tmuxScopeUnitFromCgroup(fs.readFileSync(`/proc/${cleanupPanePid}/cgroup`, 'utf8'));
+    assert.ok(cleanupScope, 'delete cleanup fixture must run in a validated tmux scope');
+    await waitFor(() => {
+      try { return execFileSync('systemctl', ['--user', 'show', cleanupScope, '-p', 'CPUWeight', '--value'], { encoding: 'utf8' }).trim() === '200'; }
+      catch { return false; }
+    }, 'PassiDeck must apply its CPU weight to the owned tmux scope', 3000);
+    cleanupSession.pty.write('sleep 300 &\r');
+    let cleanupChildPid;
+    await waitFor(() => {
+      try {
+        cleanupChildPid = execFileSync('pgrep', ['-P', cleanupPanePid, '-x', 'sleep'], { encoding: 'utf8' }).trim();
+        return /^\d+$/.test(cleanupChildPid);
+      } catch { return false; }
+    }, 'delete cleanup fixture must start its child process');
+    const cleanupDelete = await fetch(`${base}/api/sessions/${cleanupSessionMeta.id}`, { method: 'DELETE' });
+    assert.strictEqual(cleanupDelete.status, 200);
+    await waitFor(() => !fs.existsSync(`/proc/${cleanupChildPid}`), 'deleting a PassiDeck pane must terminate its child processes', 3000);
+    assert.throws(() => tmux('has-session', '-t', cleanupTmux), 'deleting a PassiDeck pane must remove its tmux session');
+
     const persistentSession = app.sessions.get(persistent.id);
     assert.ok(persistentSession.pty.ptsName, 'node-pty must expose the PassiDeck tmux client PTY through ptsName');
     extraTmuxClient = testPty.spawn('tmux', ['-L', process.env.PASSIDECK_TMUX_SOCKET, 'attach-session', '-t', persistentTmux], {
@@ -458,6 +492,29 @@ const waitFor = async (predicate, message, timeoutMs = 1000) => {
     await delay(100);
     assert.strictEqual(historyOutput, 0, 'the automatic first redraw must not duplicate the shell frame after tmux history replay');
     historySocket.close();
+
+    const busyMarker = `hydration-live-${process.pid}`;
+    persistentSession.pty.write("while :; do printf 'hydration-busy\\r\\n'; sleep 0.01; done & busy_pid=$!\r");
+    await delay(100);
+    const busyMessages = [];
+    const busySocket = new WebSocket(`ws://127.0.0.1:${port}/ws?session=${persistent.id}`);
+    const busyOpenedAt = Date.now();
+    busySocket.on('message', raw => {
+      try { busyMessages.push({ at: Date.now(), message: JSON.parse(raw.toString()) }); } catch {}
+    });
+    await opened(busySocket);
+    busySocket.send(JSON.stringify({ type: 'input', data: `printf '${busyMarker}\\r\\n'\r` }));
+    await waitFor(
+      () => busyMessages.some(entry => entry.message.type === 'output' && String(entry.message.data || '').includes(busyMarker)),
+      'live PTY output must not wait for a stable tmux history capture',
+      1500
+    );
+    const busyMarkerFrame = busyMessages.find(entry => entry.message.type === 'output' && String(entry.message.data || '').includes(busyMarker));
+    assert.ok(busyMarkerFrame.at - busyOpenedAt < 1000, `live PTY output must arrive within one second during hydration, got ${busyMarkerFrame.at - busyOpenedAt}ms`);
+    assert.ok(busyMessages.some(entry => entry.message.type === 'replay' && entry.message.kind === 'capture-unavailable'), 'live output during hydration must explicitly fall back from tmux capture');
+    busySocket.close();
+    persistentSession.pty.write('kill $busy_pid\r');
+    await delay(100);
 
     const originalPersistentCommand = persistentSession.meta.command;
     persistentSession.meta.command = 'hermes --tui';

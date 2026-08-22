@@ -6,6 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 KillMode=process
+CPUWeight=200
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=%h/.passideck/passideck.env
 ExecStart=/bin/sh -c 'exec node "$PASSIDECK_ROOT/packages/cli/src/index.js" --no-open'
