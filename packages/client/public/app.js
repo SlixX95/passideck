@@ -302,6 +302,20 @@ function updateSessionIndicator(id) {
     el.classList.toggle('response-attention', attention);
     setTooltip(dot, label);
     dot.setAttribute('aria-label', label);
+    // The bell is a sibling of the dot, never an overlay: the dot keeps its
+    // own shape (spinner/status) while the bell marks the new response.
+    let bell = el.querySelector('.response-bell');
+    if (attention) {
+      if (!bell) {
+        bell = document.createElement('span');
+        bell.className = 'response-bell';
+        bell.textContent = '🔔';
+        bell.setAttribute('aria-hidden', 'true');
+        dot.after(bell);
+      }
+    } else if (bell) {
+      bell.remove();
+    }
   }
 }
 
@@ -2311,6 +2325,16 @@ function sanitizeTerminalInput(data) {
   return stripTerminalReplyJunk(data);
 }
 
+function isMouseReport(data) {
+  // SGR mouse reports (ESC [ < b ; x ; y M/m) stream through term.onData on
+  // every pointer move while the app enables mouse reporting (hermes --tui,
+  // tmux). They are terminal input, not user acknowledgement: a hover must
+  // never clear the response-attention bell.
+  const input = String(data || '');
+  if (!input) return false;
+  return /^\x1b\[<\d+;\d+;\d+[Mm](?:\x1b\[<\d+;\d+;\d+[Mm])*$/.test(input);
+}
+
 function isHermesComposerCursor(term) {
   const buffer = term?.buffer?.active;
   if (!buffer || typeof buffer.cursorX !== 'number' || typeof buffer.cursorY !== 'number') return false;
@@ -3601,7 +3625,7 @@ function createPanel(session, opts = {}) {
   });
   ro.observe(el.querySelector('.terminal'));
   term.onData(data => {
-    clearResponseAttention(id);
+    if (!isMouseReport(data)) clearResponseAttention(id);
     const entry = state.sessions.get(id);
     const clean = sanitizeTerminalInput(data);
     if (clean && entry?.ws?.readyState === WebSocket.OPEN) {

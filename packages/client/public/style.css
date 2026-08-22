@@ -600,43 +600,21 @@ body.notify-blinking .term-header.response-pulse { animation: pane-response-puls
   box-shadow: 0 0 7px color-mix(in srgb, var(--tg-accent) 48%, transparent);
   animation: session-working-spin .9s linear infinite;
 }
-@keyframes session-response-dot-out {
-  from { opacity: 1; transform: rotate(0) scale(1); }
-  to { opacity: 0; transform: rotate(240deg) scale(.35); }
-}
 @keyframes session-response-bell-show { from { opacity: 0; } to { opacity: 1; } }
-.term-panel.response-attention .connection-dot {
-  position: relative;
-  box-sizing: border-box;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-  animation: none;
-}
-.term-panel.response-attention .connection-dot::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: 999px;
-  background: conic-gradient(transparent 0 25%, #00d26a 25%);
-  box-shadow: 0 0 8px #00d26a;
-  opacity: 0;
-  z-index: 0;
-}
-.term-panel.response-attention .connection-dot::after {
-  content: '🔔';
-  position: absolute;
-  left: 50%;
-  top: 50%;
+.response-bell {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 10px;
   line-height: 1;
-  opacity: 1;
-  transform: translate(-50%, -50%);
-  z-index: 1;
+  opacity: 0;
+  pointer-events: none;
 }
-body.notify-blinking .term-panel.response-attention .connection-dot::before { animation: session-response-dot-out 420ms ease-in both; }
-body.notify-blinking .term-panel.response-attention .connection-dot::after { animation: session-response-bell-show 1ms 419ms linear both; }
+.term-panel.response-attention .response-bell { opacity: 1; }
+body.notify-blinking .term-panel.response-attention .response-bell { animation: session-response-bell-show 1ms 419ms linear both; }
 .term-title {
   flex: 0 1 auto;
   font-weight: 600;

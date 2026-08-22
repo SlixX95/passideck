@@ -1,6 +1,6 @@
 {
   "name": "@passi/passideck",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "Standalone self-hosted browser terminal wall",
   "bin": {
     "passideck": "./packages/cli/src/index.js"

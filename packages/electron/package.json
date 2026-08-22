@@ -1,6 +1,6 @@
 {
   "name": "passideck-desktop",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "Thin PassiDeck desktop shell",
   "author": "PassiDeck contributors",
   "main": "main.js",
