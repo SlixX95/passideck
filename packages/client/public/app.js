@@ -1,6 +1,9 @@
 const API = window.location.origin;
 const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const WS_BASE = `${WS_PROTOCOL}//${window.location.host}/ws`;
+const POPIN_URL_PARAMS = new URLSearchParams(window.location.search);
+const POPOUT_PANE_ID = POPIN_URL_PARAMS.get('popout') === '1' ? POPIN_URL_PARAMS.get('pane') || '' : '';
+const POPOUT_MODE = Boolean(POPOUT_PANE_ID);
 const AUTH_TOKEN_KEY = 'passideck:auth-token';
 const PERFORMANCE_MODE_KEY = 'passideck:performance-mode';
 const SOCKET_HEARTBEAT_MS = 15000;
@@ -80,6 +83,7 @@ const state = {
   uiRevision: 0,
   lastUiState: null,
   uiEvents: null,
+  detachedPanes: new Set(),
   activeDesktopId: 'desktop-1',
   panePrefs: { titles: {}, order: [], desktopOrder: ['desktop-1'], paneDesktop: {}, desktops: { 'desktop-1': { name: 'Desktop 1', minimized: [], windows: {}, viewport: null } } }
 };
@@ -103,7 +107,7 @@ function activeDesktop() {
 }
 
 function desktopPaneIds(id = state.activeDesktopId) {
-  return state.order.filter(paneId => state.sessions.has(paneId) && state.panePrefs.paneDesktop[paneId] === id);
+  return state.order.filter(paneId => state.sessions.has(paneId) && !state.detachedPanes.has(paneId) && state.panePrefs.paneDesktop[paneId] === id);
 }
 
 function frontmostDesktopPaneId(id = state.activeDesktopId) {
@@ -1184,6 +1188,11 @@ function applyLayoutVisibility() {
   for (const id of state.order) {
     const entry = state.sessions.get(id);
     if (!entry) continue;
+    if (state.detachedPanes.has(id)) {
+      if (entry.el.parentElement !== hidden) hidden.appendChild(entry.el);
+      entry.el.classList.add('layout-hidden');
+      continue;
+    }
     if (state.panePrefs.paneDesktop[id] !== state.activeDesktopId || state.minimized.has(id)) {
       if (entry.el.parentElement !== hidden) hidden.appendChild(entry.el);
       entry.el.classList.add('layout-hidden');
@@ -1272,7 +1281,7 @@ function windowInteractionActive() {
 }
 
 function saveUiState() {
-  if (state.hydrating) return;
+  if (state.hydrating || POPOUT_MODE) return;
   if (windowInteractionActive()) {
     state.saveQueued = true;
     return;
@@ -2697,7 +2706,7 @@ function restoreTerminalSnapshot(id, term, done = null, entry = null) {
 }
 
 function saveAllTerminalSnapshots() {
-  for (const id of state.sessions.keys()) saveTerminalSnapshot(id);
+  for (const [id, entry] of state.sessions) if (!entry.detached) saveTerminalSnapshot(id);
 }
 
 function desktopNameKey(name) {
@@ -2827,6 +2836,7 @@ function reconcileIncomingUiState(ui) {
 }
 
 function connectUiEvents() {
+  if (POPOUT_MODE) return; // Popout windows consume UI state but never write shared layout state.
   state.uiEvents?.close?.();
   const token = authToken();
   const events = new EventSource(`/api/ui-events${token ? `?token=${encodeURIComponent(token)}` : ''}`);
@@ -2841,7 +2851,7 @@ function connectUiEvents() {
 }
 
 function savePanePrefs() {
-  if (state.hydrating) return;
+  if (state.hydrating || POPOUT_MODE) return;
   state.order = state.order.filter(id => state.sessions.has(id));
   state.panePrefs.order = state.order.slice();
   const desktop = activeDesktop();
@@ -3711,6 +3721,10 @@ function handleSocketClose(id, socket, event) {
   const entry = state.sessions.get(id);
   if (!entry || entry.ws !== socket) return;
   entry.predictiveEcho?.clearPredictions();
+  if (entry.detached) {
+    setConnectionStatus(id, 'offline');
+    return;
+  }
   if (event.code === 4000) {
     setConnectionStatus(id, 'offline');
     return;
@@ -3865,6 +3879,7 @@ function reconnect(id, force = false) {
 }
 
 function ensureSocketLive(id, entry, now = Date.now()) {
+  if (entry.detached) return false;
   const socket = entry.ws;
   const age = now - (socket?.lastPongAt || socket?.lastMessageAt || 0);
   if (socket?.readyState === WebSocket.CONNECTING && age <= SOCKET_STALE_MS) return false;
@@ -4112,6 +4127,29 @@ function renderSwitcher() {
     };
     btn.onclick = activate;
     wrapper.append(btn, close);
+    switcher.appendChild(wrapper);
+  }
+  for (const id of state.order) {
+    if (!state.detachedPanes.has(id)) continue;
+    const item = state.sessions.get(id);
+    if (!item) continue;
+    const wrapper = document.createElement('span');
+    wrapper.className = 'switcher-item';
+    const btn = document.createElement('button');
+    btn.className = 'switcher-btn detached';
+    btn.type = 'button';
+    if (item.responseAttention) btn.classList.add('response-pulse');
+    const title = panelTitle(item.session);
+    btn.dataset.switcherPaneId = id;
+    btn.setAttribute('aria-label', `Focus detached window ${title}`);
+    setTooltip(btn, `In eigenem Fenster · ${title}`);
+    btn.innerHTML = '<span class="switcher-title"></span>';
+    btn.querySelector('.switcher-title').textContent = `⧉ ${title}`;
+    btn.onclick = () => {
+      clearResponseAttention(id);
+      window.passideckDesktop?.focusPopout?.(id);
+    };
+    wrapper.append(btn);
     switcher.appendChild(wrapper);
   }
   scheduleDesktopAppChromeSync();
@@ -4490,6 +4528,175 @@ async function updateVersionFooter(health) {
   appVersion.hidden = false;
 }
 
+function popoutBackendId() {
+  return window.passideckDesktop?.activePopoutBackendId || null;
+}
+
+async function detachPaneToWindow(id, dragPoint = null) {
+  if (!POPOUT_CAPABLE || !state.sessions.has(id) || state.detachedPanes.has(id)) return false;
+  const entry = state.sessions.get(id);
+  saveTerminalSnapshot(id);
+  const rect = entry.el.getBoundingClientRect();
+  const width = Math.max(420, Math.min(900, Math.round(rect.width)));
+  const height = Math.max(300, Math.min(700, Math.round(rect.height)));
+  const grabX = Number.isFinite(dragPoint?.grabX) ? Math.max(0, Math.min(width, dragPoint.grabX)) : width / 2;
+  const grabY = Number.isFinite(dragPoint?.grabY) ? Math.max(0, Math.min(30, dragPoint.grabY)) : 15;
+  const screenX = Number.isFinite(dragPoint?.screenX) ? Math.round(dragPoint.screenX - grabX) : undefined;
+  const screenY = Number.isFinite(dragPoint?.screenY) ? Math.round(dragPoint.screenY - grabY) : undefined;
+  try {
+    await window.passideckDesktop.detachPane({
+      sessionId: id,
+      backendId: popoutBackendId(),
+      rect: { x: screenX, y: screenY, width, height }
+    });
+  } catch (error) {
+    console.error('[popout] detach failed:', error);
+    return false;
+  }
+  markPaneDetached(id, true);
+  suspendDetachedPane(id);
+  return true;
+}
+
+function suspendDetachedPane(id) {
+  const entry = state.sessions.get(id);
+  if (!entry) return;
+  entry.detached = true;
+  clearTimeout(entry.snapshotTimer);
+  entry.snapshotTimer = null;
+  entry.predictiveEcho?.clearPredictions();
+  if (entry.ws && entry.ws.readyState < WebSocket.CLOSING) entry.ws.close(1000, 'detached');
+}
+
+function resumeDetachedPane(id) {
+  const entry = state.sessions.get(id);
+  if (!entry) return;
+  entry.detached = false;
+  const connect = () => {
+    if (state.sessions.get(id) !== entry || entry.detached) return;
+    reconnect(id);
+  };
+  if (!restoreTerminalSnapshot(id, entry.term, connect, entry)) connect();
+}
+
+function markPaneDetached(id, detached) {
+  if (detached) {
+    state.detachedPanes.add(id);
+    state.minimized.delete(id);
+    state.sessions.get(id)?.el.classList.add('layout-hidden');
+    document.getElementById('hiddenPanes')?.appendChild(state.sessions.get(id).el);
+  } else {
+    state.detachedPanes.delete(id);
+  }
+  applyLayoutVisibility();
+  renderSwitcher();
+  updateEmpty();
+  scheduleTerminalFit({ ids: [id] });
+}
+
+function redockDetachedPane(id, details = {}) {
+  if (!state.sessions.has(id)) return;
+  if (details.reason === 'terminated') {
+    discardPanel(id);
+    return;
+  }
+  markPaneDetached(id, false);
+  resumeDetachedPane(id);
+  selectPanel(id, { focus: false });
+  saveUiState();
+}
+
+function installPopoutMode() {
+  document.body.classList.add('popout-mode');
+  const titlebar = document.getElementById('popoutTitlebar');
+  titlebar.hidden = false;
+  const titleEl = document.getElementById('popoutTitle');
+  const dotHost = titlebar;
+  const refreshTitle = () => {
+    const entry = state.sessions.get(POPOUT_PANE_ID);
+    if (!entry) return;
+    titleEl.textContent = panelTitle(entry.session);
+    dotHost.dataset.connectionStatus = entry.el.dataset.connectionStatus || 'reconnecting';
+  };
+  new MutationObserver(refreshTitle).observe(document.getElementById(`panel-${POPOUT_PANE_ID}`)?.querySelector('.term-header') || document.body, { attributes: true, subtree: true, childList: true, characterData: true });
+  const refreshTimer = setInterval(() => {
+    const entry = state.sessions.get(POPOUT_PANE_ID);
+    if (!entry) {
+      titleEl.textContent = 'Session closed';
+      dotHost.dataset.connectionStatus = 'offline';
+      return;
+    }
+    refreshTitle();
+  }, 1000);
+  window.addEventListener('beforeunload', () => clearInterval(refreshTimer));
+  document.getElementById('popoutReload').onclick = () => window.passideckDesktop.popoutAction('reload');
+  document.getElementById('popoutMinimize').onclick = () => window.passideckDesktop.popoutAction('minimize');
+  document.getElementById('popoutMaximize').onclick = () => window.passideckDesktop.popoutAction('maximize');
+  document.getElementById('popoutRedock').onclick = () => {
+    saveTerminalSnapshot(POPOUT_PANE_ID);
+    window.passideckDesktop.redockRequest();
+  };
+  document.getElementById('popoutClose').onclick = async () => {
+    const button = document.getElementById('popoutClose');
+    button.disabled = true;
+    if (await closePanel(POPOUT_PANE_ID)) await window.passideckDesktop.popoutAction('terminate');
+    else button.disabled = false;
+  };
+  const pinBtn = document.getElementById('popoutPin');
+  window.passideckDesktop.popoutAction('always-on-top-state').then(active => pinBtn.setAttribute('aria-pressed', String(Boolean(active)))).catch(() => {});
+  pinBtn.onclick = async () => {
+    try {
+      const next = await window.passideckDesktop.popoutAction('always-on-top');
+      pinBtn.setAttribute('aria-pressed', String(Boolean(next)));
+    } catch {}
+  };
+}
+
+function installDetachGesture() {
+  if (!POPOUT_CAPABLE) return;
+  let gesture = null;
+  document.addEventListener('pointerdown', event => {
+    if (event.button !== 0) return;
+    const header = event.target.closest?.('.term-header');
+    if (!header || event.target.closest('.term-actions, button')) return;
+    const panel = header.closest('.term-panel');
+    const id = panel?.dataset.paneId;
+    if (!id || !state.sessions.has(id)) return;
+    const panelRect = panel.getBoundingClientRect();
+    trySetPointerCapture(header, event.pointerId);
+    gesture = {
+      id,
+      startX: event.screenX,
+      startY: event.screenY,
+      grabX: event.clientX - panelRect.left,
+      grabY: event.clientY - panelRect.top,
+      armed: false
+    };
+  }, true);
+  document.addEventListener('pointermove', event => {
+    if (!gesture) return;
+    if (!gesture.armed && Math.hypot(event.screenX - gesture.startX, event.screenY - gesture.startY) > 12) gesture.armed = true;
+  }, true);
+  const finishDetachGesture = event => {
+    const current = gesture;
+    gesture = null;
+    if (!current?.armed) return;
+    const grid = document.getElementById('termGrid');
+    const gr = grid.getBoundingClientRect();
+    const insideApp = event.clientX >= gr.left && event.clientX <= gr.right && event.clientY >= gr.top && event.clientY <= gr.bottom;
+    if (!insideApp) void detachPaneToWindow(current.id, {
+      screenX: event.screenX,
+      screenY: event.screenY,
+      grabX: current.grabX,
+      grabY: current.grabY
+    });
+  };
+  document.addEventListener('pointerup', finishDetachGesture, true);
+  document.addEventListener('pointercancel', () => { gesture = null; }, true);
+}
+
+const POPOUT_CAPABLE = Boolean(window.passideckDesktop?.detachPane);
+
 async function init() {
   installTooltips();
   loadResponseSoundPrefs();
@@ -4515,7 +4722,10 @@ async function init() {
   setSystemMonitorVisible(Boolean(ui?.systemMonitor), { persist: false });
   startProviderUsagePolling();
   installCloseHitLayer();
-  sessions.forEach(createPanel);
+  const renderedSessions = POPOUT_MODE
+    ? sessions.filter(session => session.id === POPOUT_PANE_ID)
+    : sessions;
+  renderedSessions.forEach(createPanel);
   restorePanelOrder();
 
   scheduleTerminalFit();
@@ -4530,6 +4740,17 @@ async function init() {
   updateEmpty();
   renderSwitcher();
   state.hydrating = false;
+  if (POPOUT_MODE) {
+    installPopoutMode();
+    const paneEntry = state.sessions.get(POPOUT_PANE_ID);
+    if (paneEntry) selectPanel(POPOUT_PANE_ID, { persist: false });
+  } else {
+    installDetachGesture();
+    window.passideckDesktop?.onRedockPane?.(details => {
+      const id = String(details?.sessionId || '');
+      redockDetachedPane(id, details || {});
+    });
+  }
   const draft = readUiDraft();
   if (draft) {
     const remote = ui || draft.base;
@@ -4714,6 +4935,17 @@ document.getElementById('skinSelect').onchange = e => setSkin(e.target.value);
 document.getElementById('dynamicTitleSelect').onchange = e => { void saveDynamicTitleSetting(e.target.value === 'on'); };
 document.getElementById('fontSizeSelect').onchange = e => previewFontSize(Number(e.target.value));
 document.getElementById('notifyBlinkingSelect').onchange = e => setNotifyBlinking(e.target.value === 'on');
+if (POPOUT_CAPABLE) {
+  const popoutRow = document.getElementById('popoutRememberRow');
+  const popoutSelect = document.getElementById('popoutRememberSelect');
+  if (popoutRow && popoutSelect) {
+    popoutRow.hidden = false;
+    window.passideckDesktop.getPopoutPrefs?.().then(prefs => {
+      popoutSelect.value = prefs?.rememberGeometry === false ? 'off' : 'on';
+    }).catch(() => {});
+    popoutSelect.onchange = () => window.passideckDesktop.setPopoutRememberGeometry(popoutSelect.value === 'on');
+  }
+}
 document.getElementById('performanceModeSelect').onchange = e => setPerformanceMode(e.target.value === 'on');
 window.addEventListener('storage', event => {
   if (event.storageArea !== localStorage || event.key !== PERFORMANCE_MODE_KEY) return;

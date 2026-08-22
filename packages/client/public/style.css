@@ -1212,3 +1212,80 @@ body[data-skin="neon"] .term-panel, body[data-skin="neon"] .settings-panel { bor
 @media (max-width: 760px) {
   .settings-panel { grid-template-columns: auto minmax(0, 1fr); }
 }
+
+/* Popout (detached pane) window */
+body.popout-mode .topbar,
+body.popout-mode #chromePeek,
+body.popout-mode #settingsPanel,
+body.popout-mode #hiddenPanes { display: none !important; }
+body.popout-mode { overflow: hidden; }
+body.popout-mode #termGrid {
+  position: fixed;
+  inset: 30px 0 0 0;
+  width: auto;
+  height: auto;
+  padding: 0;
+}
+body.popout-mode .term-panel {
+  position: absolute !important;
+  inset: 0 !important;
+  width: auto !important;
+  height: auto !important;
+  transform: none !important;
+  z-index: auto !important;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
+}
+body.popout-mode .window-resize-handle { display: none !important; }
+body.popout-mode .term-header { display: none !important; }
+.popout-titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px 0 10px;
+  background: var(--tg-bg);
+  border-bottom: 1px solid var(--tg-border);
+  z-index: 1000;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+.popout-titlebar[hidden] { display: none; }
+.popout-titlebar .popout-dot { flex: 0 0 8px; width: 8px; height: 8px; }
+.popout-titlebar[data-connection-status="live"] .popout-dot { background: #00d26a; box-shadow: 0 0 8px #00d26a; }
+.popout-titlebar[data-connection-status="reconnecting"] .popout-dot { background: #ffb020; box-shadow: 0 0 8px #ffb020; }
+.popout-titlebar[data-connection-status="offline"] .popout-dot { background: #ff453a; box-shadow: 0 0 8px #ff453a; }
+.popout-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--tg-accent);
+}
+.popout-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+.popout-actions button {
+  min-width: 28px;
+  height: 24px;
+  padding: 0 4px;
+  background: transparent;
+  color: inherit;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.popout-actions button:hover { color: var(--tg-accent); border-color: var(--tg-accent-dim); }
+.popout-actions button[aria-pressed="true"] { color: var(--tg-accent); border-color: var(--tg-accent); background: color-mix(in srgb, var(--tg-accent) 18%, transparent); }

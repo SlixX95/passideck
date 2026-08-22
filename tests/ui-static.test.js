@@ -456,7 +456,7 @@ assert.ok(
 );
 const replayNormalizer = app.slice(app.indexOf('function normalizeReplayText'), app.indexOf('function sanitizeTerminalOutput'));
 assert.ok(!replayNormalizer.includes(".replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '')"), 'tmux replay normalization must not strip SGR with every CSI control');
-assert.ok(html.includes('app.js?v=20260821-settings-outside-close') && html.includes('style.css?v=20260821-settings-outside-close'), 'client cache keys must activate settings outside-close fix');
+assert.ok(html.includes('app.js?v=20260822-native-popout') && html.includes('style.css?v=20260822-native-popout'), 'client cache keys must activate native pane popouts');
 assert.ok(html.includes('interactive-widget=resizes-content'), 'mobile soft keyboards must resize PassiDeck content instead of covering the TUI composer');
 assert.ok(
   style.includes('height: var(--passideck-viewport-height, 100dvh)') &&
@@ -555,5 +555,13 @@ assert.ok(installer.includes('PASSIDECK_ROOT=$(quote_env "$ROOT")'), 'installer 
 assert.ok(service.includes("ExecStart=/bin/sh -c 'exec node \"$PASSIDECK_ROOT/packages/cli/src/index.js\" --no-open'"), 'user service must exec Node directly from the installed checkout');
 assert.ok(service.includes('Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin'), 'user service must provide PATH for npm and node');
 assert.ok(service.includes('KillMode=process'), 'service restart must preserve detached tmux sessions');
+
+// Native pane-popout regression
+assert.ok(app.includes('const POPOUT_MODE = Boolean(POPOUT_PANE_ID)'), 'client must detect pane-only popout mode');
+assert.ok(app.includes("document.addEventListener('pointerup', finishDetachGesture, true)"), 'OS popout must be created at pointer release');
+assert.ok(app.includes('const renderedSessions = POPOUT_MODE') && app.includes('session.id === POPOUT_PANE_ID'), 'popout must render only its selected terminal session');
+assert.ok(app.includes('suspendDetachedPane(id);') && app.includes('resumeDetachedPane(id);'), 'main renderer must relinquish and resume the detached terminal socket');
+assert.ok(html.includes('id="popoutClose"') && html.includes('Close session'), 'single popout titlebar must expose the session-closing X');
+assert.ok(style.includes('body.popout-mode .term-header { display: none !important; }'), 'popout must hide the redundant pane titlebar');
 
 console.log('ui-static ok');
