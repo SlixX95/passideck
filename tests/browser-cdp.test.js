@@ -3279,7 +3279,15 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         const { entry, mouseProbeState, sentInput } = window.__tuiTouchRestore;
         const screen = entry.el.querySelector('.xterm-screen');
         const rect = screen.getBoundingClientRect();
-        const compatibilityMouse = new MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true, clientX: rect.left + 20, clientY: rect.top + 20 });
+        mouseProbeState.reached = false;
+        const compatibilityMouse = new MouseEvent('mousedown', {
+          button: 0,
+          bubbles: true,
+          cancelable: true,
+          clientX: rect.left + 20,
+          clientY: rect.top + 20
+        });
+        Object.defineProperty(compatibilityMouse, 'sourceCapabilities', { value: { firesTouchEvents: true } });
         const compatibilityMouseDispatched = screen.dispatchEvent(compatibilityMouse);
         const chromeTarget = document.querySelector('.term-panel .term-actions button');
         const chromeMouse = new MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true });
