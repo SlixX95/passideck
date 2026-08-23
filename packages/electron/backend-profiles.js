@@ -24,6 +24,31 @@ function normalizeBackend(value, fallback = {}) {
   };
 }
 
+function normalizeWindowRect(value, minWidth, minHeight) {
+  if (!value || typeof value !== 'object') return null;
+  const numbers = ['x', 'y', 'width', 'height'].map(key => Number(value[key]));
+  if (!numbers.every(Number.isFinite) || numbers[2] < minWidth || numbers[3] < minHeight) return null;
+  const [x, y, width, height] = numbers.map(Math.round);
+  return { x, y, width, height };
+}
+
+function normalizeMainWindowState(value) {
+  const rect = normalizeWindowRect(value, 800, 500);
+  return rect ? { ...rect, maximized: value.maximized === true } : null;
+}
+
+function normalizePopoutPrefs(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const prefs = {};
+  for (const [sessionId, pref] of Object.entries(value).slice(0, 256)) {
+    const rect = normalizeWindowRect(pref, 320, 240);
+    const backendId = typeof pref?.backendId === 'string' ? pref.backendId.trim() : '';
+    if (!sessionId || !backendId || !rect) continue;
+    prefs[sessionId] = { backendId, ...rect, alwaysOnTop: pref.alwaysOnTop === true, open: pref.open === true };
+  }
+  return prefs;
+}
+
 function normalizeConfig(value = {}) {
   let backends;
   if (Array.isArray(value.backends) && value.backends.length) {
@@ -54,9 +79,10 @@ function normalizeConfig(value = {}) {
     globalSoundEnabled: value.globalSoundEnabled !== false,
     notifyBlinking: value.notifyBlinking !== false,
     popoutRememberGeometry: value.popoutRememberGeometry !== false,
-    popoutPrefs: value.popoutPrefs && typeof value.popoutPrefs === 'object' ? value.popoutPrefs : {},
+    mainWindowState: normalizeMainWindowState(value.mainWindowState),
+    popoutPrefs: normalizePopoutPrefs(value.popoutPrefs),
     backends
   };
 }
 
-module.exports = { CONFIG_VERSION, DEFAULT_BACKENDS, normalizeUrl, normalizeBackend, normalizeConfig };
+module.exports = { CONFIG_VERSION, DEFAULT_BACKENDS, normalizeUrl, normalizeBackend, normalizeMainWindowState, normalizePopoutPrefs, normalizeConfig };

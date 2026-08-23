@@ -11,9 +11,11 @@
     #titlebar { position: relative; -webkit-app-region: drag; height: 30px; display: flex; align-items: stretch; border: 1px solid color-mix(in srgb, var(--accent) 48%, var(--border)); border-bottom-color: var(--accent); background: linear-gradient(180deg, color-mix(in srgb, var(--surface) 86%, var(--accent) 14%), var(--bg)); box-shadow: 0 0 15px color-mix(in srgb, var(--accent) 24%, transparent); }
     html[data-platform="darwin"] #titlebar { padding-left: 76px; }
     html[data-platform="darwin"] #windowControls button[data-action]:not([data-action="reload"]) { display: none; }
+    #backendMenu { -webkit-app-region: no-drag; display: contents; }
     #backendTabs, #addBackend, #windowControls { -webkit-app-region: no-drag; display: flex; align-items: stretch; }
     #backendTabs { min-width: 0; overflow-x: auto; scrollbar-width: none; }
     #backendTabs::-webkit-scrollbar { display: none; }
+    #backendMenuToggle { display: none; height: 28px; min-width: 124px; max-width: 220px; padding: 0 10px; border: 0; border-right: 1px solid var(--border); background: transparent; color: var(--text); font: inherit; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
     .backend-tab { display: flex; align-items: center; gap: 7px; min-width: 120px; max-width: 230px; padding: 0 8px 0 11px; border: 0; border-right: 1px solid var(--border); border-bottom: 2px solid transparent; background: transparent; color: var(--dim); cursor: pointer; }
     .backend-tab.active { color: var(--tab-color); border-bottom-color: var(--tab-color); background: color-mix(in srgb, var(--tab-color) 11%, transparent); }
     .backend-tab.attention { color: var(--tab-color); border-bottom-color: var(--tab-color); background: color-mix(in srgb, var(--tab-color) 18%, transparent); box-shadow: inset 0 -2px 0 var(--tab-color), 0 0 12px color-mix(in srgb, var(--tab-color) 24%, transparent); }
@@ -34,6 +36,11 @@
     #windowControls #globalSoundToggle { width: auto; min-width: 68px; padding: 0 8px; }
     #addBackend:hover, #windowControls button:hover { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
     #dragSpace { flex: 1; min-width: 24px; }
+    html.backend-overflow #backendMenu { display: block; position: relative; flex: 0 0 auto; }
+    html.backend-overflow #backendMenuToggle { display: block; }
+    html.backend-overflow #backendTabs { display: none; }
+    html.backend-overflow #backendMenu.open #backendTabs { position: absolute; top: 29px; left: 0; z-index: 20; display: flex; flex-direction: column; width: min(320px, calc(100vw - 16px)); max-height: min(420px, calc(100vh - 42px)); overflow: auto; border: 1px solid var(--accent); background: var(--surface); box-shadow: 0 18px 48px #000; }
+    html.backend-overflow #backendMenu.open .backend-tab { width: 100%; min-width: 0; max-width: none; min-height: 34px; border-right: 0; border-bottom: 1px solid var(--border); }
     .resize-handle { display: none; position: fixed; z-index: 100; -webkit-app-region: no-drag; }
     html[data-platform="win32"] .resize-handle { display: block; }
     .resize-handle[data-resize="top"], .resize-handle[data-resize="bottom"] { left: 10px; right: 10px; height: 6px; }
@@ -72,7 +79,10 @@
   <span class="resize-handle" data-resize="bottom-left"></span>
   <span class="resize-handle" data-resize="bottom-right"></span>
   <header id="titlebar">
-    <nav id="backendTabs" aria-label="PassiDeck backends"></nav>
+    <div id="backendMenu">
+      <button id="backendMenuToggle" type="button" aria-label="PassiDeck backends" aria-expanded="false" aria-controls="backendTabs">Backends</button>
+      <nav id="backendTabs" aria-label="PassiDeck backends"></nav>
+    </div>
     <button id="addBackend" aria-label="Add backend">+</button>
     <div id="dragSpace"></div>
     <div id="windowControls">

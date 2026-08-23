@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('passideckDesktop', {
   popoutAction: action => ipcRenderer.invoke('passideck:popout-action', action),
   redockRequest: () => ipcRenderer.invoke('passideck:redock-request'),
   focusPopout: sessionId => ipcRenderer.invoke('passideck:focus-popout', sessionId),
+  getOpenPopouts: () => ipcRenderer.invoke('passideck:get-open-popouts'),
   getPopoutPrefs: () => ipcRenderer.invoke('passideck:get-popout-prefs'),
   setPopoutRememberGeometry: enabled => ipcRenderer.invoke('passideck:set-popout-remember-geometry', Boolean(enabled)),
   onRedockPane: callback => ipcRenderer.on('passideck:redock-pane', (_event, details) => callback(details)),

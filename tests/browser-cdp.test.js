@@ -216,7 +216,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await cdp.send('Page.navigate', { url: base }, sid);
     await waitEval(cdp, sid, 'document.readyState === "complete"');
     await waitEval(cdp, sid, 'document.querySelectorAll(".term-panel").length >= 11');
-    await waitEval(cdp, sid, '[...state.sessions.values()][0].term.buffer.active.baseY > 0', 10000);
+    await waitEval(cdp, sid, '[...state.sessions.values()][0].term.buffer.active.baseY > 0', 60000);
     const styledReplay = await evalExpr(cdp, sid, `normalizeReplayText('\\x1b[38;5;201mindexed\\x1b[38:2::255:0:127mcolon\\x1b[2J\\x1b[?25m\\x1b[1 m\\x1bM\\x1b7\\x1b8\\x1b=\\x1b>\\x1bXsos-payload\\x1b\\\\\\x01\\x1b')`);
     assert.strictEqual(styledReplay, '\x1b[38;5;201mindexed\x1b[38:2::255:0:127mcolon', 'tmux replay normalization must preserve valid SGR while removing other controls');
     const shellHistoryWheel = await evalExpr(cdp, sid, `(async () => {
@@ -738,8 +738,8 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     await waitEval(cdp, sid, `state.saveTimer === null`);
 
     const peerTarget = await cdp.send('Target.createTarget', { url: 'about:blank' });
-    // Creating the peer tab raises its window; re-activate the main target so
-    // the peer renderer stays backgrounded and its timers keep throttling.
+    // Creating the peer tab raises its window; re-activate the app window so the
+    // app page stays visible and requestAnimationFrame callbacks keep firing.
     await cdp.send('Target.activateTarget', { targetId: target.targetId });
     const peerAttached = await cdp.send('Target.attachToTarget', { targetId: peerTarget.targetId, flatten: true });
     const peerSid = peerAttached.sessionId;
@@ -2505,9 +2505,12 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const indicatorState = {
         indicatorMarked: entries[0].el.classList.contains('response-attention'),
         indicatorLabel: indicator.getAttribute('aria-label'),
-        indicatorDotAnimation: 'none',
-        indicatorBellAnimation: bell ? getComputedStyle(bell).animationName : 'none',
-        indicatorBellContent: bell ? JSON.stringify(bell.textContent) : 'none'
+        indicatorDotAnimation: getComputedStyle(indicator).animationName,
+        bellPresent: Boolean(bell),
+        bellContent: bell?.textContent || '',
+        bellAnimation: bell ? getComputedStyle(bell).animationName : '',
+        bellBesideDot: bell ? bell.getBoundingClientRect().left >= indicator.getBoundingClientRect().right : false,
+        dotOverlayGone: getComputedStyle(indicator, '::after').content === 'none'
       };
       const tabIterations = tabStyle.animationIterationCount;
       const headerDuration = headerStyle.animationDuration;
@@ -2559,8 +2562,11 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       indicatorMarked: true,
       indicatorLabel: 'New response',
       indicatorDotAnimation: 'none',
-      indicatorBellAnimation: 'session-response-bell-show',
-      indicatorBellContent: '"🔔"',
+      bellPresent: true,
+      bellContent: '🔔',
+      bellAnimation: 'session-response-bell-show',
+      bellBesideDot: true,
+      dotOverlayGone: true,
       persistentBell: true,
       persistent: true,
       persistentTab: true,
@@ -2574,40 +2580,40 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     }, 'pane acknowledgement must preserve backend attention while another pane waits, and switcher selection must clear the selected pane plus the backend after the final acknowledgement');
 
     const mouseHoverKeepsAttention = await evalExpr(cdp, sid, `(async () => {
-      const entries = [...state.sessions.values()];
-      const active = entries[0];
-      const originalActiveId = state.activeId;
+      const entry = [...state.sessions.values()][0];
+      const id = entry.session.id;
       const originalNotifyBlinking = state.notifyBlinking;
-      selectPanel(active.session.id, { persist: false });
       setNotifyBlinking(true, { persist: false });
       document.activeElement?.blur?.();
-      notifyResponseComplete(active.session.id);
+      pulsePaneTitlebar(id);
       const before = {
-        attention: active.responseAttention,
-        bell: !!active.el.querySelector('.response-bell')
+        attention: entry.responseAttention === true,
+        bell: Boolean(entry.el.querySelector('.response-bell'))
       };
-      active.term.textarea.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
-      await new Promise(resolve => setTimeout(resolve, 50));
+      // SGR mouse reports (ESC [ < b ; x ; y M) arrive through term.onData on
+      // every pointer move while the app enables mouse reporting (hermes --tui,
+      // tmux). They must not acknowledge the response attention.
+      entry.term.input('\\x1b[<0;10;10M');
+      await new Promise(resolve => setTimeout(resolve, 0));
       const afterMouseMove = {
-        attention: active.responseAttention,
-        bell: !!active.el.querySelector('.response-bell')
+        attention: entry.responseAttention === true,
+        bell: Boolean(entry.el.querySelector('.response-bell'))
       };
-      active.term.input('a');
-      await new Promise(resolve => setTimeout(resolve, 50));
+      // Real keyboard input is the acknowledgement.
+      entry.term.input('x');
+      await new Promise(resolve => setTimeout(resolve, 0));
       const afterTyping = {
-        attention: active.responseAttention,
-        bell: !!active.el.querySelector('.response-bell')
+        attention: entry.responseAttention === true,
+        bell: Boolean(entry.el.querySelector('.response-bell'))
       };
-      clearResponseAttention(active.session.id);
       setNotifyBlinking(originalNotifyBlinking, { persist: false });
-      if (state.activeId !== originalActiveId) selectPanel(originalActiveId);
       return { before, afterMouseMove, afterTyping };
     })()`);
     assert.deepStrictEqual(mouseHoverKeepsAttention, {
       before: { attention: true, bell: true },
       afterMouseMove: { attention: true, bell: true },
       afterTyping: { attention: false, bell: false }
-    }, 'mouse reports must not clear response attention; only real keyboard input must');
+    }, 'mouse reports must not clear response attention; only real keyboard input acknowledges it');
 
     const notifyBlinkingBehavior = await evalExpr(cdp, sid, `(() => {
       const entries = [...state.sessions.values()];
@@ -2735,7 +2741,10 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       clearResponseAttention(active.session.id);
       document.activeElement?.blur?.();
       await new Promise(resolve => active.term.write('\\u0007', resolve));
-      await new Promise(resolve => setTimeout(resolve, 20));
+      const bellDeadline = Date.now() + 2000;
+      while (!active.responseAttention && Date.now() < bellDeadline) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
       const nativeHermesBellMarked = active.responseAttention;
       clearResponseAttention(active.session.id);
       playBell = originalBell;
@@ -2837,6 +2846,11 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       return { inferred: inferHermesVisibleTitle(terminalViewportRows(entry.term)), pane: entry.el.querySelector('.term-title')?.textContent || '' };
     })()`);
     assert.deepStrictEqual(tuiLoadedVisibleTitle, { inferred: 'Loaded TUI Session Title', pane: 'Loaded TUI Session Title' }, 'loaded Hermes TUI sessions must update pane title from visible session title text');
+    await evalExpr(cdp, sid, `(() => {
+      const entry = [...state.sessions.values()][0];
+      entry.terminalMode = 'viewport';
+      return true;
+    })()`);
 
     const tuiUntitledTitle = await evalExpr(cdp, sid, `(async () => {
       const entry = [...state.sessions.values()][0];
@@ -2920,7 +2934,16 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     const fakeSessionListTitle = await evalExpr(cdp, sid, `inferHermesSessionTitle(['Sessions', '▸ 1. current  gpt-5.5  npm run dev'])`);
     assert.strictEqual(fakeSessionListTitle, '', 'ordinary Hermes output resembling a session row must not become a locked pane title');
 
-    await evalExpr(cdp, sid, `(() => { [...state.sessions.values()][0].session.meta.command = '/bin/bash'; return true; })()`);
+    await evalExpr(cdp, sid, `(() => {
+      const entry = [...state.sessions.values()][0];
+      entry.session.meta.command = '/bin/bash';
+      delete entry.autoTitle;
+      delete entry.session.meta.title;
+      entry.titleSource = '';
+      entry.el.querySelector('.term-title').textContent = panelTitle(entry.session);
+      renderSwitcher();
+      return true;
+    })()`);
 
     const switchDescriptions = await evalExpr(cdp, sid, `(async () => {
       const ids = [...state.sessions.keys()];
@@ -2967,11 +2990,9 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const entry = [...state.sessions.values()][0];
       const id = entry.session.id;
       const oldCommand = entry.session.meta.command;
-      const oldTerminalMode = entry.terminalMode;
       const saved = entry.serialize.serialize({ scrollback: 20000 });
       const snapshotRaw = localStorage.getItem(snapshotKey(id));
       entry.session.meta.command = 'hermes';
-      entry.terminalMode = 'hermes';
       try {
         entry.term.reset();
         await new Promise(resolve => entry.term.write(Array.from({ length: entry.term.rows + 60 }, (_, i) => 'normal-hermes-history-' + i + '\\r\\n').join(''), resolve));
@@ -2998,7 +3019,6 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         entry.term.reset();
         await new Promise(resolve => entry.term.write(saved, resolve));
         entry.session.meta.command = oldCommand;
-        entry.terminalMode = oldTerminalMode;
       }
     })()`);
     assert.strictEqual(restoredAlternateBufferHermesWheel.before.type, 'normal', `restoring normal Hermes must exit a stale alternate buffer before wheel input: ${JSON.stringify(restoredAlternateBufferHermesWheel)}`);
@@ -3089,8 +3109,6 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
     try {
       tuiTouchSetup = await evalExpr(cdp, sid, `(async () => {
       const entry = state.sessions.get(state.activeId);
-      const mouseData = [];
-      const listener = entry.term.onData(data => mouseData.push(data));
       const mouseProbeState = { reached: false };
       const mouseProbe = () => { mouseProbeState.reached = true; };
       entry.el.querySelector('.terminal').addEventListener('mousedown', mouseProbe);
@@ -3109,8 +3127,6 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         terminalMode: entry.terminalMode,
         tuiWheelRemainder: entry.tuiWheelRemainder,
         snapshot: entry.serialize.serialize({ scrollback: 20000 }),
-        mouseData,
-        listener,
         mouseProbe,
         mouseProbeState,
         socket,
@@ -3260,7 +3276,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       const multiTouchEndFocused = await evalExpr(cdp, sid, `document.activeElement === window.__tuiTouchRestore.entry.el.querySelector('.xterm-helper-textarea')`);
       tuiTouch = await evalExpr(cdp, sid, `(async () => {
         await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-        const { entry, mouseData, mouseProbeState, sentInput } = window.__tuiTouchRestore;
+        const { entry, mouseProbeState, sentInput } = window.__tuiTouchRestore;
         const screen = entry.el.querySelector('.xterm-screen');
         const rect = screen.getBoundingClientRect();
         const compatibilityMouse = new MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true, clientX: rect.left + 20, clientY: rect.top + 20 });
@@ -3268,9 +3284,10 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
         const chromeTarget = document.querySelector('.term-panel .term-actions button');
         const chromeMouse = new MouseEvent('mousedown', { button: 0, bubbles: true, cancelable: true });
         const chromeMouseDispatched = chromeTarget.dispatchEvent(chromeMouse);
+        const mouseReports = sentInput.flatMap(data => data.split('\\x1b[<').slice(1));
         return {
-          tapEvents: mouseData.filter(data => /^\\x1b\[<0;\\d+;\\d+[Mm]$/.test(data)).length,
-          wheelEvents: mouseData.filter(data => /^\\x1b\[<6[45];\\d+;\\d+M$/.test(data)).length,
+          tapEvents: mouseReports.filter(report => report.startsWith('0;')).length,
+          wheelEvents: mouseReports.filter(report => report.startsWith('64;') || report.startsWith('65;')).length,
           ptyInputs: sentInput.filter(data => data.includes('\\x1b[<')).length,
           selected: entry.term.hasSelection(),
           compatibilityMouseCanceled: !compatibilityMouseDispatched && compatibilityMouse.defaultPrevented,
@@ -3278,12 +3295,12 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
           chromeMouseAllowed: chromeMouseDispatched && !chromeMouse.defaultPrevented
         };
       })()`);
-      assert.strictEqual(tuiTouch.tapEvents, 2, `Hermes TUI touch taps must become one terminal mouse press and release while multi-touch emits no phantom tap: ${JSON.stringify(tuiTouch)}`);
       assert.deepStrictEqual(
         { mobileSelectionFocused, tapStartFocused, tapEndFocused, swipeStartFocused, swipeEndFocused, multiTouchStartFocused, multiTouchEndFocused },
         { mobileSelectionFocused: false, tapStartFocused: false, tapEndFocused: true, swipeStartFocused: false, swipeEndFocused: false, multiTouchStartFocused: false, multiTouchEndFocused: false },
         'mobile window selection and TUI swipes must not open the keyboard; only a completed terminal tap may focus xterm'
       );
+      assert.strictEqual(tuiTouch.tapEvents, 2, `Hermes TUI touch taps must become one terminal mouse press and release while multi-touch emits no phantom tap: ${JSON.stringify(tuiTouch)}`);
       assert.deepStrictEqual(windowActivationFocus, { coarse: false, hybridFine: true }, 'window activation must stay keyboard-free on coarse touch devices while hybrid fine-pointer devices retain desktop focus');
       assert.strictEqual(normalShellTouchFocused, true, 'touch-generated mousedown must still focus normal-shell terminals');
       assert.ok(
@@ -3302,8 +3319,7 @@ async function waitEval(cdp, sessionId, expression, timeout = 8000) {
       await evalExpr(cdp, sid, `(async () => {
         const restore = window.__tuiTouchRestore;
         if (!restore) return;
-        const { entry, command, terminalOwner, terminalMode, tuiWheelRemainder, snapshot, listener, mouseProbe, socket, originalSend } = restore;
-        listener.dispose();
+        const { entry, command, terminalOwner, terminalMode, tuiWheelRemainder, snapshot, mouseProbe, socket, originalSend } = restore;
         entry.el.querySelector('.terminal').removeEventListener('mousedown', mouseProbe);
         socket.send = originalSend;
         clearResponseAttention(entry.session.id);

@@ -1995,6 +1995,7 @@ function installTerminalDragSelection(termEl, term, session) {
   let replaying = false;
   let suspendedMouse = null;
   let suppressMouseUntil = 0;
+  let suppressNextTouchMouse = false;
   const isTui = () => isHermesTuiEntry(state.sessions.get(session.id) || { session });
   const suspendMouse = () => {
     const service = term?._core?.coreMouseService;
@@ -2015,6 +2016,10 @@ function installTerminalDragSelection(termEl, term, session) {
   };
   term.__passideckResumeMouse = resumeMouse;
   term.__passideckClearDragSelection = cancelInterruptedDrag;
+  term.__passideckSuppressTouchMouse = () => {
+    suppressMouseUntil = performance.now() + 1000;
+    suppressNextTouchMouse = true;
+  };
   const block = event => {
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -2075,11 +2080,12 @@ function installTerminalDragSelection(termEl, term, session) {
   };
   const startDrag = event => {
     if (event.type.startsWith('pointer') && event.pointerType !== 'mouse') {
-      if (event.pointerType === 'touch' && termEl.contains(event.target) && isTui()) suppressMouseUntil = performance.now() + 1000;
+      if (event.pointerType === 'touch' && termEl.contains(event.target) && isTui()) term.__passideckSuppressTouchMouse();
       return;
     }
     if (event.type === 'mousedown' && termEl.contains(event.target) && isTui() &&
-        (event.sourceCapabilities?.firesTouchEvents || performance.now() < suppressMouseUntil)) {
+        (event.sourceCapabilities?.firesTouchEvents || suppressNextTouchMouse || performance.now() < suppressMouseUntil)) {
+      suppressNextTouchMouse = false;
       block(event);
       return;
     }
@@ -2153,6 +2159,7 @@ function installTerminalDragSelection(termEl, term, session) {
     cancelInterruptedDrag();
     delete term.__passideckResumeMouse;
     delete term.__passideckClearDragSelection;
+    delete term.__passideckSuppressTouchMouse;
   };
 }
 
@@ -2230,8 +2237,15 @@ function installTerminalWheelScroll(termEl, term, session = null) {
     e.preventDefault();
     e.stopImmediatePropagation();
   }, { capture: true, passive: false });
-  termEl.addEventListener('touchstart', e => {
+  const resetTouchScroll = () => {
+    touchY = touchStartX = touchStartY = null;
+    touchRemainder = touchDistance = 0;
+    touchApplication = false;
+  };
+  const onTouchStart = e => {
+    if (!termEl.contains(e.target)) return;
     const buffer = term.buffer?.active;
+    if (applicationOwnsTouch()) term.__passideckSuppressTouchMouse?.();
     if (e.touches.length !== 1) {
       touchY = touchStartX = touchStartY = null;
       touchRemainder = touchDistance = 0;
@@ -2244,6 +2258,7 @@ function installTerminalWheelScroll(termEl, term, session = null) {
     touchStartY = touch.clientY;
     touchDistance = 0;
     if (touchApplication) {
+      term.__passideckSuppressTouchMouse?.();
       selectPanel(session.id, { focus: false });
       term.clearSelection();
       term.__passideckClearDragSelection?.();
@@ -2259,9 +2274,11 @@ function installTerminalWheelScroll(termEl, term, session = null) {
     }
     touchY = e.touches[0].clientY;
     touchRemainder = 0;
-  }, { capture: true, passive: false });
-  termEl.addEventListener('touchmove', e => {
+  };
+  const onTouchMove = e => {
+    if (!termEl.contains(e.target)) return;
     if (e.touches.length !== 1) {
+      if (applicationOwnsTouch()) term.__passideckSuppressTouchMouse?.();
       resetTouchScroll();
       return;
     }
@@ -2281,13 +2298,10 @@ function installTerminalWheelScroll(termEl, term, session = null) {
     }
     e.preventDefault();
     e.stopImmediatePropagation();
-  }, { capture: true, passive: false });
-  const resetTouchScroll = () => {
-    touchY = touchStartX = touchStartY = null;
-    touchRemainder = touchDistance = 0;
-    touchApplication = false;
   };
-  const endTouchScroll = () => {
+  const endTouchScroll = e => {
+    if (!termEl.contains(e.target)) return;
+    if (applicationOwnsTouch()) term.__passideckSuppressTouchMouse?.();
     if (touchApplication && touchDistance < 8 && touchStartX !== null && touchStartY !== null) {
       const touch = { clientX: touchStartX, clientY: touchStartY };
       clearResponseAttention(session.id);
@@ -2295,11 +2309,24 @@ function installTerminalWheelScroll(termEl, term, session = null) {
       syncTerminalInputFocus(true);
       sendApplicationMouse(0, touch);
       sendApplicationMouse(0, touch, true);
+    } else if (touchApplication) {
+      term.blur();
+      syncTerminalInputFocus(false);
     }
     resetTouchScroll();
   };
-  termEl.addEventListener('touchend', endTouchScroll, true);
-  termEl.addEventListener('touchcancel', resetTouchScroll, true);
+  const cancelTouchScroll = e => { if (termEl.contains(e.target)) resetTouchScroll(); };
+  const touchOptions = { capture: true, passive: false };
+  window.addEventListener('touchstart', onTouchStart, touchOptions);
+  window.addEventListener('touchmove', onTouchMove, touchOptions);
+  window.addEventListener('touchend', endTouchScroll, true);
+  window.addEventListener('touchcancel', cancelTouchScroll, true);
+  return () => {
+    window.removeEventListener('touchstart', onTouchStart, true);
+    window.removeEventListener('touchmove', onTouchMove, true);
+    window.removeEventListener('touchend', endTouchScroll, true);
+    window.removeEventListener('touchcancel', cancelTouchScroll, true);
+  };
 }
 
 function updateEmpty() {
@@ -3597,7 +3624,7 @@ function createPanel(session, opts = {}) {
     if (ctrlZ && legacySuspendProtection) return false;
     return true;
   });
-  installTerminalWheelScroll(termEl, term, session);
+  const touchScrollCleanup = installTerminalWheelScroll(termEl, term, session);
   const dragSelectionCleanup = installTerminalDragSelection(termEl, term, session);
 
   const ro = new ResizeObserver(() => {
@@ -3633,7 +3660,7 @@ function createPanel(session, opts = {}) {
 
   const hasSnapshot = hasTerminalSnapshot(id);
   const terminalOwner = declaredTerminalOwner(session);
-  state.sessions.set(id, { session, el, term, fit, serialize, predictiveEcho, terminalComposing: false, compositionTimer: null, ws: null, ro, arrangeCleanup: dismissArrange, dragSelectionCleanup, terminalOwner, terminalMode: isHermesTuiEntry({ session }) ? 'hermes-tui' : terminalOwner, tuiWheelRemainder: 0, hasSnapshot, attachCount: 0, attachId: '', outputSequence: 0, snapshotTimer: null, outputBuffer: [], outputBufferChars: 0, outputGeneration: 0, pendingReplay: null, pendingReplayCursor: null, pendingReplayAck: '', pendingReplaySocket: null, pendingHermesEvents: [], outputFlushTimer: null, outputWriteInFlight: false, outputFrameHandle: null, outputCancelled: false, titleRefreshTimer: null, titleSource: '', working: false, lastSentCols: 0, lastSentRows: 0 });
+  state.sessions.set(id, { session, el, term, fit, serialize, predictiveEcho, terminalComposing: false, compositionTimer: null, ws: null, ro, arrangeCleanup: dismissArrange, dragSelectionCleanup, touchScrollCleanup, terminalOwner, terminalMode: isHermesTuiEntry({ session }) ? 'hermes-tui' : terminalOwner, tuiWheelRemainder: 0, hasSnapshot, attachCount: 0, attachId: '', outputSequence: 0, snapshotTimer: null, outputBuffer: [], outputBufferChars: 0, outputGeneration: 0, pendingReplay: null, pendingReplayCursor: null, pendingReplayAck: '', pendingReplaySocket: null, pendingHermesEvents: [], outputFlushTimer: null, outputWriteInFlight: false, outputFrameHandle: null, outputCancelled: false, titleRefreshTimer: null, titleSource: '', working: false, lastSentCols: 0, lastSentRows: 0 });
   term.onBell?.(() => notifyResponseComplete(id));
 
   if (state.minimized.has(id)) el.classList.add('minimized');
@@ -4156,7 +4183,6 @@ function focusActiveTerminalOnWindowActivation() {
 function selectPanel(id, opts = {}) {
   const entry = state.sessions.get(id);
   if (!entry || state.panePrefs.paneDesktop[id] !== state.activeDesktopId) return;
-  const changed = state.activeId !== id;
   state.activeId = id;
   renderBackendLatency();
   document.querySelectorAll('.term-panel').forEach(p => p.classList.remove('active'));
@@ -4165,7 +4191,7 @@ function selectPanel(id, opts = {}) {
   if (!state.minimized.has(id)) bringWindowToFront(id, { persist: false });
   const focus = opts.focus ?? navigator.maxTouchPoints === 0;
   if (focus) entry.term.focus();
-  else if (changed && document.activeElement?.closest?.('.xterm')) document.activeElement.blur();
+  else if (document.activeElement?.closest?.('.xterm')) document.activeElement.blur();
   syncTerminalInputFocus();
   scheduleTerminalFit();
   renderSwitcher();
@@ -4181,6 +4207,7 @@ function discardPanel(id, opts = {}) {
     resetTerminalOutputPipeline(entry);
     try { entry.ro.disconnect(); } catch {}
     entry.dragSelectionCleanup?.();
+    entry.touchScrollCleanup?.();
     try { entry.ws.close(); } catch {}
     try { entry.term.dispose(); } catch {}
     window.removeEventListener('blur', entry.arrangeCleanup);
@@ -4681,11 +4708,12 @@ async function init() {
   installTooltips();
   loadResponseSoundPrefs();
   state.hydrating = true;
-  const [sessions, ui, health, settings] = await Promise.all([
+  const [sessions, ui, health, settings, openPopouts] = await Promise.all([
     api('GET', '/api/sessions').catch(() => []),
     api('GET', '/api/ui-state').catch(() => null),
     api('GET', '/api/health').catch(() => null),
-    api('GET', '/api/settings').catch(() => null)
+    api('GET', '/api/settings').catch(() => null),
+    POPOUT_MODE ? [] : Promise.resolve(window.passideckDesktop?.getOpenPopouts?.()).catch(() => [])
   ]);
   void updateVersionFooter(health);
   applyDynamicTitleSettings(settings);
@@ -4712,6 +4740,11 @@ async function init() {
 
   state.minimized = new Set((activeDesktop().minimized || []).filter(id => state.sessions.has(id)));
   state.minimized.forEach(id => state.sessions.get(id)?.el.classList.add('minimized'));
+  for (const id of openPopouts || []) {
+    if (!state.sessions.has(id)) continue;
+    markPaneDetached(id, true);
+    suspendDetachedPane(id);
+  }
   responsiveMinimizeForViewport();
   applyLayoutVisibility();
 
@@ -4724,11 +4757,19 @@ async function init() {
     installPopoutMode();
     const paneEntry = state.sessions.get(POPOUT_PANE_ID);
     if (paneEntry) selectPanel(POPOUT_PANE_ID, { persist: false });
+    else void window.passideckDesktop?.popoutAction?.('terminate');
   } else {
     installDetachGesture();
     window.passideckDesktop?.onRedockPane?.(details => {
       const id = String(details?.sessionId || '');
       redockDetachedPane(id, details || {});
+    });
+    window.passideckDesktop?.onPopoutsChanged?.(sessionIds => {
+      for (const id of sessionIds || []) {
+        if (!state.sessions.has(id) || state.detachedPanes.has(id)) continue;
+        markPaneDetached(id, true);
+        suspendDetachedPane(id);
+      }
     });
   }
   const draft = readUiDraft();

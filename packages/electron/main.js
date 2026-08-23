@@ -18,6 +18,8 @@ let mainWindow;
 let config;
 let dialogOpen = false;
 let resizeDrag = null;
+let mainWindowSaveTimer = null;
+let appClosing = false;
 let dockBounceTimers = [];
 let dockBounceIds = [];
 const backendViews = new Map();
@@ -108,6 +110,9 @@ function backendIdForSender(event) {
   if (event.senderFrame !== event.sender.mainFrame) throw new Error('Untrusted PassiDeck backend frame');
   for (const [id, entry] of backendViews) {
     if (entry.view.webContents === event.sender) return id;
+  }
+  for (const entry of popoutWindows.values()) {
+    if (entry.win.webContents === event.sender) return entry.backendId;
   }
   throw new Error('Unknown PassiDeck backend');
 }
@@ -342,7 +347,9 @@ function notifyBackendViews(channel, payload) {
 }
 
 function notifyPopoutState() {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('passideck:popouts-changed', popoutStateForShell());
+  const sessionIds = popoutStateForShell();
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('passideck:popouts-changed', sessionIds);
+  notifyBackendViews('passideck:popouts-changed', sessionIds);
 }
 
 function popoutBackendForSender(event) {
@@ -369,16 +376,30 @@ function savePopoutGeometry(sessionId) {
   entry.alwaysOnTop = entry.win.isAlwaysOnTop();
 }
 
+function popoutPreference(entry, open) {
+  return entry.geometry ? {
+    backendId: entry.backendId,
+    ...entry.geometry,
+    alwaysOnTop: Boolean(entry.alwaysOnTop),
+    open: Boolean(open)
+  } : null;
+}
+
 function persistPopoutPrefs() {
   if (config.popoutRememberGeometry === false) return;
-  const prefs = {};
+  const prefs = { ...(config.popoutPrefs || {}) };
   for (const [sessionId, entry] of popoutWindows) {
-    if (entry.geometry) prefs[sessionId] = { ...entry.geometry, alwaysOnTop: Boolean(entry.alwaysOnTop) };
-  }
-  for (const [sessionId, pref] of Object.entries(config.popoutPrefs || {})) {
-    if (!popoutWindows.has(sessionId)) prefs[sessionId] = pref;
+    const pref = popoutPreference(entry, true);
+    if (pref) prefs[sessionId] = pref;
   }
   config.popoutPrefs = prefs;
+  writeConfig();
+}
+
+function persistClosedPopout(entry) {
+  if (config.popoutRememberGeometry === false) return;
+  const pref = popoutPreference(entry, false);
+  if (pref) config.popoutPrefs[entry.sessionId] = pref;
   writeConfig();
 }
 
@@ -386,8 +407,8 @@ function redockPane(sessionId, { reason } = {}) {
   const entry = popoutWindows.get(sessionId);
   if (!entry) return false;
   savePopoutGeometry(sessionId);
-  persistPopoutPrefs();
   popoutWindows.delete(sessionId);
+  persistClosedPopout(entry);
   if (!entry.win.isDestroyed()) entry.win.destroy();
   notifyBackendViews('passideck:redock-pane', { sessionId, reason: reason || 'drag' });
   notifyPopoutState();
@@ -416,7 +437,7 @@ function createPopoutWindow(backend, sessionId, options = {}) {
       sandbox: true
     }
   });
-  const entry = { win, backendId: backend.id, sessionId, geometry: null, alwaysOnTop: false, dragMonitorTimer: null };
+  const entry = { win, backendId: backend.id, sessionId, geometry: rect, alwaysOnTop: false, dragMonitorTimer: null };
   popoutWindows.set(sessionId, entry);
   win.webContents.on('context-menu', (_event, params) => {
     void copySelectionOnContextMenu(win.webContents, params);
@@ -440,24 +461,39 @@ function createPopoutWindow(backend, sessionId, options = {}) {
   win.on('close', () => {
     if (!popoutWindows.has(sessionId)) return;
     savePopoutGeometry(sessionId);
-    persistPopoutPrefs();
+    if (appClosing) {
+      persistPopoutPrefs();
+      return;
+    }
     popoutWindows.delete(sessionId);
+    persistClosedPopout(entry);
     notifyBackendViews('passideck:redock-pane', { sessionId, reason: 'close' });
     notifyPopoutState();
   });
   win.on('moved', () => {
+    savePopoutGeometry(sessionId);
     if (entry.dragMonitorTimer) return;
     entry.dragMonitorTimer = setInterval(() => {
       if (entry.win.isDestroyed() || entry.win.isMinimized()) return;
       if (popoutCenterOverMainWindow(entry.win)) redockPane(sessionId, { reason: 'drag' });
     }, POPOUT_DOCK_CHECK_MS);
   });
+  win.on('resize', () => savePopoutGeometry(sessionId));
   win.on('close', () => {
     if (entry.dragMonitorTimer) { clearInterval(entry.dragMonitorTimer); entry.dragMonitorTimer = null; }
   });
   win.webContents.loadURL(popoutUrl(backend, sessionId));
   notifyPopoutState();
   return win;
+}
+
+function restoreRememberedPopouts() {
+  if (config.popoutRememberGeometry === false) return;
+  for (const [sessionId, pref] of Object.entries(config.popoutPrefs || {})) {
+    if (!pref.open) continue;
+    const backend = config.backends.find(item => item.id === pref.backendId);
+    if (backend) createPopoutWindow(backend, sessionId, { rect: pref });
+  }
 }
 
 function popoutCenterOverMainWindow(win) {
@@ -531,12 +567,17 @@ function resizeWindowFromRenderer(event, phase, value = {}) {
 }
 
 function createWindow() {
+  appClosing = false;
+  const rememberedMain = config.popoutRememberGeometry === false ? null : config.mainWindowState;
   const windowChrome = process.platform === 'darwin'
     ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 12, y: 8 } }
     : { frame: false };
   const win = new BrowserWindow({
-    width: 1500,
-    height: 950,
+    width: rememberedMain?.width || 1500,
+    height: rememberedMain?.height || 950,
+    ...(rememberedMain ? { x: rememberedMain.x, y: rememberedMain.y } : {}),
+    minWidth: MIN_WINDOW_WIDTH,
+    minHeight: MIN_WINDOW_HEIGHT,
     title: 'PassiDeck',
     ...windowChrome,
     autoHideMenuBar: true,
@@ -555,7 +596,26 @@ function createWindow() {
     event.preventDefault();
     activeView()?.webContents.reload();
   });
-  win.on('resize', fitActiveView);
+  const saveMainWindowState = () => {
+    if (config.popoutRememberGeometry === false || win.isDestroyed()) return;
+    const bounds = win.getNormalBounds();
+    config.mainWindowState = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, maximized: win.isMaximized() };
+    writeConfig();
+  };
+  const scheduleMainWindowSave = () => {
+    clearTimeout(mainWindowSaveTimer);
+    mainWindowSaveTimer = setTimeout(saveMainWindowState, 200);
+  };
+  win.on('resize', () => { fitActiveView(); scheduleMainWindowSave(); });
+  win.on('move', scheduleMainWindowSave);
+  win.on('maximize', scheduleMainWindowSave);
+  win.on('unmaximize', scheduleMainWindowSave);
+  win.on('close', () => {
+    appClosing = true;
+    clearTimeout(mainWindowSaveTimer);
+    saveMainWindowState();
+    persistPopoutPrefs();
+  });
   win.on('focus', () => {
     stopNativeAttention();
     focusActiveView();
@@ -574,7 +634,9 @@ function createWindow() {
   win.loadFile(path.join(__dirname, 'shell.html')).then(() => {
     for (const backend of config.backends) createBackendView(backend);
     selectBackend(config.activeBackendId);
+    restoreRememberedPopouts();
   });
+  if (rememberedMain?.maximized) win.maximize();
   return win;
 }
 
@@ -652,6 +714,10 @@ app.whenReady().then(() => {
     createPopoutWindow(backend, sessionId, { rect: normalizePopoutRect(request?.rect || {}) });
     return popoutStateForShell();
   });
+  ipcMain.handle('passideck:get-open-popouts', event => {
+    const backendId = backendIdForSender(event);
+    return [...popoutWindows.values()].filter(entry => entry.backendId === backendId).map(entry => entry.sessionId);
+  });
   ipcMain.handle('passideck:redock-request', event => {
     const entry = popoutBackendForSender(event);
     redockPane(entry.sessionId, { reason: 'button' });
@@ -693,13 +759,16 @@ app.whenReady().then(() => {
     return undefined;
   });
   ipcMain.handle('passideck:get-popout-prefs', event => {
-    popoutBackendForSender(event);
+    backendIdForSender(event);
     return { rememberGeometry: config.popoutRememberGeometry !== false };
   });
   ipcMain.handle('passideck:set-popout-remember-geometry', (event, enabled) => {
-    assertShellSender(event);
+    backendIdForSender(event);
     config.popoutRememberGeometry = Boolean(enabled);
-    if (!config.popoutRememberGeometry) config.popoutPrefs = {};
+    if (!config.popoutRememberGeometry) {
+      config.mainWindowState = null;
+      config.popoutPrefs = {};
+    }
     writeConfig();
     notifyShell();
     return config.popoutRememberGeometry;

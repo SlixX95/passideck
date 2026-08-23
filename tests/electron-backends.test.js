@@ -1,7 +1,9 @@
 const assert = require('assert');
 const {
   DEFAULT_BACKENDS,
-  normalizeConfig
+  normalizeConfig,
+  normalizeMainWindowState,
+  normalizePopoutPrefs
 } = require('../packages/electron/backend-profiles');
 
 assert.deepStrictEqual(
@@ -88,5 +90,32 @@ const deliberateRemoval = normalizeConfig({
   backends: upgraded.backends.filter(backend => backend.id !== 'passideck-dev')
 });
 assert.ok(!deliberateRemoval.backends.some(backend => backend.id === 'passideck-dev'), 'current settings must respect deliberate backend removal');
+
+assert.deepStrictEqual(
+  normalizeMainWindowState({ x: -1200.4, y: 44.6, width: 1333.2, height: 777.8, maximized: true }),
+  { x: -1200, y: 45, width: 1333, height: 778, maximized: true },
+  'main app window geometry must survive restart with native integer bounds and maximized state'
+);
+assert.strictEqual(normalizeMainWindowState({ width: 10, height: Infinity }), null, 'invalid main app geometry must fail closed');
+
+assert.deepStrictEqual(
+  normalizePopoutPrefs({
+    paneA: { backendId: 'maeve', x: 1800.1, y: -20.7, width: 720.4, height: 480.6, alwaysOnTop: true, open: true },
+    paneB: { backendId: '', x: 1, y: 2, width: 3, height: 4 },
+    paneC: 'invalid'
+  }),
+  {
+    paneA: { backendId: 'maeve', x: 1800, y: -21, width: 720, height: 481, alwaysOnTop: true, open: true }
+  },
+  'only complete detached-window geometry may be restored after restart'
+);
+
+const rememberedWindows = normalizeConfig({
+  ...migrated,
+  mainWindowState: { x: 10, y: 20, width: 1400, height: 900, maximized: false },
+  popoutPrefs: { paneA: { backendId: 'maeve', x: 100, y: 200, width: 700, height: 500, open: true } }
+});
+assert.deepStrictEqual(rememberedWindows.mainWindowState, { x: 10, y: 20, width: 1400, height: 900, maximized: false }, 'normalized config must retain the main app window');
+assert.strictEqual(rememberedWindows.popoutPrefs.paneA.open, true, 'normalized config must retain which detached windows were open');
 
 console.log('electron-backends ok');

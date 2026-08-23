@@ -7,6 +7,7 @@ const root = path.resolve(__dirname, '..');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const electronPkg = JSON.parse(fs.readFileSync(path.join(root, 'packages/electron/package.json'), 'utf8'));
 const main = fs.readFileSync(path.join(root, 'packages/electron/main.js'), 'utf8');
+const appJs = fs.readFileSync(path.join(root, 'packages/client/public/app.js'), 'utf8');
 const preload = fs.readFileSync(path.join(root, 'packages/electron/preload.js'), 'utf8');
 const shellHtml = fs.readFileSync(path.join(root, 'packages/electron/shell.html'), 'utf8');
 const shellJs = fs.readFileSync(path.join(root, 'packages/electron/shell.js'), 'utf8');
@@ -252,6 +253,7 @@ assert.ok(
 );
 assert.ok(main.includes("ipcMain.handle('passideck:read-clipboard-image'") && main.includes('clipboard.readImage()') && main.includes('backendIdForSender(event)'), 'desktop image paste must use a sender-validated native clipboard fallback');
 assert.ok(main.includes("webContents.on('context-menu'") && main.includes('term.getSelection()'), 'backend views must copy DOM and xterm selections on right click');
+assert.ok(/function backendIdForSender[\s\S]*popoutWindows\.values\(\)[\s\S]*entry\.backendId/.test(main), 'native clipboard and shared desktop IPC must trust sender-owned popout renderers through their backend identity');
 assert.ok(main.includes('term.clearSelection()') && main.includes('removeAllRanges()'), 'desktop right-click copy must clear the copied terminal/DOM selection');
 assert.ok(!main.includes("label: 'Copy'") && !main.includes('Menu.buildFromTemplate'), 'right-click selection copy must not open an extra menu');
 assert.ok(main.includes('nodeIntegration: false'), 'remote UI must not get Node integration');
@@ -311,6 +313,14 @@ assert.ok(main.includes("ipcMain.handle('passideck:save-backend'"), 'shell must 
 assert.ok(main.includes("ipcMain.handle('passideck:remove-backend'"), 'shell must remove backend profiles');
 assert.ok(shellHtml.includes('backendTabs') && shellHtml.includes('addBackend'), 'shell must render tab strip and add control');
 assert.ok(
+  shellHtml.includes('id="backendMenu"') && shellHtml.includes('id="backendMenuToggle"') &&
+  shellHtml.includes('html.backend-overflow #backendMenu') && shellHtml.includes('html.backend-overflow #backendTabs') &&
+  shellJs.includes('function syncBackendOverflow()') && shellJs.includes("classList.toggle('backend-overflow'") &&
+  shellJs.includes("event.key === 'Escape' && backendMenu.classList.contains('open')") &&
+  shellJs.includes("window.addEventListener('resize', scheduleBackendOverflowSync)"),
+  'narrow Electron windows must collapse complete backend tabs into an adaptive dropdown'
+);
+assert.ok(
   /#backendTabs\s*,\s*#addBackend\s*,\s*#windowControls\s*\{[^}]*-webkit-app-region:\s*no-drag/.test(shellHtml),
   'add-backend button must be clickable instead of acting as a frameless-window drag region'
 );
@@ -321,12 +331,26 @@ assert.ok(workflow.includes("runner.name }}' -ne 'ai-server-passideck-dev'"), 'p
 assert.ok(!workflow.includes('pull_request:'), 'untrusted PR code must never execute on the persistent self-hosted runner');
 assert.ok(workflow.includes('contents: read'), 'build workflow token must stay read-only');
 
-// Native pane-popout Electron regression
-assert.ok(main.includes('const popoutWindows = new Map()') && main.includes('function createPopoutWindow'), 'Electron must own one native window per detached pane');
-assert.ok(main.includes("ipcMain.handle('passideck:detach-pane'") && main.includes("action === 'terminate'"), 'Electron must detach and terminate popout sessions through validated IPC');
-assert.ok(main.includes('options.rect || remembered'), 'pointer-release geometry must override remembered position');
-assert.ok(preload.includes('detachPane') && preload.includes('redockRequest') && preload.includes('focusPopout'), 'backend preload must expose the narrow popout bridge');
-assert.ok(main.includes('popoutWindows.values()') && main.includes('resizeDrag = { win: target.win'), 'resize IPC must recognize the popout sender and bind the drag to that native window');
-assert.ok(main.includes('resizeDrag.win.setBounds') && main.includes('minWidth: POPOUT_MIN_WIDTH'), 'popout resizing must update its own bounds with popout minimums');
-
 console.log('electron-static ok');
+
+// Pane popout (detach) regressions
+assert.ok(main.includes("ipcMain.handle('passideck:detach-pane'"), 'shell must expose detach-pane IPC');
+assert.ok(main.includes('function createPopoutWindow'), 'main must create detached pane windows');
+assert.ok(main.includes('frame: false') || main.includes('frame:false'), 'popout windows are frameless like the shell');
+const popoutCreate = main.slice(main.indexOf('function createPopoutWindow'), main.indexOf('function popoutCenterOverMainWindow'));
+assert.ok(popoutCreate.includes('preload: path.join(__dirname, \'preload.js\')'), 'popout windows must use the backend preload bridge');
+assert.ok(main.includes('popout-url-params: pane + popout'), 'popout URL must carry pane + popout params');
+assert.ok(main.includes('setAlwaysOnTop(next)'), 'always-foreground toggle must call setAlwaysOnTop');
+assert.ok(main.includes('passideck:redock-pane'), 'redock notification to the shell required');
+assert.ok(main.includes('popoutRememberGeometry'), 'remember-geometry setting must be persisted');
+assert.ok(main.includes("ipcMain.handle('passideck:get-open-popouts'") && preload.includes('getOpenPopouts'), 'backend renderers must hydrate the detached panes already open before app restart');
+assert.ok(appJs.includes('getOpenPopouts') && appJs.includes('suspendDetachedPane(id)'), 'the main renderer must hide and disconnect every restored detached pane');
+assert.ok(main.includes('mainWindowState') && main.includes('getNormalBounds()'), 'remember windows must persist the main app size, position and maximized state');
+assert.ok(main.includes('restoreRememberedPopouts()'), 'remember windows must recreate still-open detached native windows on app restart');
+assert.ok(/passideck:get-popout-prefs[\s\S]*backendIdForSender\(event\)/.test(main) && /passideck:set-popout-remember-geometry[\s\S]*backendIdForSender\(event\)/.test(main), 'the in-app Remember windows setting must accept its actual backend renderer sender');
+assert.ok(main.includes('options.rect || remembered') && !main.includes('remembered || options.rect'), 'current drag release geometry must override remembered popout geometry');
+assert.ok(main.includes("action === 'terminate'") && main.includes("reason: 'terminated'"), 'popout session-close action must close without redocking a dead session');
+assert.ok(main.includes('function resizeTargetForSender') && main.includes('popoutWindows.values()'), 'resize IPC must resolve native popout senders instead of rejecting them as unknown backends');
+assert.ok(main.includes('resizeDrag = { win: target.win') && main.includes('resizeDrag.win.setBounds'), 'resize moves must mutate the sender-owned OS window, never always the main window');
+assert.ok(main.includes('const POPOUT_MIN_WIDTH = 320') && main.includes('const POPOUT_MIN_HEIGHT = 240') && main.includes('minWidth: POPOUT_MIN_WIDTH') && main.includes('minHeight: POPOUT_MIN_HEIGHT'), 'popout edge resize must retain the popout minimum size instead of the main-window minimum');
+assert.ok(preload.includes('detachPane') && preload.includes('popoutAction') && preload.includes('redockRequest'), 'preload must expose popout bridge');

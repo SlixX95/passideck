@@ -1,4 +1,6 @@
 const tabs = document.getElementById('backendTabs');
+const backendMenu = document.getElementById('backendMenu');
+const backendMenuToggle = document.getElementById('backendMenuToggle');
 const dialog = document.getElementById('backendDialog');
 const form = document.getElementById('backendForm');
 const backendColor = document.getElementById('backendColor');
@@ -7,6 +9,31 @@ const uiToggle = document.getElementById('uiToggle');
 const globalSoundToggle = document.getElementById('globalSoundToggle');
 document.documentElement.dataset.platform = window.passideckShell.platform;
 let state = { backends: [], activeBackendId: '' };
+let backendOverflowFrame = 0;
+
+function setBackendMenuOpen(open) {
+  backendMenu.classList.toggle('open', open);
+  backendMenuToggle.setAttribute('aria-expanded', String(open));
+}
+
+function syncBackendOverflow() {
+  const root = document.documentElement;
+  const titlebar = document.getElementById('titlebar');
+  root.classList.remove('backend-overflow');
+  const tabsWidth = [...tabs.children].reduce((sum, tab) => sum + Math.max(120, tab.scrollWidth), 0);
+  const fixedWidth = document.getElementById('addBackend').offsetWidth + document.getElementById('windowControls').scrollWidth + 24 + (window.passideckShell.platform === 'darwin' ? 76 : 0);
+  const overflow = tabsWidth + fixedWidth > titlebar.clientWidth;
+  root.classList.toggle('backend-overflow', overflow);
+  if (!overflow) setBackendMenuOpen(false);
+}
+
+function scheduleBackendOverflowSync() {
+  cancelAnimationFrame(backendOverflowFrame);
+  backendOverflowFrame = requestAnimationFrame(() => {
+    backendOverflowFrame = 0;
+    syncBackendOverflow();
+  });
+}
 
 if (window.passideckShell.platform === 'win32') {
   document.querySelectorAll('.resize-handle').forEach(handle => {
@@ -64,6 +91,8 @@ function render(next) {
   globalSoundToggle.textContent = state.globalSoundEnabled ? '🔔 On' : '🔕 Off';
   globalSoundToggle.setAttribute('aria-pressed', String(Boolean(state.globalSoundEnabled)));
   globalSoundToggle.setAttribute('aria-label', state.globalSoundEnabled ? 'Mute response sounds' : 'Enable response sounds');
+  const activeBackend = state.backends.find(backend => backend.id === state.activeBackendId);
+  backendMenuToggle.textContent = activeBackend?.name || 'Backends';
   tabs.replaceChildren(...state.backends.map(backend => {
     const tab = document.createElement('button');
     const active = backend.id === state.activeBackendId;
@@ -90,10 +119,11 @@ function render(next) {
       tab.append(badge);
     }
     tab.append(edit);
-    tab.onclick = () => window.passideckShell.selectBackend(backend.id);
+    tab.onclick = () => { setBackendMenuOpen(false); window.passideckShell.selectBackend(backend.id); };
     return tab;
   }));
   applyAccent();
+  scheduleBackendOverflowSync();
 }
 
 async function openDialog(backend = null) {
@@ -117,6 +147,18 @@ async function closeDialog() {
 }
 
 document.getElementById('addBackend').onclick = () => { void openDialog(); };
+backendMenuToggle.onclick = () => setBackendMenuOpen(!backendMenu.classList.contains('open'));
+let backendOpenTimer = 0;
+let backendCloseTimer = 0;
+backendMenu.addEventListener('pointerenter', () => {
+  if (!document.documentElement.classList.contains('backend-overflow')) return;
+  clearTimeout(backendCloseTimer);
+  backendOpenTimer = setTimeout(() => setBackendMenuOpen(true), 180);
+});
+backendMenu.addEventListener('pointerleave', () => {
+  clearTimeout(backendOpenTimer);
+  backendCloseTimer = setTimeout(() => setBackendMenuOpen(false), 140);
+});
 uiToggle.onclick = async () => renderUiToggle(await window.passideckShell.toggleUi());
 globalSoundToggle.onclick = async () => { await window.passideckShell.setGlobalSoundEnabled(!state.globalSoundEnabled); };
 document.getElementById('cancelBackend').onclick = () => { void closeDialog(); };
@@ -144,8 +186,15 @@ form.onsubmit = async event => {
 };
 document.addEventListener('pointerdown', event => {
   if (dialog.open && !dialog.contains(event.target)) void closeDialog();
+  if (backendMenu.classList.contains('open') && !backendMenu.contains(event.target)) setBackendMenuOpen(false);
 });
 document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && backendMenu.classList.contains('open')) {
+    event.preventDefault();
+    setBackendMenuOpen(false);
+    backendMenuToggle.focus();
+    return;
+  }
   if (event.key === 'Escape' && dialog.open) {
     event.preventDefault();
     void closeDialog();
@@ -154,6 +203,7 @@ document.addEventListener('keydown', event => {
 document.querySelectorAll('#windowControls button[data-action]').forEach(button => {
   button.onclick = () => window.passideckShell.windowAction(button.dataset.action);
 });
+window.addEventListener('resize', scheduleBackendOverflowSync);
 
 window.passideckShell.onBackendsChanged(render);
 window.passideckShell.listBackends().then(render);

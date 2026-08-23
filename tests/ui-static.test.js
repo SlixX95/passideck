@@ -297,7 +297,17 @@ assert.ok(
   !app.includes('workingIdleTimer') &&
   !app.includes("isHermesEntry(entry) && clean.includes('\\r')") &&
   style.includes('.term-panel.working[data-connection-status="live"] .connection-dot') &&
-  style.includes('@keyframes session-working-spin'),
+  style.includes('@keyframes session-working-spin') &&
+  style.includes('.response-bell') &&
+  style.includes('@keyframes session-response-bell-show') &&
+  !style.includes('session-response-dot-out') &&
+  app.includes("isMouseReport(data)") &&
+  app.includes("if (!isMouseReport(data)) clearResponseAttention(id);") &&
+  app.includes("clearResponseAttention(id);") &&
+  app.includes("el.querySelector('.response-bell')") &&
+  app.includes("bell.className = 'response-bell'") &&
+  app.includes("bell.remove();") &&
+  app.includes("dot.after(bell);"),
   'the working spinner must include delegated subagent work while preserving native busy-to-idle and TUI rendered-busy fallback behavior'
 );
 assert.ok(
@@ -460,7 +470,7 @@ assert.ok(
 );
 const replayNormalizer = app.slice(app.indexOf('function normalizeReplayText'), app.indexOf('function sanitizeTerminalOutput'));
 assert.ok(!replayNormalizer.includes(".replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, '')"), 'tmux replay normalization must not strip SGR with every CSI control');
-assert.ok(html.includes('app.js?v=20260822-working-fallback') && html.includes('style.css?v=20260822-working-fallback'), 'client cache keys must activate delegated working fallback after the native Hermes event bridge disconnects');
+assert.ok(html.includes('app.js?v=20260823-popout-copy-window-restore') && html.includes('style.css?v=20260823-popout-copy-window-restore'), 'client cache keys must activate popout clipboard parity and native window restoration');
 assert.ok(html.includes('interactive-widget=resizes-content'), 'mobile soft keyboards must resize PassiDeck content instead of covering the TUI composer');
 assert.ok(
   style.includes('height: var(--passideck-viewport-height, 100dvh)') &&
@@ -470,8 +480,8 @@ assert.ok(
 );
 const terminalDragBlock = app.slice(app.indexOf('function installTerminalDragSelection'), app.indexOf('function declaredTerminalOwner'));
 const terminalTouchBlock = app.slice(app.indexOf('function installTerminalWheelScroll'), app.indexOf('function updateEmpty'));
-const terminalTouchStartBlock = terminalTouchBlock.slice(terminalTouchBlock.indexOf("termEl.addEventListener('touchstart'"), terminalTouchBlock.indexOf("termEl.addEventListener('touchmove'"));
-const terminalTouchEndBlock = terminalTouchBlock.slice(terminalTouchBlock.indexOf('const endTouchScroll'), terminalTouchBlock.indexOf("termEl.addEventListener('touchend'"));
+const terminalTouchStartBlock = terminalTouchBlock.slice(terminalTouchBlock.indexOf('const onTouchStart'), terminalTouchBlock.indexOf('const onTouchMove'));
+const terminalTouchEndBlock = terminalTouchBlock.slice(terminalTouchBlock.indexOf('const endTouchScroll'), terminalTouchBlock.indexOf('const cancelTouchScroll'));
 const selectPanelBlock = app.slice(app.indexOf('function selectPanel'), app.indexOf('function discardPanel'));
 assert.ok(
   terminalDragBlock.includes("event.type.startsWith('pointer') && event.pointerType !== 'mouse'") &&
@@ -560,14 +570,6 @@ assert.ok(installer.includes('PASSIDECK_ROOT=$(quote_env "$ROOT")'), 'installer 
 assert.ok(service.includes("ExecStart=/bin/sh -c 'exec node \"$PASSIDECK_ROOT/packages/cli/src/index.js\" --no-open'"), 'user service must exec Node directly from the installed checkout');
 assert.ok(service.includes('Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin'), 'user service must provide PATH for npm and node');
 assert.ok(service.includes('KillMode=process'), 'service restart must preserve detached tmux sessions');
-
-// Native pane-popout regression
-assert.ok(app.includes('const POPOUT_MODE = Boolean(POPOUT_PANE_ID)'), 'client must detect pane-only popout mode');
-assert.ok(app.includes("document.addEventListener('pointerup', finishDetachGesture, true)"), 'OS popout must be created at pointer release');
-assert.ok(app.includes('const renderedSessions = POPOUT_MODE') && app.includes('session.id === POPOUT_PANE_ID'), 'popout must render only its selected terminal session');
-assert.ok(app.includes('suspendDetachedPane(id);') && app.includes('resumeDetachedPane(id);'), 'main renderer must relinquish and resume the detached terminal socket');
-assert.ok(html.includes('id="popoutClose"') && html.includes('Close session'), 'single popout titlebar must expose the session-closing X');
-assert.ok(style.includes('body.popout-mode .term-header { display: none !important; }'), 'popout must hide the redundant pane titlebar');
 
 // Pane popout (detach) client regressions
 assert.ok(app.includes('const POPOUT_MODE = Boolean(POPOUT_PANE_ID)'), 'client must detect popout mode from URL params');
